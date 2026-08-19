@@ -10,6 +10,8 @@ enum CortexSentinelBarMain {
     static let cleanupDryRunArgument = "--cleanup-dry-run"
     static let cleanupRunArgument = "--cleanup-run"
     static let renderStatusBarArgument = "--render-statusbar"
+    static let renderSettingsPNGArgument = "--render-settings-png"
+    static let settingsFixtureArgument = "--settings-fixture"
     static let dumpStateArgument = "--dump-state"
     static let smokeSettingsArgument = "--smoke-settings"
 
@@ -27,6 +29,14 @@ enum CortexSentinelBarMain {
         if let index = arguments.firstIndex(of: renderStatusBarArgument),
            index + 1 < arguments.count {
             StatusBarSnapshotter.render(to: arguments[index + 1])
+            return
+        }
+        if let index = arguments.firstIndex(of: renderSettingsPNGArgument),
+           index + 1 < arguments.count {
+            runRenderSettingsPNGCLI(
+                outputPath: arguments[index + 1],
+                arguments: arguments
+            )
             return
         }
         if arguments.contains(smokePopoverArgument) {
@@ -57,6 +67,25 @@ enum CortexSentinelBarMain {
         controller.start()
         application.run()
         withExtendedLifetime(controller) {}
+    }
+
+    @MainActor
+    private static func runRenderSettingsPNGCLI(outputPath: String, arguments: [String]) {
+        let fixture: SettingsPreviewFixture
+        if let index = arguments.firstIndex(of: settingsFixtureArgument),
+           index + 1 < arguments.count,
+           let parsed = SettingsPreviewFixture(rawValue: arguments[index + 1]) {
+            fixture = parsed
+        } else {
+            fixture = .default
+        }
+        do {
+            try SettingsPNGRenderer.render(fixture: fixture, to: outputPath)
+            print("written \(outputPath)")
+        } catch {
+            FileHandle.standardError.write(Data("设置窗离屏渲染失败：\(error.localizedDescription)\n".utf8))
+            exit(1)
+        }
     }
 
     /// 自检 CLI：把哨兵此刻从磁盘读到的东西原样打印出来。

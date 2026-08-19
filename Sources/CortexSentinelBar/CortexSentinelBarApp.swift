@@ -78,13 +78,19 @@ enum CortexSentinelBarMain {
         }
         print("仓库根：\(paths.repositoryRoot.path)")
         let channelStatus = SentinelFileReader.readChannelStatus(at: paths.channelStatusURL)
-        let liveChannelCounts = groups.activeEngineCounts
+        let localHost = LocalHostIdentity.current()
+        let liveChannelCounts = groups.localActiveEngineCounts(localHost: localHost)
+        let originCounts = groups.activeHostOriginCounts(localHost: localHost)
+        print("本机身份：\(localHost.dumpText)")
         print("通道：\(paths.channelStatusURL.path)")
         print(
-            "  Grok \(channelStatus.grok.status.displayName) · 文件running=\(channelStatus.grok.running.map(String.init) ?? "无") · 面板条数=\(liveChannelCounts.grok) · \(channelStatus.grok.evidence)"
+            "  Grok \(channelStatus.grok.status.displayName) · 文件running=\(channelStatus.grok.running.map(String.init) ?? "无") · 面板条数(本机)=\(liveChannelCounts.grok) · \(channelStatus.grok.evidence)"
         )
         print(
-            "  Codex \(channelStatus.codex.status.displayName) · 文件running=\(channelStatus.codex.running.map(String.init) ?? "无") · 面板条数=\(liveChannelCounts.codex) · \(channelStatus.codex.evidence)"
+            "  Codex \(channelStatus.codex.status.displayName) · 文件running=\(channelStatus.codex.running.map(String.init) ?? "无") · 面板条数(本机)=\(liveChannelCounts.codex) · \(channelStatus.codex.evidence)"
+        )
+        print(
+            "  活跃口径：本机 \(originCounts.local) · 外机 \(originCounts.remote) · 机器未知 \(originCounts.unknown)（通道行和标题只数本机）"
         )
         let ack = SentinelFileReader.readTerminalAck(at: paths.lineTerminalAckURL)
         let unclaimed = UnclaimedTerminalAggregation.entries(lines: lines, registry: registry, ack: ack)
@@ -104,21 +110,21 @@ enum CortexSentinelBarMain {
         print("分组结果：")
         print("  已登记派工（活跃）：\(groups.activeRegistered.count)")
         for item in groups.activeRegistered {
-            print("    - \(item.line.slug) → \(item.registration?.labelZH ?? "（无中文名）") [\(item.engine.displayName) · \(item.line.state.displayName)]")
+            print("    - \(item.line.slug) → \(item.registration?.labelZH ?? "（无中文名）") [\(item.engine.displayName) · \(item.line.state.displayName) · \(item.hostOrigin(localHost: localHost).badgeText)]")
         }
         print("  自动识别（未登记且活跃）：\(groups.activeUnregistered.count)")
         for item in groups.activeUnregistered {
-            print("    - \(item.line.slug) [\(item.engine.displayName) · \(item.line.state.displayName)]")
+            print("    - \(item.line.slug) [\(item.engine.displayName) · \(item.line.state.displayName) · \(item.hostOrigin(localHost: localHost).badgeText)]")
         }
         print("  刚完成（分组全量）：\(groups.recentlyCompleted.count)")
         for item in groups.recentlyCompleted {
-            print("    - \(item.line.slug) → \(item.registration?.labelZH ?? "（无中文名）") [\(item.engine.displayName)]")
+            print("    - \(item.line.slug) → \(item.registration?.labelZH ?? "（无中文名）") [\(item.engine.displayName) · \(item.hostOrigin(localHost: localHost).badgeText)]")
         }
         print("  历史（分组全量）：\(groups.history.count)")
         print("看板窗口（使用者面板实际露出，不是分组全量）：")
         print("  最近完成露出：\(board.recentShown.count)  Grok=\(board.recentCounts.grok) Codex=\(board.recentCounts.codex)")
         for item in board.recentShown {
-            print("    - \(item.line.slug) → \(item.registration?.labelZH ?? "（无中文名）") [\(item.engine.displayName) · \(item.line.state.displayName)]")
+            print("    - \(item.line.slug) → \(item.registration?.labelZH ?? "（无中文名）") [\(item.engine.displayName) · \(item.line.state.displayName) · \(item.hostOrigin(localHost: localHost).badgeText)]")
         }
         print("  历史露出：\(board.historyShown.count)  Grok=\(board.historyCounts.grok) Codex=\(board.historyCounts.codex)")
         print("  历史隐藏：\(board.hiddenCount)  Grok=\(board.hiddenCounts.grok) Codex=\(board.hiddenCounts.codex)")

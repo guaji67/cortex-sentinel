@@ -115,14 +115,14 @@ struct SentinelMenuView: View {
         if store.watchDirectoryMissing {
             return SentinelPaths.missingWatchDirectoryTitle
         }
-        return "\(activeLineCount) 条活跃派工 · \(recentRegisteredCount) 条最近完成"
+        return "\(localActiveLineCount) 条本机活跃 · \(recentRegisteredCount) 条最近完成"
     }
 
     private var channelSection: some View {
         let presentation = ChannelSectionPresentation(
             grok: store.channelStatus.grok,
             codex: store.channelStatus.codex,
-            liveCounts: store.lineGroups.activeEngineCounts
+            liveCounts: store.lineGroups.localActiveEngineCounts(localHost: localHost)
         )
         return VStack(alignment: .leading, spacing: SentinelTheme.Spacing.sm) {
             sectionTitle("通道", trailing: channelUpdatedText)
@@ -583,6 +583,7 @@ struct SentinelMenuView: View {
                         .foregroundStyle(SentinelTheme.Colors.foreground)
                         .fixedSize(horizontal: false, vertical: true)
                     engineBadge(presentation.engine)
+                    hostBadge(presentation.hostOrigin(localHost: localHost))
                 }
 
                 if let registration {
@@ -663,6 +664,7 @@ struct SentinelMenuView: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                     engineBadge(presentation.engine)
+                    hostBadge(presentation.hostOrigin(localHost: localHost))
                 }
 
                 Spacer()
@@ -998,6 +1000,7 @@ struct SentinelMenuView: View {
                             .foregroundStyle(SentinelTheme.Colors.foreground)
                             .lineLimit(2)
                         engineBadge(presentation.engine)
+                        hostBadge(presentation.hostOrigin(localHost: localHost))
                     }
 
                     if let registration = presentation.registration {
@@ -1152,9 +1155,12 @@ struct SentinelMenuView: View {
         .sentinelRow()
     }
 
-    private var activeLineCount: Int {
-        store.lineGroups.activeRegistered.count
-            + store.lineGroups.activeUnregistered.count
+    private var localHost: LocalHostIdentity {
+        .current()
+    }
+
+    private var localActiveLineCount: Int {
+        store.lineGroups.localActivePresentations(localHost: localHost).count
     }
 
     private var boardWindow: SentinelBoardWindow {
@@ -1307,6 +1313,24 @@ struct SentinelMenuView: View {
                     : SentinelTheme.Colors.inset
             )
             .accessibilityLabel("引擎 \(engine.displayName)")
+    }
+
+    private func hostBadge(_ origin: LineHostOrigin) -> some View {
+        Text(origin.badgeText)
+            .lineLimit(1)
+            .sentinelBadge(
+                foreground: origin.isRemote
+                    ? SentinelTheme.Colors.info
+                    : origin.isUnknown
+                        ? SentinelTheme.Colors.warning
+                        : SentinelTheme.Colors.secondaryForeground,
+                background: origin.isRemote
+                    ? SentinelTheme.Colors.infoSoft
+                    : origin.isUnknown
+                        ? SentinelTheme.Colors.warningSoft
+                        : SentinelTheme.Colors.inset
+            )
+            .accessibilityLabel("机器 \(origin.badgeText)")
     }
 
     @ViewBuilder

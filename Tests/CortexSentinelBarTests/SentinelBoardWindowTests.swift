@@ -167,10 +167,12 @@ final class SentinelBoardWindowTests: XCTestCase {
 
     func testActiveEngineCountsMatchFourRegisteredRunningGrokLines() throws {
         let slugs = ["diskclean", "casediga", "casedigb", "casedigc"]
+        let localHost = LocalHostIdentity(identifiers: ["Test Mac"])
         let registry = try makeRegistry(
             slugs.map { slug in
                 (slug, "cursor-grok", slug, now.timeIntervalSince1970)
-            }
+            },
+            host: "Test Mac"
         )
         let lines = slugs.map { slug in
             makeLine(slug: slug, engine: .cursorGrok, state: .running, age: 5)
@@ -179,13 +181,13 @@ final class SentinelBoardWindowTests: XCTestCase {
 
         XCTAssertEqual(groups.activeRegistered.count, 4)
         XCTAssertEqual(groups.activeUnregistered.count, 0)
-        XCTAssertEqual(groups.activeEngineCounts.grok, 4)
-        XCTAssertEqual(groups.activeEngineCounts.codex, 0)
+        XCTAssertEqual(groups.localActiveEngineCounts(localHost: localHost).grok, 4)
+        XCTAssertEqual(groups.localActiveEngineCounts(localHost: localHost).codex, 0)
         XCTAssertEqual(
             ChannelSectionPresentation(
                 grok: ChannelVerdict(status: .alive, evidence: "1 条在跑", running: 1),
                 codex: ChannelVerdict(status: .alive, evidence: "闲", running: 0),
-                liveCounts: groups.activeEngineCounts
+                liveCounts: groups.localActiveEngineCounts(localHost: localHost)
             ).render.primaryRow,
             ["Codex 通 闲", "Grok 通 4 条"]
         )
@@ -204,23 +206,29 @@ final class SentinelBoardWindowTests: XCTestCase {
 
         XCTAssertEqual(groups.recentlyCompleted.count, 12)
         XCTAssertEqual(board.recentShown.count, 8)
+        let localHost = LocalHostIdentity(identifiers: ["Test Mac"])
         XCTAssertEqual(
-            "\(groups.activeRegistered.count + groups.activeUnregistered.count) 条活跃派工 · \(board.recentShown.count) 条最近完成",
-            "0 条活跃派工 · 8 条最近完成"
+            "\(groups.localActivePresentations(localHost: localHost).count) 条本机活跃 · \(board.recentShown.count) 条最近完成",
+            "0 条本机活跃 · 8 条最近完成"
         )
     }
 
     private func makeRegistry(
-        _ entries: [(slug: String, engine: String, label: String, registeredAt: TimeInterval)]
+        _ entries: [(slug: String, engine: String, label: String, registeredAt: TimeInterval)],
+        host: String? = nil
     ) throws -> CodexLineRegistry {
         let objects = entries.map { entry -> [String: Any] in
-            [
+            var object: [String: Any] = [
                 "slug": entry.slug,
                 "engine": entry.engine,
                 "label_zh": entry.label,
                 "dispatcher_zh": "来源对话",
                 "registered_at": entry.registeredAt,
             ]
+            if let host {
+                object["host"] = host
+            }
+            return object
         }
         let data = try JSONSerialization.data(withJSONObject: objects)
         return try XCTUnwrap(CodexLineRegistryReader.decode(data))

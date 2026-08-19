@@ -144,10 +144,40 @@ struct EngineCounts: Equatable {
 }
 
 extension SentinelLineGroups {
-    /// 通道行「N 条」与派工列表共用：非终态且 status 文件 10 分钟内，按引擎拆开。
-    /// 不读 `channel-status.json` 的 `running`，那份摘要会和下面卡片打架。
+    var activePresentations: [LinePresentation] {
+        activeRegistered + activeUnregistered
+    }
+
+    /// 全机活跃条数，给 --dump-state 对照用。面板通道行不用这个。
     var activeEngineCounts: EngineCounts {
-        EngineCounts(activeRegistered + activeUnregistered)
+        EngineCounts(activePresentations)
+    }
+
+    /// 通道行「N 条」和标题「本机活跃」只数本机。外机和「机器未知」仍出现在
+    /// 展开列表里，但不进这个数——缺 host 不许猜成本机。
+    func localActivePresentations(localHost: LocalHostIdentity) -> [LinePresentation] {
+        activePresentations.filter { $0.hostOrigin(localHost: localHost).isLocal }
+    }
+
+    func localActiveEngineCounts(localHost: LocalHostIdentity) -> EngineCounts {
+        EngineCounts(localActivePresentations(localHost: localHost))
+    }
+
+    func activeHostOriginCounts(localHost: LocalHostIdentity) -> (local: Int, remote: Int, unknown: Int) {
+        var local = 0
+        var remote = 0
+        var unknown = 0
+        for item in activePresentations {
+            switch item.hostOrigin(localHost: localHost) {
+            case .local:
+                local += 1
+            case .remote:
+                remote += 1
+            case .unknown:
+                unknown += 1
+            }
+        }
+        return (local, remote, unknown)
     }
 }
 

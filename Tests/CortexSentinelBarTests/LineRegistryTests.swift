@@ -74,6 +74,147 @@ final class LineRegistryTests: XCTestCase {
         )
     }
 
+    /// COR-1504：本机线 / 外机线 / 无 host 的历史线。缺字段不许猜成本机，
+    /// 通道行「N 条」只数本机；三条都还在列表里。
+    func testHostFieldSplitsLocalRemoteAndUnknownWithoutGuessing() throws {
+        let localHost = LocalHostIdentity(
+            identifiers: ["Falcon 的 Mac mini", "Falcons-Mac-mini.local"]
+        )
+        let data = Data(
+            """
+            [
+              {
+                "engine": "cursor-grok",
+                "slug": "local-line",
+                "label_zh": "本机线",
+                "dispatcher_zh": "来源对话",
+                "registered_at": 1784823993,
+                "host": "Falcon 的 Mac mini"
+              },
+              {
+                "engine": "cursor-grok",
+                "slug": "remote-line",
+                "label_zh": "外机线",
+                "dispatcher_zh": "来源对话",
+                "registered_at": 1784823993,
+                "host": "Falcon 的 MacBook Pro"
+              },
+              {
+                "engine": "cursor-grok",
+                "slug": "legacy-line",
+                "label_zh": "历史线",
+                "dispatcher_zh": "来源对话",
+                "registered_at": 1784823993
+              }
+            ]
+            """.utf8
+        )
+
+        let registry = try XCTUnwrap(CodexLineRegistryReader.decode(data))
+        XCTAssertEqual(registry.registration(for: "local-line")?.host, "Falcon 的 Mac mini")
+        XCTAssertEqual(registry.registration(for: "remote-line")?.host, "Falcon 的 MacBook Pro")
+        XCTAssertNil(registry.registration(for: "legacy-line")?.host)
+
+        let localLine = makeLine(slug: "local-line", state: .running, age: 30)
+        let remoteLine = makeLine(slug: "remote-line", state: .running, age: 30)
+        let legacyLine = makeLine(slug: "legacy-line", state: .running, age: 30)
+        let localPresentation = LinePresentation(
+            line: localLine,
+            registration: registry.registration(for: "local-line")
+        )
+        let remotePresentation = LinePresentation(
+            line: remoteLine,
+            registration: registry.registration(for: "remote-line")
+        )
+        let legacyPresentation = LinePresentation(
+            line: legacyLine,
+            registration: registry.registration(for: "legacy-line")
+        )
+
+        XCTAssertEqual(localPresentation.hostOrigin(localHost: localHost), .local)
+        XCTAssertEqual(localPresentation.hostOrigin(localHost: localHost).badgeText, "本机")
+        XCTAssertEqual(
+            remotePresentation.hostOrigin(localHost: localHost),
+            .remote("Falcon 的 MacBook Pro")
+        )
+        XCTAssertEqual(
+            remotePresentation.hostOrigin(localHost: localHost).badgeText,
+            "Falcon 的 MacBook Pro"
+        )
+        XCTAssertEqual(legacyPresentation.hostOrigin(localHost: localHost), .unknown)
+        XCTAssertEqual(legacyPresentation.hostOrigin(localHost: localHost).badgeText, "机器未知")
+
+        let groups = SentinelAggregation.lineGroups(
+            lines: [localLine, remoteLine, legacyLine],
+            registry: registry,
+            now: now
+        )
+        XCTAssertEqual(groups.activeRegistered.map(\.line.slug), ["legacy-line", "local-line", "remote-line"])
+        XCTAssertEqual(groups.activeEngineCounts.grok, 3)
+        XCTAssertEqual(groups.localActiveEngineCounts(localHost: localHost).grok, 1)
+        XCTAssertEqual(groups.localActivePresentations(localHost: localHost).map(\.line.slug), ["local-line"])
+        let origins = groups.activeHostOriginCounts(localHost: localHost)
+        XCTAssertEqual(origins.local, 1)
+        XCTAssertEqual(origins.remote, 1)
+        XCTAssertEqual(origins.unknown, 1)
+        XCTAssertEqual(
+            ChannelSectionPresentation(
+                grok: ChannelVerdict(status: .alive, evidence: "3 条在跑", running: 3),
+                codex: ChannelVerdict(status: .alive, evidence: "闲", running: 0),
+                liveCounts: groups.localActiveEngineCounts(localHost: localHost)
+            ).render.primaryRow,
+            ["Codex 通 闲", "Grok 通 1 条"]
+        )
+    }
+
+    func testHostnameAlsoCountsAsLocalAndBlankHostStaysUnknown() throws {
+        let localHost = LocalHostIdentity(
+            identifiers: ["Falcon 的 Mac mini", "Falcons-Mac-mini.local"]
+        )
+        let data = Data(
+            """
+            [
+              {
+                "engine": "cursor-grok",
+                "slug": "hostname-line",
+                "label_zh": "hostname 本机",
+                "dispatcher_zh": "来源对话",
+                "registered_at": 1784823993,
+                "host": "Falcons-Mac-mini.local"
+              },
+              {
+                "engine": "cursor-grok",
+                "slug": "blank-host-line",
+                "label_zh": "空 host",
+                "dispatcher_zh": "来源对话",
+                "registered_at": 1784823993,
+                "host": "   "
+              }
+            ]
+            """.utf8
+        )
+        let registry = try XCTUnwrap(CodexLineRegistryReader.decode(data))
+        XCTAssertEqual(registry.registration(for: "hostname-line")?.host, "Falcons-Mac-mini.local")
+        XCTAssertNil(registry.registration(for: "blank-host-line")?.host)
+
+        let hostnameLine = makeLine(slug: "hostname-line", state: .running, age: 10)
+        let blankLine = makeLine(slug: "blank-host-line", state: .running, age: 10)
+        XCTAssertEqual(
+            LinePresentation(
+                line: hostnameLine,
+                registration: registry.registration(for: "hostname-line")
+            ).hostOrigin(localHost: localHost),
+            .local
+        )
+        XCTAssertEqual(
+            LinePresentation(
+                line: blankLine,
+                registration: registry.registration(for: "blank-host-line")
+            ).hostOrigin(localHost: localHost),
+            .unknown
+        )
+    }
+
     func testRegistryDecodesEastEightOffsetUsedByGrokDispatch() throws {
         let data = Data(
             """

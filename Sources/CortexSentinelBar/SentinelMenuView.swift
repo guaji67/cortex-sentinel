@@ -11,6 +11,9 @@ struct SentinelMenuView: View {
     var initialSection: SentinelMenuInitialSection = .top
     /// 仅截图 smoke 用：预展开第一条最近完成，便于给第 4 点留证；菜单栏常驻默认 false。
     var autoExpandFirstCompleted = false
+    /// 离屏出图用：ImageRenderer 吃不下 ScrollView/LazyVStack，换成同等间距的 VStack。
+    /// 菜单栏常驻默认 false，现场布局一条都不改。
+    var rendersOffscreen = false
     @State private var showsAutomaticLines = false
     @State private var showsHistory = false
     @State private var expandedCompletedLines: Set<String> = []
@@ -19,33 +22,32 @@ struct SentinelMenuView: View {
 
     var body: some View {
         ZStack {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: SentinelTheme.Spacing.section) {
-                        header
-                        channelSection
-                        serviceSection
-                        balancesSection
-                        dispatchSection
-                            .id(SentinelMenuInitialSection.dispatch)
-                        automaticSection
-                        historySection
-                        footer
+            if rendersOffscreen {
+                VStack(alignment: .leading, spacing: SentinelTheme.Spacing.section) {
+                    sectionStack
+                }
+                .padding(SentinelTheme.Spacing.panel)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: SentinelTheme.Spacing.section) {
+                            sectionStack
+                        }
+                        .padding(SentinelTheme.Spacing.panel)
                     }
-                    .padding(SentinelTheme.Spacing.panel)
+                    .onAppear {
+                        scrollToInitialSection(using: proxy)
+                        seedAutoExpandIfNeeded()
+                    }
+                    .onChange(of: store.aio.readAt) {
+                        scrollToInitialSection(using: proxy)
+                        seedAutoExpandIfNeeded()
+                    }
+                    .onChange(of: store.lines) {
+                        seedAutoExpandIfNeeded()
+                    }
+                    .disabled(settingsLine != nil)
                 }
-                .onAppear {
-                    scrollToInitialSection(using: proxy)
-                    seedAutoExpandIfNeeded()
-                }
-                .onChange(of: store.aio.readAt) {
-                    scrollToInitialSection(using: proxy)
-                    seedAutoExpandIfNeeded()
-                }
-                .onChange(of: store.lines) {
-                    seedAutoExpandIfNeeded()
-                }
-                .disabled(settingsLine != nil)
             }
 
             if let settingsLine {
@@ -55,10 +57,23 @@ struct SentinelMenuView: View {
         .background(SentinelTheme.Colors.canvas)
         .frame(
             width: SentinelTheme.Metrics.menuWidth,
-            height: SentinelTheme.Metrics.menuHeight
+            height: rendersOffscreen ? nil : SentinelTheme.Metrics.menuHeight
         )
         .tint(SentinelTheme.Colors.primary)
         .preferredColorScheme(.dark)
+    }
+
+    @ViewBuilder
+    private var sectionStack: some View {
+        header
+        channelSection
+        serviceSection
+        balancesSection
+        dispatchSection
+            .id(SentinelMenuInitialSection.dispatch)
+        automaticSection
+        historySection
+        footer
     }
 
     private func settingsOverlay(for line: LineStatus) -> some View {

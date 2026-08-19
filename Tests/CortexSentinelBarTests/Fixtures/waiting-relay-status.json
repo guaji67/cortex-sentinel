@@ -1,0 +1,36 @@
+{
+  "slug": "waiting-relay-line",
+  "state": "waiting_relay",
+  "workdir": "/tmp/waiting-relay-line",
+  "branch": "codex/waiting-relay-line",
+  "codex_pid": null,
+  "restarts": 2,
+  "rollout_age_s": null,
+  "started_at": "2026-07-31T00:55:00+00:00",
+  "updated_at": "2026-07-31T02:10:00+00:00",
+  "max_restarts_override": 7,
+  "escalate_after_failures": 4,
+  "balance": {
+    "scope": "official_weekly",
+    "plan_type": "plus",
+    "weekly_used_pct": 75,
+    "weekly_reset_at": "2026-08-08T04:39:19+00:00",
+    "five_hour_used_pct": 20.5,
+    "five_hour_reset_at": "2026-08-02T12:30:00+00:00",
+    "checked_at": "2026-08-02T08:00:00+00:00"
+  },
+  "relay_probe": {
+    "state": "unhealthy",
+    "checked_at": "2026-07-31T02:10:00+00:00",
+    "last_ok": false,
+    "recent_ok": [false, false],
+    "detail": "last.ok=false",
+    "primary_provider": "aio",
+    "active_provider": "aio",
+    "fallback_provider": "codex_local_access",
+    "fallback_attempted": true,
+    "switch_count": 1,
+    "last_switch_at": "2026-07-31T01:05:00+00:00",
+    "first_failure_at": "2026-07-31T01:00:00+00:00"
+  }
+}

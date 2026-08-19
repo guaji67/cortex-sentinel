@@ -1,0 +1,9 @@
+{
+  "slug": "red-line",
+  "state": "help",
+  "workdir": "/Users/example/worktrees/red-line",
+  "branch": "codex/red-line",
+  "restarts": 6,
+  "rollout_age_s": 9,
+  "updated_at": "2026-07-23T11:00:00Z"
+}

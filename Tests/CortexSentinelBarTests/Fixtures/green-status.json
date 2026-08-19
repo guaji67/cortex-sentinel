@@ -1,0 +1,17 @@
+{
+  "slug": "green-line",
+  "state": "running",
+  "workdir": "/Users/example/worktrees/green-line",
+  "branch": "codex/green-line",
+  "codex_pid": 42001,
+  "restarts": 0,
+  "rollout_age_s": 3,
+  "updated_at": "2026-07-23T11:00:00Z",
+  "relay": {
+    "active_id": "relay-self",
+    "active_label": "主用出口",
+    "switch_count": 1,
+    "last_switch_at": "2026-07-23T10:59:00Z",
+    "base_url_at_spawn": "https://relay.example.test/v1"
+  }
+}

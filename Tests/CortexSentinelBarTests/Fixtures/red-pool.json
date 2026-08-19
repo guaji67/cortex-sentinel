@@ -1,0 +1,15 @@
+{
+  "entries": [
+    {
+      "id": "relay-red",
+      "label": "故障出口",
+      "base_url": "https://relay.example.test/v1",
+      "auth_mode": "oauth_snapshot",
+      "auth_snapshot": "auth-red.json",
+      "owner": "self",
+      "priority": 10,
+      "enabled": true,
+      "notes": ""
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "engine": "cursor-grok",
+  "slug": "grokboard",
+  "state": "running",
+  "model": "cursor-grok-4.6-xhigh-fast",
+  "workdir": "/Users/example/projects/demo",
+  "branch": "codex/grokboard",
+  "agent_pid": 12345,
+  "supervisor_pid": 12344,
+  "started_at": "2026-08-17T17:05:11+08:00",
+  "updated_at": "2026-08-17T17:06:11+08:00",
+  "log_path": "/Users/example/projects/demo/logs/grok-grokboard.log",
+  "log_bytes": 10234,
+  "exit_code": null,
+  "note": ""
+}

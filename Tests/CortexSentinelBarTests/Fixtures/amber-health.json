@@ -1,0 +1,14 @@
+{
+  "relay-friend": {
+    "checked_at": "2026-07-23T11:00:00Z",
+    "ok": false,
+    "http_class": "no_balance",
+    "balance": {
+      "remaining": 0,
+      "currency": "USD",
+      "scope": "account",
+      "checked_at": "2026-07-23T11:00:00Z"
+    },
+    "latency_ms": 202
+  }
+}

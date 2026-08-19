@@ -1,0 +1,9 @@
+{
+  "remaining": 42.5,
+  "unit": "USD",
+  "plan_name": "CodeX Plus 季度",
+  "subscription": {
+    "expires_at": "2026-09-30T00:00:00Z"
+  },
+  "isValid": true
+}

@@ -1,0 +1,9 @@
+{
+  "slug": "gray-line",
+  "state": "done",
+  "workdir": "/Users/example/worktrees/gray-line",
+  "branch": "codex/gray-line",
+  "restarts": 0,
+  "rollout_age_s": 1,
+  "updated_at": "2026-07-23T11:00:00Z"
+}

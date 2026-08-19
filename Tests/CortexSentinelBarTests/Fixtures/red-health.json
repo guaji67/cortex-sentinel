@@ -1,0 +1,12 @@
+{
+  "relay-red": {
+    "checked_at": "2026-07-23T11:00:00Z",
+    "ok": true,
+    "http_class": "ok",
+    "balance": {
+      "note": "该中转不支持 API 余额查询",
+      "checked_at": "2026-07-23T11:00:00Z"
+    },
+    "latency_ms": 111
+  }
+}

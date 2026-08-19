@@ -1,0 +1,95 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>Cortex 哨兵 AppIcon — 雷达扫描</title>
+  <defs>
+    <!-- 深底：左上微亮的暗蓝，给 Big Sur 材质的受光感 -->
+    <linearGradient id="baseGrad" x1="240" y1="180" x2="820" y2="900" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#17293F"/>
+      <stop offset="0.55" stop-color="#0C1420"/>
+      <stop offset="1" stop-color="#070C15"/>
+    </linearGradient>
+    <!-- 顶边高光：Big Sur 图标上沿那道细亮边 -->
+    <linearGradient id="edgeHi" x1="512" y1="100" x2="512" y2="360" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <!-- 雷达底衬光 -->
+    <radialGradient id="radarGlow" cx="512" cy="512" r="316" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2ED6C1" stop-opacity="0.20"/>
+      <stop offset="0.6" stop-color="#2ED6C1" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#2ED6C1" stop-opacity="0"/>
+    </radialGradient>
+    <!-- 扫描余晖：沿扇面从暗到亮的单主色渐变（前沿最亮） -->
+    <linearGradient id="sweepGrad" x1="311" y1="360" x2="713" y2="300" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#34EBD3" stop-opacity="0"/>
+      <stop offset="0.62" stop-color="#33E4CE" stop-opacity="0.14"/>
+      <stop offset="1" stop-color="#41F0D8" stop-opacity="0.62"/>
+    </linearGradient>
+    <!-- 目标点柔光 -->
+    <radialGradient id="glowGreen" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#34D399" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#34D399" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowAmber" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#FBBF24" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#FBBF24" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowRed" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#F87171" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#F87171" stop-opacity="0"/>
+    </radialGradient>
+    <!-- squircle 遮罩：雷达内容裁进机身圆角内 -->
+    <clipPath id="bodyClip">
+      <rect x="100" y="100" width="824" height="824" rx="185" ry="185"/>
+    </clipPath>
+    <clipPath id="dial">
+      <circle cx="512" cy="512" r="300"/>
+    </clipPath>
+  </defs>
+
+  <!-- 机身 -->
+  <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="url(#baseGrad)"/>
+
+  <g clip-path="url(#bodyClip)">
+    <!-- 底衬光 -->
+    <rect x="100" y="100" width="824" height="824" fill="url(#radarGlow)"/>
+
+    <!-- 同心环（主色，透明度递变） -->
+    <g fill="none" stroke="#2ED6C1">
+      <circle cx="512" cy="512" r="96"  stroke-opacity="0.26" stroke-width="2.5"/>
+      <circle cx="512" cy="512" r="176" stroke-opacity="0.20" stroke-width="2.5"/>
+      <circle cx="512" cy="512" r="256" stroke-opacity="0.15" stroke-width="2.5"/>
+      <circle cx="512" cy="512" r="300" stroke-opacity="0.42" stroke-width="4"/>
+    </g>
+
+    <!-- 十字准线（裁进外环） -->
+    <g clip-path="url(#dial)" stroke="#2ED6C1" stroke-opacity="0.12" stroke-width="2">
+      <line x1="212" y1="512" x2="812" y2="512"/>
+      <line x1="512" y1="212" x2="512" y2="812"/>
+    </g>
+
+    <!-- 扫描扇面 + 前沿光束（整组指向约 1-2 点方向） -->
+    <g transform="rotate(15 512 512)" clip-path="url(#dial)">
+      <path d="M512,512 L712.7,289.1 A300,300 0 0,1 311.3,289.1 Z" fill="url(#sweepGrad)"/>
+      <line x1="512" y1="512" x2="712.7" y2="289.1" stroke="#5BF3DC" stroke-opacity="0.30" stroke-width="12" stroke-linecap="round"/>
+      <line x1="512" y1="512" x2="712.7" y2="289.1" stroke="#7BF7E4" stroke-width="4.5" stroke-linecap="round"/>
+    </g>
+
+    <!-- 雷达目标点（少量状态色点缀：绿/琥珀/红） -->
+    <g>
+      <circle cx="600" cy="640" r="34" fill="url(#glowGreen)"/>
+      <circle cx="600" cy="640" r="12.5" fill="#3FE0A6"/>
+      <circle cx="360" cy="610" r="30" fill="url(#glowAmber)"/>
+      <circle cx="360" cy="610" r="10.5" fill="#FBBF24"/>
+      <circle cx="430" cy="415" r="28" fill="url(#glowRed)"/>
+      <circle cx="430" cy="415" r="9.5" fill="#F87171"/>
+    </g>
+
+    <!-- 中心枢纽 -->
+    <circle cx="512" cy="512" r="27" fill="none" stroke="#2ED6C1" stroke-opacity="0.55" stroke-width="3"/>
+    <circle cx="512" cy="512" r="15" fill="#5BEAD6"/>
+  </g>
+
+  <!-- 顶边高光 + 内描边 -->
+  <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="url(#edgeHi)"/>
+  <rect x="101.5" y="101.5" width="821" height="821" rx="183.5" ry="183.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.10" stroke-width="3"/>
+</svg>

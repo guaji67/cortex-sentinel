@@ -1,0 +1,14 @@
+{
+  "relay-self": {
+    "checked_at": "2026-07-23T11:00:00Z",
+    "ok": true,
+    "http_class": "ok",
+    "balance": {
+      "remaining": 42.5,
+      "currency": "USD",
+      "scope": "account",
+      "checked_at": "2026-07-23T11:00:00Z"
+    },
+    "latency_ms": 128
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "slug": "amber-line",
+  "state": "backoff",
+  "workdir": "/Users/example/worktrees/amber-line",
+  "restarts": 2,
+  "rollout_age_s": 4,
+  "updated_at": "2026-07-23T11:00:00Z"
+}

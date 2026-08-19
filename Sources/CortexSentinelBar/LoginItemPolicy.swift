@@ -26,9 +26,9 @@ import ServiceManagement
 /// 判定为托管 → 什么都不做：不 `register`，也不去动那张 plist。
 enum LoginItemConstants {
     static let launchAgentLabel = "com.cortex.sentinelbar"
-    static let copyEnabled = "TODO-COPY-1"
-    static let copyDisabled = "TODO-COPY-2"
-    static let copySystemManaged = "TODO-COPY-3"
+    static let copyEnabled = "已开机自启"
+    static let copyDisabled = "开机自启"
+    static let copySystemManaged = "自启由系统托管"
 }
 
 struct LaunchdSupervisionSignals: Equatable {

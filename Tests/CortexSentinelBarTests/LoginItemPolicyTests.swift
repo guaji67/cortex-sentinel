@@ -16,13 +16,13 @@ final class LoginItemPolicyTests: XCTestCase {
 
         XCTAssertEqual(plan.action, .none)
         XCTAssertEqual(plan.presentation, .systemManaged)
-        XCTAssertEqual(plan.presentation.copy, "TODO-COPY-3")
+        XCTAssertEqual(plan.presentation.copy, LoginItemConstants.copySystemManaged)
         XCTAssertFalse(plan.presentation.showsToggle)
 
         let presentation = LoginItemReconciler.apply(plan: plan, registrar: registrar)
         XCTAssertEqual(registrar.registerCallCount, 0)
         XCTAssertEqual(presentation.kind, .systemManaged)
-        XCTAssertEqual(presentation.copy, "TODO-COPY-3")
+        XCTAssertEqual(presentation.copy, LoginItemConstants.copySystemManaged)
     }
 
     func testUnmanagedRegistersAndShowsEnabled() throws {
@@ -38,7 +38,7 @@ final class LoginItemPolicyTests: XCTestCase {
         let presentation = LoginItemReconciler.apply(plan: plan, registrar: registrar)
         XCTAssertEqual(registrar.registerCallCount, 1)
         XCTAssertEqual(presentation, .enabled)
-        XCTAssertEqual(presentation.copy, "TODO-COPY-1")
+        XCTAssertEqual(presentation.copy, LoginItemConstants.copyEnabled)
         XCTAssertFalse(presentation.showsToggle)
         XCTAssertEqual(registrar.status, .enabled)
     }
@@ -56,7 +56,7 @@ final class LoginItemPolicyTests: XCTestCase {
         let presentation = LoginItemReconciler.apply(plan: plan, registrar: registrar)
         XCTAssertEqual(registrar.registerCallCount, 1)
         XCTAssertEqual(presentation, .disabled)
-        XCTAssertEqual(presentation.copy, "TODO-COPY-2")
+        XCTAssertEqual(presentation.copy, LoginItemConstants.copyDisabled)
         XCTAssertTrue(presentation.showsToggle)
         XCTAssertEqual(registrar.status, .notRegistered)
     }

@@ -81,7 +81,7 @@ final class SentinelNotificationTests: XCTestCase {
             preferences: prefs,
             now: now.addingTimeInterval(60)
         )
-        XCTAssertEqual(flushed.map(\.body), ["3 条线干完了"])
+        XCTAssertEqual(flushed.map(\.body), ["3 个任务干完了"])
         XCTAssertEqual(flushed.map(\.title), ["任务结束"])
     }
 

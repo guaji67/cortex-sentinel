@@ -44,10 +44,11 @@ final class SentinelSettingsTests: XCTestCase {
         XCTAssertEqual(SentinelSettingsCopy.notifyMasterTitle, "通知我")
         XCTAssertEqual(SentinelSettingsCopy.notifyTaskCompleteTitle, "任务干完了")
         XCTAssertEqual(SentinelSettingsCopy.notifyTaskProblemTitle, "任务出问题了")
-        XCTAssertEqual(SentinelSettingsCopy.notifyTaskProblemHint, "卡住、失败、被杀")
-        XCTAssertEqual(SentinelSettingsCopy.notifyChannelTitle, "通道熔断或余额不够")
+        XCTAssertEqual(SentinelSettingsCopy.notifyTaskProblemHint, "卡住、失败、被中止")
+        XCTAssertEqual(SentinelSettingsCopy.notifyChannelTitle, "AI 通道出问题或余额不够")
+        XCTAssertEqual(SentinelSettingsCopy.notifyChannelHint, "连不上、被熔断、你的额度快用完")
         XCTAssertEqual(SentinelSettingsCopy.notifyCadenceTitle, "什么时候说")
-        XCTAssertEqual(SentinelSettingsCopy.notifyCadenceHint, "攒起来的会合成一条，比如「3 条线干完了」。")
+        XCTAssertEqual(SentinelSettingsCopy.notifyCadenceHint, "攒起来的会合成一条，比如「3 个任务干完了」。")
         XCTAssertEqual(SentinelSettingsCopy.notifyCadenceEvery, "每条都弹")
         XCTAssertEqual(SentinelSettingsCopy.notifyCadence1m, "攒 1 分钟一起说")
         XCTAssertEqual(SentinelSettingsCopy.notifyCadence5m, "攒 5 分钟一起说")
@@ -56,18 +57,22 @@ final class SentinelSettingsTests: XCTestCase {
         XCTAssertEqual(SentinelSettingsCopy.loginItemManagedHint, "由系统服务托管，改这里没用")
         XCTAssertEqual(SentinelSettingsCopy.historyTitle, "最多留")
         XCTAssertEqual(SentinelSettingsCopy.historyUnit, "条")
-        XCTAssertEqual(SentinelSettingsCopy.historyHint, "超出的旧记录会自动清掉，正在跑的线不会被清。")
+        XCTAssertEqual(SentinelSettingsCopy.historyHint, "超出的旧记录会自动清掉，正在跑的任务不会被清。")
         XCTAssertEqual(SentinelSettingsCopy.startupGroupTitle, "启动与文件夹")
         XCTAssertEqual(SentinelTheme.Metrics.settingsCountFieldWidth, 60)
         XCTAssertEqual(SentinelSettingsCopy.watchTitle, "盯这个文件夹")
         XCTAssertEqual(SentinelSettingsCopy.watchChoose, "选择")
-        XCTAssertEqual(SentinelSettingsCopy.watchHint, "派工工具把状态文件写在这里。")
+        XCTAssertEqual(SentinelSettingsCopy.watchHint, "派工工具把任务状态写在这里，一般不用改。")
         XCTAssertEqual(SentinelSettingsCopy.watchLockedHint, "装的时候定好的，要换得重装。")
         XCTAssertEqual(SentinelSettingsCopy.versionPrefix, "版本")
         XCTAssertEqual(SentinelSettingsCopy.versionDevLabel, "开发版")
         XCTAssertEqual(
             SentinelAppVersion.displayLine(shortVersion: "1.0", bundleVersion: "ede0793"),
             "版本 1.0（ede0793）"
+        )
+        XCTAssertEqual(
+            SentinelAppVersion.displayLine(shortVersion: "1.0", bundleVersion: "adaf73cbcd51"),
+            "版本 1.0（adaf73c）"
         )
         XCTAssertEqual(
             SentinelAppVersion.displayLine(shortVersion: "1.0", bundleVersion: "dev"),

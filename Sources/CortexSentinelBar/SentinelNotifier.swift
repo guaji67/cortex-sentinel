@@ -257,6 +257,7 @@ final class SentinelNotifier {
         guard !ProcessInfo.processInfo.arguments.contains(CortexSentinelBarMain.smokeWindowArgument),
               !ProcessInfo.processInfo.arguments.contains(CortexSentinelBarMain.smokeSettingsArgument),
               !ProcessInfo.processInfo.arguments.contains(CortexSentinelBarMain.renderSettingsPNGArgument),
+              !ProcessInfo.processInfo.arguments.contains(CortexSentinelBarMain.renderPanelPNGArgument),
               let center = notificationCenter
         else {
             return

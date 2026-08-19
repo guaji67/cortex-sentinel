@@ -1120,7 +1120,7 @@ struct SentinelMenuView: View {
                 )
 
                 Button {
-                    store.refreshAll()
+                    Task { await store.refreshAll() }
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }

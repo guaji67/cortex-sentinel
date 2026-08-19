@@ -18,11 +18,15 @@ final class SentinelSettingsModel: ObservableObject {
     @Published var notifyTaskProblemEnabled: Bool
     @Published var notifyChannelAlertEnabled: Bool
     @Published var notifyCadence: SentinelNotifyCadence
+    @Published var panelOpenRefreshInterval: SentinelPanelOpenRefreshInterval
+    @Published var panelClosedRefreshInterval: SentinelPanelClosedRefreshInterval
+    @Published var balanceRecheckInterval: SentinelBalanceRecheckInterval
     @Published var watchPath: String
     @Published var isWatchLocked: Bool
 
     var applyLoginItem: ((Bool) -> Void)?
     var applyHistoryRetainCount: ((Int) -> Void)?
+    var applyRefreshIntervals: (() -> Void)?
     var chooseWatchDirectory: (() -> Void)?
 
     private let defaults: UserDefaults
@@ -43,6 +47,9 @@ final class SentinelSettingsModel: ObservableObject {
         self.notifyTaskProblemEnabled = preferences.taskProblemEnabled
         self.notifyChannelAlertEnabled = preferences.channelAlertEnabled
         self.notifyCadence = preferences.cadence
+        self.panelOpenRefreshInterval = SentinelSettings.panelOpenRefreshInterval(defaults: defaults)
+        self.panelClosedRefreshInterval = SentinelSettings.panelClosedRefreshInterval(defaults: defaults)
+        self.balanceRecheckInterval = SentinelSettings.balanceRecheckInterval(defaults: defaults)
         self.watchPath = watchPath
         self.isWatchLocked = isWatchLocked
     }
@@ -104,6 +111,27 @@ final class SentinelSettingsModel: ObservableObject {
         )
     }
 
+    var panelOpenRefreshBinding: Binding<SentinelPanelOpenRefreshInterval> {
+        Binding(
+            get: { self.panelOpenRefreshInterval },
+            set: { self.setPanelOpenRefreshInterval($0) }
+        )
+    }
+
+    var panelClosedRefreshBinding: Binding<SentinelPanelClosedRefreshInterval> {
+        Binding(
+            get: { self.panelClosedRefreshInterval },
+            set: { self.setPanelClosedRefreshInterval($0) }
+        )
+    }
+
+    var balanceRecheckBinding: Binding<SentinelBalanceRecheckInterval> {
+        Binding(
+            get: { self.balanceRecheckInterval },
+            set: { self.setBalanceRecheckInterval($0) }
+        )
+    }
+
     func setLoginItemEnabled(_ enabled: Bool) {
         applyLoginItem?(enabled)
     }
@@ -148,6 +176,24 @@ final class SentinelSettingsModel: ObservableObject {
     func setNotifyCadence(_ cadence: SentinelNotifyCadence) {
         SentinelSettings.setNotifyCadence(cadence, defaults: defaults)
         self.notifyCadence = cadence
+    }
+
+    func setPanelOpenRefreshInterval(_ interval: SentinelPanelOpenRefreshInterval) {
+        SentinelSettings.setPanelOpenRefreshInterval(interval, defaults: defaults)
+        panelOpenRefreshInterval = interval
+        applyRefreshIntervals?()
+    }
+
+    func setPanelClosedRefreshInterval(_ interval: SentinelPanelClosedRefreshInterval) {
+        SentinelSettings.setPanelClosedRefreshInterval(interval, defaults: defaults)
+        panelClosedRefreshInterval = interval
+        applyRefreshIntervals?()
+    }
+
+    func setBalanceRecheckInterval(_ interval: SentinelBalanceRecheckInterval) {
+        SentinelSettings.setBalanceRecheckInterval(interval, defaults: defaults)
+        balanceRecheckInterval = interval
+        applyRefreshIntervals?()
     }
 
     static func preview(
@@ -203,19 +249,29 @@ enum SettingsPreviewFixture: String {
     case watchLocked = "watch-locked"
 }
 
+enum SettingsDropdownID: Hashable {
+    case cadence
+    case panelOpen
+    case panelClosed
+    case balanceRecheck
+}
+
 struct SentinelSettingsView: View {
     @ObservedObject var model: SentinelSettingsModel
     var bodyCounter: SentinelViewBodyCounter?
     var rendersOffscreen = false
     var versionLine: String = SentinelAppVersion.displayLine()
     @State private var historyTextOverride: String?
-    @State private var cadenceExpanded = false
+    @State private var expandedMenu: SettingsDropdownID?
 
     var body: some View {
         let _ = bodyCounter?.increment()
         VStack(alignment: .leading, spacing: SentinelTheme.Spacing.panel) {
             settingsGroup(title: SentinelSettingsCopy.notifyGroupTitle) {
                 notifyGroup
+            }
+            settingsGroup(title: SentinelSettingsCopy.refreshGroupTitle) {
+                refreshGroup
             }
             settingsGroup(title: SentinelSettingsCopy.historyGroupTitle) {
                 historyGroup
@@ -276,7 +332,15 @@ struct SentinelSettingsView: View {
                             .font(SentinelTheme.Fonts.rowTitle)
                             .foregroundStyle(SentinelTheme.Colors.foreground)
                         Spacer(minLength: SentinelTheme.Spacing.sm)
-                        cadenceControl
+                        settingsDropdown(
+                            identifier: "settings-notify-cadence",
+                            menu: .cadence,
+                            title: model.notifyCadence.title,
+                            options: SentinelNotifyCadence.allCases,
+                            isSelected: { $0 == model.notifyCadence },
+                            titleFor: { $0.title },
+                            onSelect: { model.setNotifyCadence($0) }
+                        )
                     }
                     hintText(SentinelSettingsCopy.notifyCadenceHint)
                 }
@@ -284,6 +348,67 @@ struct SentinelSettingsView: View {
             .padding(.leading, SentinelTheme.Metrics.settingsCategoryIndent)
             .disabled(!model.notifyMasterEnabled)
             .opacity(model.notifyMasterEnabled ? 1 : 0.7)
+        }
+    }
+
+    private var refreshGroup: some View {
+        VStack(alignment: .leading, spacing: SentinelTheme.Spacing.md) {
+            labeledRefreshInterval(
+                title: SentinelSettingsCopy.panelOpenRefreshTitle,
+                hint: SentinelSettingsCopy.panelOpenRefreshHint,
+                identifier: "settings-refresh-panel-open",
+                menu: .panelOpen,
+                selection: model.panelOpenRefreshInterval,
+                options: SentinelPanelOpenRefreshInterval.allCases,
+                onSelect: { model.setPanelOpenRefreshInterval($0) }
+            )
+            labeledRefreshInterval(
+                title: SentinelSettingsCopy.panelClosedRefreshTitle,
+                hint: SentinelSettingsCopy.panelClosedRefreshHint,
+                identifier: "settings-refresh-panel-closed",
+                menu: .panelClosed,
+                selection: model.panelClosedRefreshInterval,
+                options: SentinelPanelClosedRefreshInterval.allCases,
+                onSelect: { model.setPanelClosedRefreshInterval($0) }
+            )
+            labeledRefreshInterval(
+                title: SentinelSettingsCopy.balanceRecheckTitle,
+                hint: SentinelSettingsCopy.balanceRecheckHint,
+                identifier: "settings-refresh-balance-recheck",
+                menu: .balanceRecheck,
+                selection: model.balanceRecheckInterval,
+                options: SentinelBalanceRecheckInterval.allCases,
+                onSelect: { model.setBalanceRecheckInterval($0) }
+            )
+        }
+    }
+
+    private func labeledRefreshInterval<Value: SentinelRefreshIntervalOption>(
+        title: String,
+        hint: String,
+        identifier: String,
+        menu: SettingsDropdownID,
+        selection: Value,
+        options: [Value],
+        onSelect: @escaping (Value) -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xs) {
+            HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
+                Text(title)
+                    .font(SentinelTheme.Fonts.rowTitle)
+                    .foregroundStyle(SentinelTheme.Colors.foreground)
+                Spacer(minLength: SentinelTheme.Spacing.sm)
+                settingsDropdown(
+                    identifier: identifier,
+                    menu: menu,
+                    title: selection.title,
+                    options: options,
+                    isSelected: { $0 == selection },
+                    titleFor: { $0.title },
+                    onSelect: onSelect
+                )
+            }
+            hintText(hint)
         }
     }
 
@@ -387,15 +512,23 @@ struct SentinelSettingsView: View {
         }
     }
 
-    private var cadenceControl: some View {
+    private func settingsDropdown<Value: Hashable>(
+        identifier: String,
+        menu: SettingsDropdownID,
+        title: String,
+        options: [Value],
+        isSelected: @escaping (Value) -> Bool,
+        titleFor: @escaping (Value) -> String,
+        onSelect: @escaping (Value) -> Void
+    ) -> some View {
         VStack(alignment: .trailing, spacing: SentinelTheme.Spacing.xs) {
             Button {
                 if !rendersOffscreen {
-                    cadenceExpanded.toggle()
+                    expandedMenu = expandedMenu == menu ? nil : menu
                 }
             } label: {
                 HStack(spacing: SentinelTheme.Spacing.xs) {
-                    Text(model.notifyCadence.title)
+                    Text(title)
                         .font(SentinelTheme.Fonts.rowTitle)
                         .foregroundStyle(SentinelTheme.Colors.foreground)
                     Image(systemName: "chevron.up.chevron.down")
@@ -415,14 +548,14 @@ struct SentinelSettingsView: View {
                 )
             }
             .buttonStyle(.plain)
-            .accessibilityIdentifier("settings-notify-cadence")
+            .accessibilityIdentifier(identifier)
 
-            if cadenceExpanded {
+            if expandedMenu == menu {
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(SentinelNotifyCadence.allCases, id: \.self) { cadence in
-                        Button(cadence.title) {
-                            model.setNotifyCadence(cadence)
-                            cadenceExpanded = false
+                    ForEach(options, id: \.self) { option in
+                        Button(titleFor(option)) {
+                            onSelect(option)
+                            expandedMenu = nil
                         }
                         .buttonStyle(.plain)
                         .font(SentinelTheme.Fonts.rowTitle)
@@ -431,7 +564,7 @@ struct SentinelSettingsView: View {
                         .padding(.vertical, SentinelTheme.Spacing.xs)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(
-                            cadence == model.notifyCadence
+                            isSelected(option)
                                 ? SentinelTheme.Colors.primarySoft
                                 : Color.clear
                         )

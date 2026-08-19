@@ -253,6 +253,8 @@ final class AIOModelsTests: XCTestCase {
             )
         )
         XCTAssertEqual(AIOConstants.panelOpenFreshnessInterval, 30)
+        XCTAssertEqual(AIOConstants.statusRefreshInterval, 5)
+        XCTAssertEqual(AIOConstants.statusRefreshIntervalWhenClosed, 120)
         XCTAssertEqual(AIOConstants.aioRefreshInterval, 60)
         XCTAssertEqual(AIOConstants.manualRefreshThrottle, 10)
     }

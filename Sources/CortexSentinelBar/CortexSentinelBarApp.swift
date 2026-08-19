@@ -11,6 +11,7 @@ enum CortexSentinelBarMain {
     static let cleanupRunArgument = "--cleanup-run"
     static let renderStatusBarArgument = "--render-statusbar"
     static let dumpStateArgument = "--dump-state"
+    static let smokeSettingsArgument = "--smoke-settings"
 
     @MainActor
     static func main() {
@@ -140,15 +141,25 @@ enum CortexSentinelBarMain {
         } catch {
             print("  隐藏归档写入失败：\(error.localizedDescription)")
         }
+        let defaults = SentinelSettings.resolvedDefaults()
+        let details = LaunchdSupervisionProbe.collectFromCurrentProcess()
+        for line in SentinelSettings.dumpLines(
+            defaults: defaults,
+            signals: details.signals
+        ) {
+            print(line)
+        }
     }
 
     /// 只诊断，绝不调用 `SMAppService.register()`。
     private static func printLoginItemDiagnostics() {
         let details = LaunchdSupervisionProbe.collectFromCurrentProcess()
         let status = SMAppServiceLoginItemRegistrar().status
+        let defaults = SentinelSettings.resolvedDefaults()
         let plan = LoginItemReconciler.plan(
             signals: details.signals,
-            status: status
+            status: status,
+            wantsEnabled: SentinelSettings.loginItemEnabled(defaults: defaults)
         )
         for line in LoginItemDiagnostics.dumpLines(
             details: details,
@@ -161,14 +172,17 @@ enum CortexSentinelBarMain {
 
     /// 清理 CLI：打印计划；--cleanup-dry-run 绝不删，--cleanup-run 才真删。
     /// 目录由 SentinelPaths.discover() 决定（尊重 CORTEX_SENTINEL_WATCH_DIR / CORTEX_REPO_ROOT）。
-    /// 条数规则和体积规则各打一份报告，互不覆盖。
+    /// 条数规则和体积规则各打一份报告，互不覆盖。条数上限读设置，默认 `StatusFileRetention.defaultCap`。
     private static func runCleanupCLI(dryRun: Bool) {
-        let paths = SentinelPaths.discover()
+        let defaults = SentinelSettings.resolvedDefaults()
+        let paths = SentinelPaths.discover(defaults: defaults)
         let registry = CodexLineRegistryReader.read(at: paths.lineRegistryURL)
+        let cap = SentinelSettings.historyRetainCount(defaults: defaults)
         let statusPlan = StatusFileCleaner.run(
             logsDirectory: paths.logsDirectory,
             registry: registry,
-            dryRun: dryRun
+            dryRun: dryRun,
+            cap: cap
         )
         let logPlan = LogCleaner.run(logsDirectory: paths.logsDirectory, dryRun: dryRun)
         print("logs 目录：\(paths.logsDirectory.path)")
@@ -275,6 +289,14 @@ private struct CortexSentinelSmokeApp: App {
                 // 让 shell 精确 screencapture -R（AX/osascript 无权限时的确定性替代）。
                 DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
                     SmokeWindowPlacer.pinAndReport()
+                    if ProcessInfo.processInfo.arguments.contains(
+                        CortexSentinelBarMain.smokeSettingsArgument
+                    ) {
+                        store.openSettings()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                            SmokeWindowPlacer.pinAndReport(title: SentinelSettingsCopy.windowTitle)
+                        }
+                    }
                 }
             }
         }
@@ -345,8 +367,14 @@ enum StatusBarSnapshotter {
 
 /// 仅 smoke 截图用：把窗口钉到已知位置并把截图矩形（screencapture 左上原点坐标）报出来。
 enum SmokeWindowPlacer {
-    static func pinAndReport() {
-        guard let window = NSApplication.shared.windows.first(where: { $0.isVisible }),
+    static func pinAndReport(title: String? = nil) {
+        let window: NSWindow?
+        if let title {
+            window = NSApplication.shared.windows.first(where: { $0.title == title && $0.isVisible })
+        } else {
+            window = NSApplication.shared.windows.first(where: { $0.isVisible })
+        }
+        guard let window,
               let screen = window.screen ?? NSScreen.main
         else {
             return

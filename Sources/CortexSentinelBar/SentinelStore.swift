@@ -15,10 +15,25 @@ final class SentinelStore: ObservableObject {
     @Published private(set) var isOfficialUsageRefreshing = false
     @Published private(set) var isOfficialUsageRefreshCoolingDown = false
     @Published private(set) var loginItemPresentation: LoginItemPanelPresentation = .disabled
+    @Published private(set) var historyRetainCount: Int
+    @Published private(set) var notifyOnTaskComplete: Bool
+    @Published private(set) var paths: SentinelPaths
+    @Published private(set) var watchDirectorySource: WatchDirectoryResolution.Source
 
-    let paths: SentinelPaths
+    var isWatchDirectoryLocked: Bool {
+        watchDirectorySource.isLockedByEnvironment
+    }
 
-    private let notifier = SentinelNotifier()
+    var loginItemSettingsPresentation: LoginItemSettingsPresentation {
+        LoginItemSettingsPresentation.make(
+            signals: LaunchdSupervisionProbe.collectFromCurrentProcess().signals,
+            wantsEnabled: SentinelSettings.loginItemEnabled(defaults: defaults)
+        )
+    }
+
+    private let defaults: UserDefaults
+    private let environment: [String: String]
+    private let notifier: SentinelNotifier
     private let loginItemRegistrar: any LoginItemRegistrar
     private var statusTimer: Timer?
     private var aioTimer: Timer?
@@ -38,11 +53,26 @@ final class SentinelStore: ObservableObject {
     private var relayRecoveryCoordinator = RelayRecoveryProbeCoordinator()
 
     init(
-        paths: SentinelPaths = .discover(),
-        loginItemRegistrar: any LoginItemRegistrar = SMAppServiceLoginItemRegistrar()
+        paths: SentinelPaths? = nil,
+        loginItemRegistrar: any LoginItemRegistrar = SMAppServiceLoginItemRegistrar(),
+        defaults: UserDefaults = SentinelSettings.resolvedDefaults(),
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) {
-        self.paths = paths
+        self.defaults = defaults
+        self.environment = environment
+        let resolvedPaths = paths ?? SentinelPaths.discover(
+            environment: environment,
+            defaults: defaults
+        )
+        self.paths = resolvedPaths
+        self.watchDirectorySource = WatchDirectoryResolution.resolve(
+            environment: environment,
+            defaults: defaults
+        ).source
+        self.historyRetainCount = SentinelSettings.historyRetainCount(defaults: defaults)
+        self.notifyOnTaskComplete = SentinelSettings.notifyOnTaskComplete(defaults: defaults)
         self.loginItemRegistrar = loginItemRegistrar
+        self.notifier = SentinelNotifier()
     }
 
     deinit {
@@ -151,29 +181,88 @@ final class SentinelStore: ObservableObject {
     }
 
     func enableLoginItem() {
-        guard loginItemPresentation.showsToggle else {
-            return
-        }
-        guard LoginItemRuntime.shouldReconcileOnLaunch() else {
-            return
-        }
+        setLoginItemEnabled(true)
+    }
+
+    func setLoginItemEnabled(_ enabled: Bool) {
         let signals = LaunchdSupervisionProbe.collectFromCurrentProcess().signals
-        guard !signals.isLaunchdManaged else {
+        if signals.isLaunchdManaged {
             loginItemPresentation = .systemManaged
             return
         }
-        let plan = LoginItemReconcilePlan(presentation: .disabled, action: .register)
+        SentinelSettings.setLoginItemEnabled(enabled, defaults: defaults)
+        let plan = LoginItemReconciler.plan(
+            signals: signals,
+            status: loginItemRegistrar.status,
+            wantsEnabled: enabled
+        )
+        guard LoginItemRuntime.shouldReconcileOnLaunch() else {
+            loginItemPresentation = plan.presentation
+            return
+        }
         loginItemPresentation = LoginItemReconciler.apply(
             plan: plan,
             registrar: loginItemRegistrar
         )
     }
 
+    func setHistoryRetainCount(_ value: Int) {
+        SentinelSettings.setHistoryRetainCount(value, defaults: defaults)
+        historyRetainCount = SentinelSettings.historyRetainCount(defaults: defaults)
+        runLogCleanup()
+    }
+
+    func setNotifyOnTaskComplete(_ enabled: Bool) {
+        SentinelSettings.setNotifyOnTaskComplete(enabled, defaults: defaults)
+        notifyOnTaskComplete = enabled
+    }
+
+    func setWatchDirectory(_ url: URL) {
+        guard !isWatchDirectoryLocked else {
+            return
+        }
+        SentinelSettings.setWatchDirectory(url, defaults: defaults)
+        applyResolvedPaths()
+        refreshAll()
+        runLogCleanup()
+    }
+
+    func chooseWatchDirectory() {
+        guard !isWatchDirectoryLocked else {
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = SentinelSettingsCopy.watchChoose
+        panel.directoryURL = paths.logsDirectory
+        guard panel.runModal() == .OK, let url = panel.url else {
+            return
+        }
+        setWatchDirectory(url)
+    }
+
+    func openSettings() {
+        SentinelSettingsWindowController.shared.show(store: self)
+    }
+
+    private func applyResolvedPaths() {
+        let resolved = WatchDirectoryResolution.resolve(
+            environment: environment,
+            defaults: defaults
+        )
+        paths = SentinelPaths.discover(environment: environment, defaults: defaults)
+        watchDirectorySource = resolved.source
+    }
+
     private func reconcileLoginItem() {
         let details = LaunchdSupervisionProbe.collectFromCurrentProcess()
         let plan = LoginItemReconciler.plan(
             signals: details.signals,
-            status: loginItemRegistrar.status
+            status: loginItemRegistrar.status,
+            wantsEnabled: SentinelSettings.loginItemEnabled(defaults: defaults)
         )
         guard LoginItemRuntime.shouldReconcileOnLaunch() else {
             loginItemPresentation = plan.presentation
@@ -188,6 +277,7 @@ final class SentinelStore: ObservableObject {
     private func runLogCleanup() {
         let logsDirectory = paths.logsDirectory
         let registryURL = paths.lineRegistryURL
+        let cap = historyRetainCount
         Task.detached(priority: .utility) {
             let registry = CodexLineRegistryReader.read(at: registryURL)
             // 先按条数清状态文件，再跑体积清理：刚失去 status 的派工日志
@@ -195,7 +285,8 @@ final class SentinelStore: ObservableObject {
             StatusFileCleaner.run(
                 logsDirectory: logsDirectory,
                 registry: registry,
-                dryRun: false
+                dryRun: false,
+                cap: cap
             )
             LogCleaner.run(logsDirectory: logsDirectory, dryRun: false)
         }
@@ -469,7 +560,12 @@ final class SentinelStore: ObservableObject {
         lineRegistry: CodexLineRegistry,
         inputStatus: InputStatusSnapshot
     ) {
-        notifier.observe(lines: lines, aio: aio, registry: lineRegistry)
+        notifier.observe(
+            lines: lines,
+            aio: aio,
+            registry: lineRegistry,
+            notifyEnabled: notifyOnTaskComplete
+        )
         self.lines = lines
         self.aio = aio
         self.otherCodexProcesses = otherCodexProcesses
@@ -527,6 +623,7 @@ private final class SentinelNotifier {
 
     func requestAuthorization() {
         guard !ProcessInfo.processInfo.arguments.contains(CortexSentinelBarMain.smokeWindowArgument),
+              !ProcessInfo.processInfo.arguments.contains(CortexSentinelBarMain.smokeSettingsArgument),
               let center = notificationCenter
         else {
             return
@@ -536,15 +633,27 @@ private final class SentinelNotifier {
         }
     }
 
-    func observe(lines: [LineStatus], aio: AIOSnapshot, registry: CodexLineRegistry) {
-        let activeLines = lines.filter { $0.isActive(now: Date()) }
-        let nextStates = Dictionary(uniqueKeysWithValues: activeLines.map { ($0.id, $0.state) })
-        if let priorStates {
+    func observe(
+        lines: [LineStatus],
+        aio: AIOSnapshot,
+        registry: CodexLineRegistry,
+        notifyEnabled: Bool
+    ) {
+        let nextStates = Dictionary(uniqueKeysWithValues: lines.map { ($0.id, $0.state) })
+        if notifyEnabled, let priorStates {
+            let activeLines = lines.filter { $0.isActive(now: Date()) }
             for line in activeLines where line.state.isCritical && priorStates[line.id]?.isCritical != true {
                 let label = registry.registration(for: line.slug)?.labelZH ?? line.slug
                 send(
                     title: "派工线状态变化",
                     body: "\(label) 进入 \(line.state.displayName)"
+                )
+            }
+            for line in SentinelNotificationPlanner.completedLines(priorStates: priorStates, lines: lines) {
+                let label = registry.registration(for: line.slug)?.labelZH ?? line.slug
+                send(
+                    title: "任务结束",
+                    body: "\(label) \(line.state.displayName)"
                 )
             }
         }
@@ -555,7 +664,7 @@ private final class SentinelNotifier {
         let nextLowBalance = Set(
             aio.providers.filter(\.isLowBalance).map(\.id)
         )
-        if hasAIOBaseline, aio.sourceState == .available {
+        if notifyEnabled, hasAIOBaseline, aio.sourceState == .available {
             for provider in aio.providers
             where provider.circuitState.isOpen && priorAIOCircuits?[provider.id] != true {
                 send(

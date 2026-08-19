@@ -691,10 +691,12 @@ final class SentinelFileReaderTests: XCTestCase {
     }
 
     func testDefaultWatchDirectoryIsHomeCortexSentinelLogs() {
+        let defaults = UserDefaults(suiteName: "sentinel-paths-default-\(UUID().uuidString)")!
         let paths = SentinelPaths.discover(
             environment: [:],
             currentDirectory: URL(fileURLWithPath: "/tmp"),
-            executableURL: nil
+            executableURL: nil,
+            defaults: defaults
         )
         let expected = SentinelPaths.defaultWatchDirectory
         XCTAssertEqual(paths.logsDirectory.path, expected.path)

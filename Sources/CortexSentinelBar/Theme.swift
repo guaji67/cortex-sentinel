@@ -94,6 +94,8 @@ enum SentinelTheme {
         static let balanceDot: CGFloat = 8
         static let disclosureChevron: CGFloat = 12
         static let sheetWidth: CGFloat = 380
+        static let settingsWindowWidth: CGFloat = 460
+        static let settingsCountFieldWidth: CGFloat = 72
         static let statusDot: CGFloat = 7
         static let headerDot: CGFloat = 10
         static let iconButton: CGFloat = 28

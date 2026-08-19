@@ -69,28 +69,20 @@ struct SentinelPaths {
     static func discover(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         currentDirectory _: URL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
-        executableURL _: URL? = Bundle.main.executableURL
+        executableURL _: URL? = Bundle.main.executableURL,
+        defaults: UserDefaults = SentinelSettings.resolvedDefaults()
     ) -> SentinelPaths {
         // 日志目录解析优先级：
-        // 1. CORTEX_SENTINEL_WATCH_DIR  优先，直接就是日志目录
-        // 2. CORTEX_REPO_ROOT           兼容旧装法，仍然解析成 <root>/logs
-        // 3. ~/.cortex-sentinel/logs    都没给时的默认值
-        let repositoryRoot: URL
-        let logsDirectory: URL
-        if let watch = environment["CORTEX_SENTINEL_WATCH_DIR"], !watch.isEmpty {
-            logsDirectory = URL(fileURLWithPath: watch, isDirectory: true)
-            if let configured = environment["CORTEX_REPO_ROOT"], !configured.isEmpty {
-                repositoryRoot = URL(fileURLWithPath: configured, isDirectory: true)
-            } else {
-                repositoryRoot = logsDirectory.deletingLastPathComponent()
-            }
-        } else if let configured = environment["CORTEX_REPO_ROOT"], !configured.isEmpty {
-            repositoryRoot = URL(fileURLWithPath: configured, isDirectory: true)
-            logsDirectory = repositoryRoot.appendingPathComponent("logs", isDirectory: true)
-        } else {
-            logsDirectory = defaultWatchDirectory
-            repositoryRoot = logsDirectory.deletingLastPathComponent()
-        }
+        // 1. CORTEX_SENTINEL_WATCH_DIR  优先，直接就是日志目录（设置窗只读）
+        // 2. CORTEX_REPO_ROOT           兼容旧装法，仍然解析成 <root>/logs（设置窗只读）
+        // 3. UserDefaults               用户在设置窗选的目录
+        // 4. ~/.cortex-sentinel/logs    都没给时的默认值
+        let resolved = WatchDirectoryResolution.resolve(
+            environment: environment,
+            defaults: defaults
+        )
+        let repositoryRoot = resolved.repositoryRoot
+        let logsDirectory = resolved.logsDirectory
 
         let poolDirectory: URL
         if let configured = environment["CORTEX_RELAY_POOL_DIR"], !configured.isEmpty {

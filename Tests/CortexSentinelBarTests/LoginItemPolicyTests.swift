@@ -167,6 +167,12 @@ final class LoginItemPolicyTests: XCTestCase {
                 environment: [:]
             )
         )
+        XCTAssertFalse(
+            LoginItemRuntime.shouldReconcileOnLaunch(
+                arguments: ["/tmp/CortexSentinelBar", "--smoke-settings"],
+                environment: [:]
+            )
+        )
     }
 
     func testColdLaunchPresentsOnlyWhenUserOpenedUnmanagedApp() {
@@ -241,6 +247,62 @@ final class LoginItemPolicyTests: XCTestCase {
             )
         )
     }
+
+    func testLaunchdManagedDoesNotUnregisterWhenUserWantsOff() {
+        let registrar = FakeLoginItemRegistrar(status: .enabled)
+        let plan = LoginItemReconciler.plan(
+            signals: LaunchdSupervisionSignals(
+                plistTargetsThisApp: true,
+                parentIsLaunchd: true,
+                environmentMatchesPlist: true
+            ),
+            status: registrar.status,
+            wantsEnabled: false
+        )
+
+        XCTAssertEqual(plan.action, .none)
+        XCTAssertEqual(plan.presentation, .systemManaged)
+        let presentation = LoginItemReconciler.apply(plan: plan, registrar: registrar)
+        XCTAssertEqual(registrar.unregisterCallCount, 0)
+        XCTAssertEqual(registrar.registerCallCount, 0)
+        XCTAssertEqual(presentation.kind, .systemManaged)
+    }
+
+    func testUserDisableUnregistersWhenEnabled() {
+        let registrar = FakeLoginItemRegistrar(status: .enabled)
+        let plan = LoginItemReconciler.plan(
+            signals: .none,
+            status: registrar.status,
+            wantsEnabled: false
+        )
+
+        XCTAssertEqual(plan.action, .unregister)
+        XCTAssertEqual(plan.presentation, .disabled)
+        let presentation = LoginItemReconciler.apply(plan: plan, registrar: registrar)
+        XCTAssertEqual(registrar.unregisterCallCount, 1)
+        XCTAssertEqual(registrar.registerCallCount, 0)
+        XCTAssertEqual(presentation, .disabled)
+        XCTAssertEqual(registrar.status, .notRegistered)
+    }
+
+    func testSettingsRowGraysOutWhenLaunchdManaged() {
+        let locked = LoginItemSettingsPresentation.make(
+            signals: LaunchdSupervisionSignals(
+                plistTargetsThisApp: true,
+                parentIsLaunchd: true,
+                environmentMatchesPlist: false
+            ),
+            wantsEnabled: false
+        )
+        XCTAssertFalse(locked.isControlEnabled)
+        XCTAssertEqual(locked.trailingHint, SentinelSettingsCopy.loginItemManagedHint)
+        XCTAssertEqual(locked.trailingHint, "由系统服务托管，改这里没用")
+
+        let free = LoginItemSettingsPresentation.make(signals: .none, wantsEnabled: false)
+        XCTAssertTrue(free.isControlEnabled)
+        XCTAssertNil(free.trailingHint)
+        XCTAssertFalse(free.isOn)
+    }
 }
 
 private struct FakeLoginItemError: Error {}
@@ -248,6 +310,7 @@ private struct FakeLoginItemError: Error {}
 private final class FakeLoginItemRegistrar: LoginItemRegistrar {
     var status: LoginItemRegistrationStatus
     var registerCallCount = 0
+    var unregisterCallCount = 0
     var error: Error?
 
     init(status: LoginItemRegistrationStatus, error: Error? = nil) {
@@ -261,5 +324,13 @@ private final class FakeLoginItemRegistrar: LoginItemRegistrar {
             throw error
         }
         status = .enabled
+    }
+
+    func unregister() throws {
+        unregisterCallCount += 1
+        if let error {
+            throw error
+        }
+        status = .notRegistered
     }
 }

@@ -139,6 +139,7 @@ struct LoginItemPanelPresentation: Equatable {
 enum LoginItemReconcileAction: Equatable {
     case none
     case register
+    case unregister
 }
 
 struct LoginItemReconcilePlan: Equatable {
@@ -149,6 +150,7 @@ struct LoginItemReconcilePlan: Equatable {
 protocol LoginItemRegistrar {
     var status: LoginItemRegistrationStatus { get }
     func register() throws
+    func unregister() throws
 }
 
 struct SMAppServiceLoginItemRegistrar: LoginItemRegistrar {
@@ -159,15 +161,26 @@ struct SMAppServiceLoginItemRegistrar: LoginItemRegistrar {
     func register() throws {
         try SMAppService.mainApp.register()
     }
+
+    func unregister() throws {
+        try SMAppService.mainApp.unregister()
+    }
 }
 
 enum LoginItemReconciler {
     static func plan(
         signals: LaunchdSupervisionSignals,
-        status: LoginItemRegistrationStatus
+        status: LoginItemRegistrationStatus,
+        wantsEnabled: Bool = true
     ) -> LoginItemReconcilePlan {
         if signals.isLaunchdManaged {
             return LoginItemReconcilePlan(presentation: .systemManaged, action: .none)
+        }
+        if !wantsEnabled {
+            if status == .enabled {
+                return LoginItemReconcilePlan(presentation: .disabled, action: .unregister)
+            }
+            return LoginItemReconcilePlan(presentation: .disabled, action: .none)
         }
         switch status {
         case .enabled:
@@ -179,23 +192,32 @@ enum LoginItemReconciler {
         }
     }
 
-    /// 执行计划。`register` 失败时不抛给调用方，状态回到「没开」。
+    /// 执行计划。`register` / `unregister` 失败时不抛给调用方。
     static func apply(
         plan: LoginItemReconcilePlan,
         registrar: LoginItemRegistrar
     ) -> LoginItemPanelPresentation {
-        guard plan.action == .register else {
+        switch plan.action {
+        case .none:
             return plan.presentation
-        }
-        do {
-            try registrar.register()
-        } catch {
+        case .register:
+            do {
+                try registrar.register()
+            } catch {
+                return .disabled
+            }
+            if registrar.status == .enabled {
+                return .enabled
+            }
+            return .disabled
+        case .unregister:
+            do {
+                try registrar.unregister()
+            } catch {
+                return registrar.status == .enabled ? .enabled : .disabled
+            }
             return .disabled
         }
-        if registrar.status == .enabled {
-            return .enabled
-        }
-        return .disabled
     }
 }
 
@@ -209,6 +231,7 @@ enum LoginItemRuntime {
         "--cleanup-dry-run",
         "--cleanup-run",
         "--render-statusbar",
+        "--smoke-settings",
     ]
 
     /// 只有菜单栏常驻进程才允许调用 `register()`。

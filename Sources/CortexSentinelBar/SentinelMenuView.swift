@@ -1059,9 +1059,7 @@ struct SentinelMenuView: View {
             }
 
             HStack(spacing: SentinelTheme.Spacing.md) {
-                loginItemStatusLine
-
-                Spacer(minLength: SentinelTheme.Spacing.sm)
+                Spacer(minLength: 0)
 
                 Button {
                     store.openLogsDirectory()
@@ -1091,6 +1089,22 @@ struct SentinelMenuView: View {
                 .accessibilityLabel("刷新")
 
                 Button {
+                    store.openSettings()
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .buttonStyle(
+                    SentinelButtonStyle(
+                        kind: .secondary,
+                        compact: true,
+                        iconOnly: true
+                    )
+                )
+                .help("设置")
+                .accessibilityLabel("设置")
+                .accessibilityIdentifier("app-settings-button")
+
+                Button {
                     NSApplication.shared.terminate(nil)
                 } label: {
                     Image(systemName: "power")
@@ -1106,35 +1120,6 @@ struct SentinelMenuView: View {
                 .accessibilityLabel("退出")
             }
         }
-    }
-
-    private var loginItemStatusLine: some View {
-        HStack(spacing: SentinelTheme.Spacing.xs) {
-            Text(store.loginItemPresentation.copy)
-                .font(SentinelTheme.Fonts.subtitle)
-                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
-                .lineLimit(1)
-            if store.loginItemPresentation.showsToggle {
-                Toggle("", isOn: loginItemToggleBinding)
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
-                    .labelsHidden()
-                    .accessibilityLabel(store.loginItemPresentation.copy)
-                    .accessibilityIdentifier("login-item-toggle")
-            }
-        }
-        .accessibilityIdentifier("login-item-row")
-    }
-
-    private var loginItemToggleBinding: Binding<Bool> {
-        Binding(
-            get: { false },
-            set: { newValue in
-                if newValue {
-                    store.enableLoginItem()
-                }
-            }
-        )
     }
 
     private var sectionDivider: some View {

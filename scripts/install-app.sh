@@ -3,6 +3,14 @@
 
 set -euo pipefail
 
+# ps 在 C locale 会把中文路径打成 M- 转义，按绝对路径对 pid 会对不上。
+if [ -z "${LC_ALL:-}" ] || [ "${LC_ALL}" = "C" ]; then
+  export LC_ALL=en_US.UTF-8
+fi
+if [ -z "${LANG:-}" ] || [ "${LANG}" = "C" ]; then
+  export LANG=en_US.UTF-8
+fi
+
 package_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 app_dest="/Applications/Cortex哨兵.app"
 app_executable="$app_dest/Contents/MacOS/CortexSentinelBar"
@@ -350,7 +358,7 @@ running_pids="$(pids_for_executable "$app_executable")"
 running_count="$(printf '%s\n' "$running_pids" | awk 'NF { count++ } END { print count + 0 }')"
 all_sentinel_count="$(ps -axo command= | awk '/\/Contents\/MacOS\/CortexSentinelBar$/ { count++ } END { print count + 0 }')"
 if [ "$running_count" -ne 1 ] || [ "$all_sentinel_count" -ne 1 ]; then
-  echo "失败：期望 1 个正式实例，实际正式=$running_count、全部=$all_sentinel_count" >&2
+  echo "失败：期望 1 个正式实例，实际正式=${running_count}，全部=${all_sentinel_count}" >&2
   exit 1
 fi
 echo "== 已运行唯一正式实例 pid=$running_pids =="

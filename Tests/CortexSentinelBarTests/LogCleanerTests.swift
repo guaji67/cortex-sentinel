@@ -14,8 +14,10 @@ final class LogCleanerTests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
+        LogCleaner.supportDirectoryOverride = nil
         if let root {
             try? fileManager.removeItem(at: inspectURL())
+            try? fileManager.removeItem(at: uncertainURL())
             try? fileManager.removeItem(at: root)
         }
     }
@@ -227,6 +229,157 @@ final class LogCleanerTests: XCTestCase {
         )
     }
 
+    func testUncertainClassesSortedByBytesAndExcludeWhitelist() throws {
+        writeLog("codex-alpha.log", bytes: 8_000, ageSeconds: 7200)
+        writeRaw("tiny.bin", bytes: 100)
+        writeNested("shots/shot-1.png", bytes: 3_000, ageSeconds: 3_600)
+        writeNested("shots/shot-99.png", bytes: 1_500, ageSeconds: 86_400)
+        writeNested("dumps/keep.bin", bytes: 2_000, ageSeconds: 7_200)
+
+        let report = LogCleaner.surveyUncertainVolume(
+            logsDirectory: root,
+            now: now,
+            fileManager: fileManager
+        )
+        XCTAssertEqual(report.classes.map(\.pattern), [
+            "shots/**/shot-*.png",
+            "dumps/**/keep.bin",
+            "tiny.bin",
+        ])
+        XCTAssertEqual(report.classes.map(\.totalBytes), [4_500, 2_000, 100])
+        XCTAssertEqual(report.classes.map(\.fileCount), [2, 1, 1])
+        XCTAssertEqual(report.whitelistSkipped, 1)
+        XCTAssertFalse(report.classes.contains { $0.pattern.contains("codex-alpha") })
+        XCTAssertEqual(report.classes[0].newestModifiedAt, now.addingTimeInterval(-3_600))
+    }
+
+    func testUncertainSurveyCountsFileSymlinkByTargetSize() throws {
+        writeRaw("payload.bin", bytes: 4_000)
+        let shots = root.appendingPathComponent("shots", isDirectory: true)
+        try fileManager.createDirectory(at: shots, withIntermediateDirectories: true)
+        try fileManager.createSymbolicLink(
+            at: shots.appendingPathComponent("alias.bin"),
+            withDestinationURL: root.appendingPathComponent("payload.bin")
+        )
+
+        let report = LogCleaner.surveyUncertainVolume(
+            logsDirectory: root,
+            now: now,
+            fileManager: fileManager
+        )
+        XCTAssertTrue(
+            report.classes.contains {
+                $0.pattern == "shots/**/alias.bin (symlink)" && $0.totalBytes == 4_000 && $0.fileCount == 1
+            },
+            "symlink 应按目标体积入账，实际 \(report.classes)"
+        )
+        XCTAssertTrue(report.classes.contains { $0.pattern == "payload.bin" && $0.totalBytes == 4_000 })
+    }
+
+    func testUncertainReportOverwritesAndEmptyDirectoryDoesNotCrash() throws {
+        writeRaw("keep.bin", bytes: 200)
+        let reportURL = uncertainURL()
+
+        LogCleaner.run(
+            logsDirectory: root,
+            dryRun: true,
+            now: now,
+            fileManager: fileManager,
+            inspectLogURL: inspectURL(),
+            uncertainReportURL: reportURL
+        )
+        let first = try String(contentsOf: reportURL, encoding: .utf8)
+        XCTAssertTrue(first.contains("keep.bin"))
+        XCTAssertFalse(first.contains("（没有非白名单文件）"))
+
+        try fileManager.removeItem(at: root.appendingPathComponent("keep.bin"))
+        LogCleaner.run(
+            logsDirectory: root,
+            dryRun: true,
+            now: now,
+            fileManager: fileManager,
+            inspectLogURL: inspectURL(),
+            uncertainReportURL: reportURL
+        )
+        let second = try String(contentsOf: reportURL, encoding: .utf8)
+        XCTAssertFalse(second.contains("keep.bin"))
+        XCTAssertTrue(second.contains("（没有非白名单文件）"))
+        XCTAssertEqual(second.components(separatedBy: "# 拿不准的体积").count - 1, 1)
+
+        let emptyRoot = root.appendingPathComponent("empty", isDirectory: true)
+        try fileManager.createDirectory(at: emptyRoot, withIntermediateDirectories: true)
+        let empty = LogCleaner.surveyUncertainVolume(
+            logsDirectory: emptyRoot,
+            now: now,
+            fileManager: fileManager
+        )
+        XCTAssertEqual(empty, .empty)
+        LogCleaner.writeUncertainReport(
+            LogCleaner.uncertainReportText(empty, now: now),
+            to: reportURL,
+            fileManager: fileManager
+        )
+        let emptyText = try String(contentsOf: reportURL, encoding: .utf8)
+        XCTAssertTrue(emptyText.contains("shown=0"))
+        XCTAssertTrue(emptyText.contains("（没有非白名单文件）"))
+    }
+
+    func testInspectPathOverrideDoesNotTouchProductionFile() throws {
+        let production = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support", isDirectory: true)
+            .appendingPathComponent("CortexSentinel", isDirectory: true)
+            .appendingPathComponent("log-cleanup-inspect.log")
+        let before = try? Data(contentsOf: production)
+        let isolated = root.appendingPathComponent("isolated-support", isDirectory: true)
+        LogCleaner.supportDirectoryOverride = isolated
+
+        writeLog("codex-alpha.log", bytes: 100, ageSeconds: 7200)
+        writeStatus("alpha", state: "done")
+        LogCleaner.run(
+            logsDirectory: root,
+            dryRun: true,
+            now: now,
+            fileManager: fileManager
+        )
+
+        let after = try? Data(contentsOf: production)
+        XCTAssertEqual(before, after)
+        XCTAssertTrue(
+            fileManager.fileExists(atPath: LogCleaner.defaultInspectLogURL().path)
+        )
+        XCTAssertTrue(
+            fileManager.fileExists(atPath: LogCleaner.defaultUncertainReportURL().path)
+        )
+        XCTAssertTrue(LogCleaner.defaultInspectLogURL().path.hasPrefix(isolated.path))
+        try? fileManager.removeItem(at: isolated)
+    }
+
+    func testDefaultInspectLogIsIsolatedDuringXCTestProcess() {
+        LogCleaner.supportDirectoryOverride = nil
+        let url = LogCleaner.defaultInspectLogURL()
+        XCTAssertFalse(
+            url.path.contains("/Library/Application Support/CortexSentinel/"),
+            "测试进程不得写生产留痕，实际 \(url.path)"
+        )
+        XCTAssertTrue(
+            url.path.contains("CortexSentinel-xctest-") || url.path.contains("/T/"),
+            "测试进程应落到临时目录，实际 \(url.path)"
+        )
+    }
+
+    func testResolvedSupportDirectoryHonorsEnvAndFallsBack() {
+        let overridden = LogCleaner.resolvedSupportDirectory(
+            environment: [LogCleanupConstants.supportDirectoryEnvironmentKey: "/tmp/sentinel-support-test"]
+        )
+        XCTAssertEqual(overridden.path, "/tmp/sentinel-support-test")
+
+        let production = LogCleaner.resolvedSupportDirectory(environment: [:])
+        XCTAssertTrue(
+            production.path.contains("Application Support"),
+            "空环境应回到 Application Support，实际 \(production.path)"
+        )
+    }
+
     func testInspectLogTruncatesWhenOverMaxLines() throws {
         let inspect = inspectURL()
         let overflow = LogCleanupConstants.inspectLogMaxLines + 40
@@ -251,6 +404,12 @@ final class LogCleanerTests: XCTestCase {
         )
     }
 
+    private func uncertainURL() -> URL {
+        root.deletingLastPathComponent().appendingPathComponent(
+            "\(root.lastPathComponent).uncertain.txt"
+        )
+    }
+
     private func inspectLines(at url: URL) throws -> [String] {
         let text = try String(contentsOf: url, encoding: .utf8)
         return text.split(omittingEmptySubsequences: true, whereSeparator: \.isNewline).map(String.init)
@@ -266,6 +425,15 @@ final class LogCleanerTests: XCTestCase {
         let url = root.appendingPathComponent(name)
         fileManager.createFile(atPath: url.path, contents: Data(repeating: 0x62, count: bytes))
         setModified(url, ageSeconds: 7200)
+    }
+
+    private func writeNested(_ relative: String, bytes: Int, ageSeconds: TimeInterval) {
+        let url = relative.split(separator: "/").reduce(root) { partial, part in
+            partial.appendingPathComponent(String(part))
+        }
+        try? fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        fileManager.createFile(atPath: url.path, contents: Data(repeating: 0x63, count: bytes))
+        setModified(url, ageSeconds: ageSeconds)
     }
 
     private func writeStatus(_ slug: String, state: String) {

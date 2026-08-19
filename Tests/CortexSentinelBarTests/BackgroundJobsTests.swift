@@ -1,0 +1,265 @@
+import XCTest
+@testable import CortexSentinelBar
+
+final class BackgroundJobsTests: XCTestCase {
+    private let now = ISO8601DateFormatter().date(from: "2026-08-20T01:40:00+08:00")!
+
+    func testAllHealthyOccupiesOneSummaryLine() {
+        let snapshot = BackgroundJobsSnapshot(
+            sourceState: .available,
+            generatedAt: now,
+            okCount: 5,
+            problemCount: 0,
+            jobs: [
+                job(label: "com.falcon.cortex.web", name: "界面常驻服务", status: .ok),
+                job(label: "com.cortex.sentinelbar", name: "Cortex 哨兵", status: .ok),
+            ]
+        )
+        let presentation = BackgroundJobsPresentation(snapshot: snapshot, now: now)
+        XCTAssertEqual(presentation.summaryText, "后台任务 2 个，全部正常")
+        XCTAssertFalse(presentation.hasProblems)
+        XCTAssertEqual(presentation.problemRows, [])
+        XCTAssertEqual(presentation.healthyRows.count, 2)
+        XCTAssertEqual(presentation.tone, .success)
+    }
+
+    func testProblemsExpandWithNameLastRunAndReason() {
+        let snapshot = BackgroundJobsSnapshot(
+            sourceState: .available,
+            generatedAt: now,
+            okCount: 1,
+            problemCount: 1,
+            jobs: [
+                job(
+                    label: "com.falcon.cortex.memory-monitor",
+                    name: "内存与回收巡检",
+                    status: .stalled,
+                    lastRunText: "25 小时前",
+                    reason: "超过两个周期没有新记录"
+                ),
+                job(label: "com.falcon.cortex.web", name: "界面常驻服务", status: .ok),
+            ]
+        )
+        let presentation = BackgroundJobsPresentation(snapshot: snapshot, now: now)
+        XCTAssertEqual(presentation.summaryText, "后台任务 2 个，1 个不正常")
+        XCTAssertTrue(presentation.hasProblems)
+        XCTAssertEqual(presentation.tone, .warning)
+        XCTAssertEqual(presentation.problemRows.count, 1)
+        XCTAssertEqual(presentation.problemRows[0].name, "内存与回收巡检")
+        XCTAssertEqual(
+            presentation.problemRows[0].detail,
+            "上次跑：25 小时前 · 超过两个周期没有新记录"
+        )
+        XCTAssertEqual(presentation.healthyRows.map(\.name), ["界面常驻服务"])
+    }
+
+    func testMissingSnapshotIsOneQuietLine() {
+        let presentation = BackgroundJobsPresentation(snapshot: .missing, now: now)
+        XCTAssertEqual(presentation.summaryText, "后台任务 无数据")
+        XCTAssertFalse(presentation.hasProblems)
+        XCTAssertEqual(presentation.problemRows, [])
+    }
+
+    func testStaleSnapshotAddsAProblemEvenWhenJobsAreOk() {
+        let generatedAt = now.addingTimeInterval(-40 * 60)
+        let snapshot = BackgroundJobsSnapshot(
+            sourceState: .available,
+            generatedAt: generatedAt,
+            okCount: 1,
+            problemCount: 0,
+            jobs: [job(label: "com.falcon.cortex.web", name: "界面常驻服务", status: .ok)]
+        )
+        let presentation = BackgroundJobsPresentation(snapshot: snapshot, now: now)
+        XCTAssertTrue(presentation.hasProblems)
+        XCTAssertEqual(presentation.problemRows.first?.name, "健康快照")
+        XCTAssertTrue(presentation.problemRows.first?.detail.contains("分钟未更新") == true)
+    }
+
+    func testParsesHealthContractJSON() throws {
+        let json = """
+        {
+          "schema": "cortex.background-jobs-health.v1",
+          "generated_at": "2026-08-20T01:40:00+08:00",
+          "ok_count": 1,
+          "problem_count": 1,
+          "jobs": [
+            {
+              "label": "com.falcon.cortex.memory-monitor",
+              "name": "内存与回收巡检",
+              "interval_text": "每 10 分钟",
+              "last_run_at": "2026-08-19T00:04:41+08:00",
+              "last_run_text": "25 小时前",
+              "status": "stalled",
+              "status_text": "出错",
+              "reason": "超过两个周期没有新记录",
+              "last_exit_code": 0
+            },
+            {
+              "label": "com.falcon.cortex.web",
+              "name": "界面常驻服务",
+              "interval_text": "常驻",
+              "last_run_text": "正在运行",
+              "status": "ok",
+              "status_text": "正常",
+              "reason": ""
+            }
+          ]
+        }
+        """
+        let snapshot = BackgroundJobsReader.parse(data: Data(json.utf8))
+        XCTAssertEqual(snapshot.sourceState, .available)
+        XCTAssertEqual(snapshot.jobs.count, 2)
+        XCTAssertEqual(snapshot.jobs[0].name, "内存与回收巡检")
+        XCTAssertEqual(snapshot.jobs[0].status, .stalled)
+        XCTAssertEqual(snapshot.jobs[0].status.displayName, "出错")
+        XCTAssertTrue(snapshot.jobs[0].isProblem)
+        XCTAssertEqual(snapshot.jobs[1].status, .ok)
+        XCTAssertNotNil(snapshot.generatedAt)
+        XCTAssertEqual(
+            BackgroundJobsReader.parse(data: Data("{}".utf8)).sourceState,
+            .available
+        )
+        XCTAssertEqual(
+            BackgroundJobsReader.parse(data: Data("not-json".utf8)).sourceState,
+            .invalid
+        )
+    }
+
+    func testMissingPlistStatusFieldTreatsJobAsLoaded() {
+        let json = """
+        {
+          "generated_at": "2026-08-20T01:40:00+08:00",
+          "jobs": [
+            {
+              "label": "com.falcon.cortex.web",
+              "name": "界面常驻服务",
+              "status": "ok",
+              "status_text": "正常"
+            }
+          ]
+        }
+        """
+        let snapshot = BackgroundJobsReader.parse(data: Data(json.utf8))
+        XCTAssertEqual(snapshot.jobs.count, 1)
+        XCTAssertEqual(snapshot.jobs[0].plistStatus, .loaded)
+        XCTAssertFalse(snapshot.jobs[0].isProblem)
+        let presentation = BackgroundJobsPresentation(snapshot: snapshot, now: now)
+        XCTAssertFalse(presentation.hasProblems)
+        XCTAssertEqual(presentation.summaryText, "后台任务 1 个，全部正常")
+        XCTAssertEqual(presentation.problemRows, [])
+    }
+
+    func testMissingPlistStatusIsAProblemWithFixedCopy() {
+        let json = """
+        {
+          "generated_at": "2026-08-20T01:40:00+08:00",
+          "jobs": [
+            {
+              "label": "com.falcon.cortex.web",
+              "name": "界面常驻服务",
+              "status": "ok",
+              "plist_status": "missing"
+            }
+          ]
+        }
+        """
+        let snapshot = BackgroundJobsReader.parse(data: Data(json.utf8))
+        XCTAssertEqual(snapshot.jobs[0].plistStatus, .missing)
+        XCTAssertTrue(snapshot.jobs[0].isProblem)
+        XCTAssertEqual(
+            snapshot.jobs[0].problemDetail,
+            BackgroundJobPlistStatus.missingDisplayText
+        )
+        XCTAssertEqual(snapshot.jobs[0].problemDetail, "配置不在了")
+        let presentation = BackgroundJobsPresentation(snapshot: snapshot, now: now)
+        XCTAssertTrue(presentation.hasProblems)
+        XCTAssertEqual(presentation.problemRows.count, 1)
+        XCTAssertEqual(presentation.problemRows[0].detail, "配置不在了")
+        XCTAssertEqual(presentation.summaryText, "后台任务 1 个，1 个不正常")
+    }
+
+    func testUnreadablePlistStatusShowsFixedCopyAndDetail() {
+        let withoutDetail = """
+        {
+          "generated_at": "2026-08-20T01:40:00+08:00",
+          "jobs": [
+            {
+              "label": "com.falcon.cortex.web",
+              "name": "界面常驻服务",
+              "status": "ok",
+              "plist_status": "unreadable"
+            }
+          ]
+        }
+        """
+        let without = BackgroundJobsReader.parse(data: Data(withoutDetail.utf8))
+        XCTAssertEqual(without.jobs[0].plistStatus, .unreadable)
+        XCTAssertTrue(without.jobs[0].isProblem)
+        XCTAssertEqual(without.jobs[0].problemDetail, "配置读不了")
+        let withoutPresentation = BackgroundJobsPresentation(snapshot: without, now: now)
+        XCTAssertTrue(withoutPresentation.hasProblems)
+        XCTAssertEqual(withoutPresentation.problemRows[0].detail, "配置读不了")
+
+        let withDetail = """
+        {
+          "generated_at": "2026-08-20T01:40:00+08:00",
+          "jobs": [
+            {
+              "label": "com.falcon.cortex.web",
+              "name": "界面常驻服务",
+              "status": "ok",
+              "plist_status": "unreadable",
+              "plist_error_detail": "permission denied"
+            }
+          ]
+        }
+        """
+        let with = BackgroundJobsReader.parse(data: Data(withDetail.utf8))
+        XCTAssertEqual(with.jobs[0].plistStatus, .unreadable)
+        XCTAssertTrue(with.jobs[0].isProblem)
+        XCTAssertEqual(with.jobs[0].problemDetail, "配置读不了 · permission denied")
+        let withPresentation = BackgroundJobsPresentation(snapshot: with, now: now)
+        XCTAssertEqual(withPresentation.problemRows[0].detail, "配置读不了 · permission denied")
+        XCTAssertFalse(withPresentation.problemRows[0].detail.contains("\n"))
+    }
+
+    func testPrefersWatchDirectoryFileOverDataRoot() throws {
+        let fileManager = FileManager.default
+        let logs = fileManager.temporaryDirectory.appendingPathComponent(
+            "bgjobs-logs-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(at: logs, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: logs) }
+        let file = logs.appendingPathComponent("background-jobs-health.json")
+        try Data("{}".utf8).write(to: file)
+        let url = SentinelPaths.backgroundJobsHealthURL(
+            logsDirectory: logs,
+            environment: [:],
+            fileManager: fileManager
+        )
+        XCTAssertEqual(url.path, file.path)
+    }
+
+    private func job(
+        label: String,
+        name: String,
+        status: BackgroundJobStatus,
+        lastRunText: String = "14 分钟前",
+        reason: String = ""
+    ) -> BackgroundJob {
+        BackgroundJob(
+            label: label,
+            name: name,
+            intervalText: "每 10 分钟",
+            lastRunAt: now,
+            lastRunText: lastRunText,
+            status: status,
+            statusText: status.displayName,
+            reason: reason,
+            lastExitCode: nil,
+            plistStatus: .loaded,
+            plistErrorDetail: ""
+        )
+    }
+}

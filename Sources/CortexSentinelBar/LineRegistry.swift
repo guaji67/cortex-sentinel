@@ -199,6 +199,75 @@ enum CodexLineRegistryReader {
     }
 }
 
+final class CodexLineRegistryCache: @unchecked Sendable {
+    private struct FileIdentity: Equatable {
+        let modificationDate: Date
+        let size: UInt64
+    }
+
+    private let lock = NSLock()
+    private var cachedURL: URL?
+    private var cachedIdentity: FileIdentity?
+    private var lastGoodRegistry: CodexLineRegistry?
+
+    func read(
+        at url: URL,
+        fileManager: FileManager = .default
+    ) -> CodexLineRegistry {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let normalizedURL = url.standardizedFileURL
+        if cachedURL != normalizedURL {
+            cachedURL = normalizedURL
+            cachedIdentity = nil
+            lastGoodRegistry = nil
+        }
+
+        guard fileManager.fileExists(atPath: normalizedURL.path) else {
+            cachedIdentity = nil
+            lastGoodRegistry = nil
+            return .empty
+        }
+
+        guard let identity = Self.fileIdentity(at: normalizedURL, fileManager: fileManager) else {
+            cachedIdentity = nil
+            return lastGoodRegistry ?? .empty
+        }
+
+        if cachedIdentity == identity, let lastGoodRegistry {
+            return lastGoodRegistry
+        }
+
+        guard identity.size > 0,
+              let data = try? Data(contentsOf: normalizedURL),
+              let registry = CodexLineRegistryReader.decode(data)
+        else {
+            // A writer may be between truncate and replace. Keep the last usable
+            // value for this refresh, but retry instead of caching the failure.
+            cachedIdentity = nil
+            return lastGoodRegistry ?? .empty
+        }
+
+        cachedIdentity = identity
+        lastGoodRegistry = registry
+        return registry
+    }
+
+    private static func fileIdentity(
+        at url: URL,
+        fileManager: FileManager
+    ) -> FileIdentity? {
+        guard let attributes = try? fileManager.attributesOfItem(atPath: url.path),
+              let modificationDate = attributes[.modificationDate] as? Date,
+              let size = attributes[.size] as? NSNumber
+        else {
+            return nil
+        }
+        return FileIdentity(modificationDate: modificationDate, size: size.uint64Value)
+    }
+}
+
 struct LinePresentation: Equatable, Identifiable {
     let line: LineStatus
     let registration: CodexLineRegistration?

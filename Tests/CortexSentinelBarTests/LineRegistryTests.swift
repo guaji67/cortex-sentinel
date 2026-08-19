@@ -485,3 +485,116 @@ final class LineRegistryTests: XCTestCase {
         )
     }
 }
+
+final class CodexLineRegistryCacheTests: XCTestCase {
+    private let fileManager = FileManager.default
+    private var root: URL!
+    private var registryURL: URL!
+    private let fixedModificationDate = Date(timeIntervalSince1970: 1_700_000_000)
+
+    override func setUpWithError() throws {
+        root = fileManager.temporaryDirectory
+            .appendingPathComponent("line-registry-cache-\(UUID().uuidString)", isDirectory: true)
+        registryURL = root.appendingPathComponent("codex-line-registry.json")
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        try? fileManager.removeItem(at: root)
+    }
+
+    func testUnchangedModificationDateAndSizeReuseDecodedRegistry() throws {
+        let cache = CodexLineRegistryCache()
+        let first = registryData(slug: "first")
+        let replacement = registryData(slug: "other")
+        XCTAssertEqual(first.count, replacement.count)
+
+        try write(first, modificationDate: fixedModificationDate)
+        XCTAssertNotNil(cache.read(at: registryURL).registration(for: "first"))
+
+        try write(replacement, modificationDate: fixedModificationDate)
+        let cached = cache.read(at: registryURL)
+        XCTAssertNotNil(cached.registration(for: "first"))
+        XCTAssertNil(cached.registration(for: "other"))
+    }
+
+    func testModificationDateChangeReloadsSameSizedRegistry() throws {
+        let cache = CodexLineRegistryCache()
+        let first = registryData(slug: "first")
+        let replacement = registryData(slug: "other")
+        XCTAssertEqual(first.count, replacement.count)
+
+        try write(first, modificationDate: fixedModificationDate)
+        XCTAssertNotNil(cache.read(at: registryURL).registration(for: "first"))
+
+        try write(replacement, modificationDate: fixedModificationDate.addingTimeInterval(1))
+        let reloaded = cache.read(at: registryURL)
+        XCTAssertNil(reloaded.registration(for: "first"))
+        XCTAssertNotNil(reloaded.registration(for: "other"))
+    }
+
+    func testSizeChangeReloadsRegistryWithSameModificationDate() throws {
+        let cache = CodexLineRegistryCache()
+        try write(registryData(slug: "first"), modificationDate: fixedModificationDate)
+        XCTAssertNotNil(cache.read(at: registryURL).registration(for: "first"))
+
+        try write(registryData(slug: "longer-slug"), modificationDate: fixedModificationDate)
+        let reloaded = cache.read(at: registryURL)
+        XCTAssertNil(reloaded.registration(for: "first"))
+        XCTAssertNotNil(reloaded.registration(for: "longer-slug"))
+    }
+
+    func testMissingFileClearsCacheAndCanBeRecreated() throws {
+        let cache = CodexLineRegistryCache()
+        try write(registryData(slug: "first"), modificationDate: fixedModificationDate)
+        XCTAssertNotNil(cache.read(at: registryURL).registration(for: "first"))
+
+        try fileManager.removeItem(at: registryURL)
+        XCTAssertEqual(cache.read(at: registryURL), .empty)
+
+        try write(registryData(slug: "other"), modificationDate: fixedModificationDate)
+        XCTAssertNotNil(cache.read(at: registryURL).registration(for: "other"))
+    }
+
+    func testEmptyAndInvalidFilesPreserveLastGoodButRemainRetryable() throws {
+        let cache = CodexLineRegistryCache()
+        try write(registryData(slug: "first"), modificationDate: fixedModificationDate)
+        XCTAssertNotNil(cache.read(at: registryURL).registration(for: "first"))
+
+        try write(Data(), modificationDate: fixedModificationDate.addingTimeInterval(1))
+        XCTAssertNotNil(cache.read(at: registryURL).registration(for: "first"))
+
+        let replacement = registryData(slug: "other")
+        let invalid = Data(repeating: 0x78, count: replacement.count)
+        let failedIdentityDate = fixedModificationDate.addingTimeInterval(2)
+        try write(invalid, modificationDate: failedIdentityDate)
+        XCTAssertNotNil(cache.read(at: registryURL).registration(for: "first"))
+
+        // Same mtime and size as the failed read must still be decoded again.
+        try write(replacement, modificationDate: failedIdentityDate)
+        let recovered = cache.read(at: registryURL)
+        XCTAssertNil(recovered.registration(for: "first"))
+        XCTAssertNotNil(recovered.registration(for: "other"))
+    }
+
+    private func write(_ data: Data, modificationDate: Date) throws {
+        try data.write(to: registryURL, options: .atomic)
+        try fileManager.setAttributes(
+            [.modificationDate: modificationDate],
+            ofItemAtPath: registryURL.path
+        )
+    }
+
+    private func registryData(slug: String) -> Data {
+        Data(
+            """
+            [{
+              "slug": "\(slug)",
+              "label_zh": "缓存测试",
+              "dispatcher_zh": "测试",
+              "registered_at": 1700000000
+            }]
+            """.utf8
+        )
+    }
+}

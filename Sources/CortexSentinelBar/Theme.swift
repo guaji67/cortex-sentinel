@@ -356,7 +356,7 @@ struct SentinelRowModifier: ViewModifier {
     }
 }
 
-enum SentinelRowTone {
+enum SentinelRowTone: Equatable {
     case normal
     case primary
     case success

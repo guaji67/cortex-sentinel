@@ -7,6 +7,7 @@ enum PanelPreviewFixture: String, CaseIterable {
     case busy
     case unclaimed
     case channelDown = "channel-down"
+    case bgjobsProblems = "bgjobs-problems"
 }
 
 enum PanelPNGRenderError: Error {
@@ -56,7 +57,10 @@ enum PanelPreviewFactory {
 
         let store = SentinelStore(
             defaults: defaults,
-            environment: ["CORTEX_SENTINEL_WATCH_DIR": root.path],
+            environment: [
+                "CORTEX_SENTINEL_WATCH_DIR": root.path,
+                "CORTEX_DATA_ROOT": root.path,
+            ],
             otherCodexProcessReader: { _ in [] }
         )
         await store.refreshStatuses()
@@ -151,6 +155,7 @@ private enum PanelPreviewLayout {
                 grok: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0),
                 codex: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0)
             )
+            try writeHealthyBackgroundJobs(into: root, generatedAt: now)
         case .busy:
             let lines = busyLines()
             try writeRegistry(lines, host: host, registeredAt: now, into: root)
@@ -163,6 +168,7 @@ private enum PanelPreviewLayout {
                 grok: ChannelJSON(status: "alive", evidence: "\(grokCount) 条在跑", running: grokCount),
                 codex: ChannelJSON(status: "alive", evidence: "\(codexCount) 条在跑", running: codexCount)
             )
+            try writeHealthyBackgroundJobs(into: root, generatedAt: now)
         case .unclaimed:
             let lines = unclaimedLines()
             try writeRegistry(lines, host: host, registeredAt: now, into: root)
@@ -173,6 +179,7 @@ private enum PanelPreviewLayout {
                 grok: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0),
                 codex: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0)
             )
+            try writeHealthyBackgroundJobs(into: root, generatedAt: now)
         case .channelDown:
             try writeChannel(
                 into: root,
@@ -180,6 +187,15 @@ private enum PanelPreviewLayout {
                 grok: ChannelJSON(status: "degraded", evidence: "账单未付，进程秒退", running: nil),
                 codex: ChannelJSON(status: "unknown", evidence: "无数据", running: nil)
             )
+            try writeHealthyBackgroundJobs(into: root, generatedAt: now)
+        case .bgjobsProblems:
+            try writeChannel(
+                into: root,
+                generatedAt: now,
+                grok: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0),
+                codex: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0)
+            )
+            try writeProblemBackgroundJobs(into: root, generatedAt: now)
         }
     }
 
@@ -392,6 +408,75 @@ private enum PanelPreviewLayout {
         }
         """
         try Data(json.utf8).write(to: root.appendingPathComponent("channel-status.json"))
+    }
+
+    private static func writeHealthyBackgroundJobs(into root: URL, generatedAt: Date) throws {
+        let jobs = """
+        [
+          {
+            "label": "com.falcon.cortex.web",
+            "name": "界面常驻服务",
+            "interval_text": "常驻",
+            "last_run_text": "正在运行",
+            "status": "ok",
+            "status_text": "正常",
+            "plist_status": "loaded"
+          },
+          {
+            "label": "com.cortex.sentinelbar",
+            "name": "Cortex 哨兵",
+            "interval_text": "常驻",
+            "last_run_text": "正在运行",
+            "status": "ok",
+            "status_text": "正常",
+            "plist_status": "loaded"
+          }
+        ]
+        """
+        try writeBackgroundJobs(into: root, generatedAt: generatedAt, jobsJSON: jobs)
+    }
+
+    private static func writeProblemBackgroundJobs(into root: URL, generatedAt: Date) throws {
+        let longDetail = String(repeating: "长", count: 50)
+        let jobs = """
+        [
+          {
+            "label": "com.falcon.cortex.memory-monitor",
+            "name": "内存与回收巡检",
+            "interval_text": "每 10 分钟",
+            "last_run_text": "14 分钟前",
+            "status": "ok",
+            "status_text": "正常",
+            "plist_status": "unexpected_enum"
+          },
+          {
+            "label": "com.falcon.cortex.web",
+            "name": "界面常驻服务",
+            "interval_text": "常驻",
+            "last_run_text": "正在运行",
+            "status": "ok",
+            "status_text": "正常",
+            "plist_status": "unreadable",
+            "plist_error_detail": "\(longDetail)"
+          }
+        ]
+        """
+        try writeBackgroundJobs(into: root, generatedAt: generatedAt, jobsJSON: jobs)
+    }
+
+    private static func writeBackgroundJobs(
+        into root: URL,
+        generatedAt: Date,
+        jobsJSON: String
+    ) throws {
+        let json = """
+        {
+          "schema": "cortex.background-jobs-health.v1",
+          "generated_at": "\(isoString(generatedAt))",
+          "jobs": \(jobsJSON)
+        }
+        """
+        try Data(json.utf8).write(to: root.appendingPathComponent("background-jobs-health.json"))
     }
 
     private static func channelObject(_ channel: ChannelJSON) -> String {

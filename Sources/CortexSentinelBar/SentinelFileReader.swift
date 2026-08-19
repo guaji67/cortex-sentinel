@@ -53,6 +53,40 @@ struct SentinelPaths {
         logsDirectory.appendingPathComponent("channel-status.json")
     }
 
+    /// 后台任务健康快照。监视目录里有就用那份（测试/本机覆盖），否则退到数据根 health/。
+    var backgroundJobsHealthURL: URL {
+        Self.backgroundJobsHealthURL(logsDirectory: logsDirectory)
+    }
+
+    static func backgroundJobsHealthURL(
+        logsDirectory: URL,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> URL {
+        if let configured = environment["CORTEX_BACKGROUND_JOBS_HEALTH_PATH"], !configured.isEmpty {
+            return URL(fileURLWithPath: configured)
+        }
+        let inLogs = logsDirectory.appendingPathComponent("background-jobs-health.json")
+        if fileManager.fileExists(atPath: inLogs.path) {
+            return inLogs
+        }
+        if let configured = environment["CORTEX_DATA_ROOT"], !configured.isEmpty {
+            return URL(fileURLWithPath: configured, isDirectory: true)
+                .appendingPathComponent("health", isDirectory: true)
+                .appendingPathComponent("background-jobs-health.json")
+        }
+        // XCTest 默认不碰本机 ~/CortexData，免得测试读到真快照、刷新计数被污染。
+        let processEnv = ProcessInfo.processInfo.environment
+        if processEnv["XCTestConfigurationFilePath"] != nil
+            || processEnv["XCTestSessionIdentifier"] != nil {
+            return inLogs
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("CortexData", isDirectory: true)
+            .appendingPathComponent("health", isDirectory: true)
+            .appendingPathComponent("background-jobs-health.json")
+    }
+
     var lineTerminalAckURL: URL {
         logsDirectory.appendingPathComponent("line-terminal-ack.json")
     }
@@ -526,6 +560,7 @@ struct StatusDiskSnapshot {
     var lines: [LineStatus]
     var registry: CodexLineRegistry
     var channelStatus: ChannelStatusSnapshot
+    var backgroundJobs: BackgroundJobsSnapshot
     var ack: TerminalAckLedger
     var otherCodexProcesses: [OtherCodexProcess]?
     var readOnMainThread: Bool
@@ -540,7 +575,9 @@ enum StatusDiskReader {
         lineStatusCache: LineStatusFileCache,
         lineRegistryCache: CodexLineRegistryCache,
         includeOtherProcesses: Bool,
-        otherCodexProcessReader: (Set<Int>) -> [OtherCodexProcess]
+        otherCodexProcessReader: (Set<Int>) -> [OtherCodexProcess],
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
     ) -> StatusDiskSnapshot {
         let lines = SentinelFileReader.readLines(
             in: logsDirectory,
@@ -548,6 +585,15 @@ enum StatusDiskReader {
         )
         let registry = lineRegistryCache.read(at: registryURL)
         let channelStatus = SentinelFileReader.readChannelStatus(at: channelStatusURL)
+        let backgroundJobsURL = SentinelPaths.backgroundJobsHealthURL(
+            logsDirectory: logsDirectory,
+            environment: environment,
+            fileManager: fileManager
+        )
+        let backgroundJobs = BackgroundJobsReader.read(
+            at: backgroundJobsURL,
+            fileManager: fileManager
+        )
         let ack = SentinelFileReader.readTerminalAck(at: ackURL)
         let processes: [OtherCodexProcess]?
         if includeOtherProcesses {
@@ -559,6 +605,7 @@ enum StatusDiskReader {
             lines: lines,
             registry: registry,
             channelStatus: channelStatus,
+            backgroundJobs: backgroundJobs,
             ack: ack,
             otherCodexProcesses: processes,
             readOnMainThread: Thread.isMainThread

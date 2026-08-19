@@ -15,6 +15,7 @@ struct SentinelMenuView: View {
     /// 菜单栏常驻默认 false，现场布局一条都不改。
     var rendersOffscreen = false
     @State private var showsAutomaticLines = false
+    @State private var showsBackgroundJobs = false
     @State private var showsHistory = false
     @State private var expandedCompletedLines: Set<String> = []
     @State private var expandedLineNotes: Set<String> = []
@@ -67,6 +68,7 @@ struct SentinelMenuView: View {
     private var sectionStack: some View {
         header
         channelSection
+        backgroundJobsSection
         serviceSection
         balancesSection
         dispatchSection
@@ -190,6 +192,13 @@ struct SentinelMenuView: View {
         }
         .accessibilityIdentifier(item.accessibilityIdentifier)
         .accessibilityLabel(item.itemText)
+    }
+
+    private var backgroundJobsSection: some View {
+        BackgroundJobsSectionView(
+            snapshot: store.backgroundJobs,
+            showsHealthy: $showsBackgroundJobs
+        )
     }
 
     private var channelUpdatedText: String? {

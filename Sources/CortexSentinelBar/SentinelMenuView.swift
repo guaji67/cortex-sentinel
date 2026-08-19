@@ -199,9 +199,19 @@ struct SentinelMenuView: View {
         return SentinelTimeFormat.clockTime(generatedAt)
     }
 
+    @ViewBuilder
     private var serviceSection: some View {
         let probes = store.inputStatus.displayProbes()
-        return VStack(alignment: .leading, spacing: SentinelTheme.Spacing.md) {
+        switch InputServiceSectionPresentation.resolve(probes: probes) {
+        case let .compact(statusText):
+            compactDiagnosticRow(title: "Input 服务", status: statusText)
+        case .expanded:
+            expandedServiceSection(probes: probes)
+        }
+    }
+
+    private func expandedServiceSection(probes: [InputStatusDisplayProbe]) -> some View {
+        VStack(alignment: .leading, spacing: SentinelTheme.Spacing.md) {
             Text("Input 服务")
                 .font(SentinelTheme.Fonts.section)
                 .kerning(0.5)
@@ -320,7 +330,20 @@ struct SentinelMenuView: View {
         return parts.joined(separator: " · ")
     }
 
+    @ViewBuilder
     private var balancesSection: some View {
+        switch BalanceSectionPresentation.resolve(
+            official: store.officialUsage,
+            aio: store.aio
+        ) {
+        case let .compact(statusText):
+            compactDiagnosticRow(title: "余额", status: statusText)
+        case .expanded:
+            expandedBalancesSection
+        }
+    }
+
+    private var expandedBalancesSection: some View {
         VStack(alignment: .leading, spacing: SentinelTheme.Spacing.sm) {
             sectionTitle("余额", trailing: balanceCountText)
 
@@ -1166,6 +1189,19 @@ struct SentinelMenuView: View {
                     )
             }
         }
+    }
+
+    private func compactDiagnosticRow(title: String, status: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: SentinelTheme.Spacing.md) {
+            Text(title)
+                .font(SentinelTheme.Fonts.section)
+                .kerning(0.5)
+                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+            Text(status)
+                .font(SentinelTheme.Fonts.subtitle)
+                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func emptyState(_ text: String) -> some View {

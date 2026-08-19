@@ -16,6 +16,8 @@ enum CortexSentinelBarMain {
     static let renderStatusBarArgument = "--render-statusbar"
     static let renderSettingsPNGArgument = "--render-settings-png"
     static let settingsFixtureArgument = "--settings-fixture"
+    static let renderPanelPNGArgument = "--render-panel-png"
+    static let panelFixtureArgument = "--panel-fixture"
     static let dumpStateArgument = "--dump-state"
     static let idleRefreshArgument = "--idle-refresh"
     static let smokeSettingsArgument = "--smoke-settings"
@@ -48,6 +50,14 @@ enum CortexSentinelBarMain {
         if let index = arguments.firstIndex(of: renderSettingsPNGArgument),
            index + 1 < arguments.count {
             runRenderSettingsPNGCLI(
+                outputPath: arguments[index + 1],
+                arguments: arguments
+            )
+            return
+        }
+        if let index = arguments.firstIndex(of: renderPanelPNGArgument),
+           index + 1 < arguments.count {
+            runRenderPanelPNGCLI(
                 outputPath: arguments[index + 1],
                 arguments: arguments
             )
@@ -124,6 +134,32 @@ enum CortexSentinelBarMain {
         )
         while true {
             store.refreshStatuses()
+        }
+    }
+
+    @MainActor
+    private static func runRenderPanelPNGCLI(outputPath: String, arguments: [String]) {
+        let fixture: PanelPreviewFixture
+        if let index = arguments.firstIndex(of: panelFixtureArgument),
+           index + 1 < arguments.count {
+            let name = arguments[index + 1]
+            guard let parsed = PanelPreviewFixture(rawValue: name) else {
+                let allowed = PanelPreviewFixture.allCases.map(\.rawValue).joined(separator: ", ")
+                FileHandle.standardError.write(
+                    Data("未知 --panel-fixture：\(name)。可选：\(allowed)\n".utf8)
+                )
+                exit(1)
+            }
+            fixture = parsed
+        } else {
+            fixture = .idle
+        }
+        do {
+            try PanelPNGRenderer.render(fixture: fixture, to: outputPath)
+            print("written \(outputPath)")
+        } catch {
+            FileHandle.standardError.write(Data("面板离屏渲染失败：\(error.localizedDescription)\n".utf8))
+            exit(1)
         }
     }
 

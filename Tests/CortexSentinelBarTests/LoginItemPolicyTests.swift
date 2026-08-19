@@ -185,6 +185,12 @@ final class LoginItemPolicyTests: XCTestCase {
                 environment: [:]
             )
         )
+        XCTAssertFalse(
+            LoginItemRuntime.shouldReconcileOnLaunch(
+                arguments: ["/tmp/CortexSentinelBar", "--render-panel-png", "/tmp/panel.png"],
+                environment: [:]
+            )
+        )
     }
 
     func testColdLaunchPresentsOnlyWhenUserOpenedUnmanagedApp() {

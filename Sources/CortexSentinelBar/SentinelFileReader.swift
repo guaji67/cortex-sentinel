@@ -38,7 +38,7 @@ struct SentinelPaths {
     static let missingWatchDirectoryBody =
         "哨兵盯一个目录，里面是派工工具写的状态文件。这个目录现在还不存在。"
     static let missingWatchDirectoryHint =
-        "默认位置 ~/.cortex-sentinel/logs，把状态文件放进去就能看到。要换地方，设 CORTEX_SENTINEL_WATCH_DIR。"
+        "默认位置 ~/.cortex-sentinel/logs，把状态文件放进去就能看到。要换地方，在设置里点「选择」。"
 
     /// 监视目录不存在时给 --dump-state 看的诊断句。界面不共用这一句。
     var missingWatchDirectoryMessage: String {
@@ -130,6 +130,80 @@ struct SentinelPaths {
     }
 }
 
+/// 按单个状态文件的 mtime + size 缓存解析结果。
+/// 目录 mtime 不动也要能看见原地改写；所以这里不按目录级跳过。
+final class LineStatusFileCache: @unchecked Sendable {
+    fileprivate struct FileIdentity: Equatable {
+        let modificationDate: Date
+        let size: UInt64
+    }
+
+    private struct CachedFile {
+        let identity: FileIdentity
+        let line: LineStatus
+    }
+
+    private let lock = NSLock()
+    private var files: [URL: CachedFile] = [:]
+    private var parseCountStorage = 0
+
+    var parseCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return parseCountStorage
+    }
+
+    func resetParseCount() {
+        lock.lock()
+        defer { lock.unlock() }
+        parseCountStorage = 0
+    }
+
+    fileprivate func line(for url: URL, identity: FileIdentity) -> LineStatus? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let entry = files[url], entry.identity == identity else {
+            return nil
+        }
+        return entry.line
+    }
+
+    fileprivate func store(url: URL, identity: FileIdentity?, line: LineStatus) {
+        lock.lock()
+        defer { lock.unlock() }
+        parseCountStorage += 1
+        guard let identity else {
+            return
+        }
+        files[url] = CachedFile(identity: identity, line: line)
+    }
+
+    fileprivate func retainOnly(_ urls: Set<URL>) {
+        lock.lock()
+        defer { lock.unlock() }
+        files = files.filter { urls.contains($0.key) }
+    }
+
+    fileprivate func removeAll() {
+        lock.lock()
+        defer { lock.unlock() }
+        files.removeAll()
+    }
+
+    fileprivate static func fileIdentity(
+        at url: URL,
+        fileManager: FileManager
+    ) -> FileIdentity? {
+        guard let attributes = try? fileManager.attributesOfItem(atPath: url.path),
+              let modificationDate = attributes[.modificationDate] as? Date,
+              let size = attributes[.size] as? NSNumber
+        else {
+            return nil
+        }
+        return FileIdentity(modificationDate: modificationDate, size: size.uint64Value)
+    }
+}
+
 enum SentinelFileReader {
     private static let statusPrefixes: [(prefix: String, engine: LineEngine)] = [
         ("codex-babysitter-", .codex),
@@ -159,35 +233,53 @@ enum SentinelFileReader {
         )
     }
 
-    static func readLines(in logsDirectory: URL, fileManager: FileManager = .default) -> [LineStatus] {
+    static func readLines(
+        in logsDirectory: URL,
+        fileManager: FileManager = .default,
+        cache: LineStatusFileCache? = nil
+    ) -> [LineStatus] {
         let resolvedLogsDirectory = logsDirectory.resolvingSymlinksInPath()
         guard let urls = try? fileManager.contentsOfDirectory(
             at: resolvedLogsDirectory,
-            includingPropertiesForKeys: [.contentModificationDateKey],
+            includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
             options: [.skipsHiddenFiles]
         ) else {
+            cache?.removeAll()
             return []
         }
 
-        return urls.compactMap { url -> (url: URL, fallbackSlug: String, engine: LineEngine)? in
+        let statusEntries = urls.compactMap { url -> (url: URL, fallbackSlug: String, engine: LineEngine)? in
             guard let metadata = statusFileMetadata(for: url.lastPathComponent) else {
                 return nil
             }
             return (url, metadata.fallbackSlug, metadata.engine)
         }
-            .sorted { $0.url.lastPathComponent < $1.url.lastPathComponent }
-            .map { entry in
-                let url = entry.url
-                let modifiedAt = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-                let data = (try? Data(contentsOf: url)) ?? Data()
-                return parseLine(
-                    data: data,
-                    fallbackSlug: entry.fallbackSlug,
-                    fallbackEngine: entry.engine,
-                    sourceFile: url,
-                    sourceModifiedAt: modifiedAt ?? nil
-                )
+        .sorted { $0.url.lastPathComponent < $1.url.lastPathComponent }
+
+        cache?.retainOnly(Set(statusEntries.map { $0.url.standardizedFileURL }))
+
+        return statusEntries.map { entry in
+            let url = entry.url
+            let cacheKey = url.standardizedFileURL
+            let identity = cache == nil
+                ? nil
+                : LineStatusFileCache.fileIdentity(at: cacheKey, fileManager: fileManager)
+            if let identity, let cached = cache?.line(for: cacheKey, identity: identity) {
+                return cached
             }
+            let modifiedAt = identity?.modificationDate
+                ?? (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+            let data = (try? Data(contentsOf: url)) ?? Data()
+            let line = parseLine(
+                data: data,
+                fallbackSlug: entry.fallbackSlug,
+                fallbackEngine: entry.engine,
+                sourceFile: url,
+                sourceModifiedAt: modifiedAt
+            )
+            cache?.store(url: cacheKey, identity: identity, line: line)
+            return line
+        }
     }
 
     static func parseLine(

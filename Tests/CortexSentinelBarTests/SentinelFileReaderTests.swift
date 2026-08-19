@@ -712,11 +712,13 @@ final class SentinelFileReaderTests: XCTestCase {
         )
         XCTAssertEqual(
             SentinelPaths.missingWatchDirectoryHint,
-            "默认位置 ~/.cortex-sentinel/logs，把状态文件放进去就能看到。要换地方，设 CORTEX_SENTINEL_WATCH_DIR。"
+            "默认位置 ~/.cortex-sentinel/logs，把状态文件放进去就能看到。要换地方，在设置里点「选择」。"
         )
         XCTAssertFalse(SentinelPaths.missingWatchDirectoryTitle.contains("CORTEX_REPO_ROOT"))
         XCTAssertFalse(SentinelPaths.missingWatchDirectoryBody.contains("CORTEX_REPO_ROOT"))
         XCTAssertFalse(SentinelPaths.missingWatchDirectoryHint.contains("CORTEX_REPO_ROOT"))
+        XCTAssertFalse(SentinelPaths.missingWatchDirectoryHint.contains("CORTEX_SENTINEL_WATCH_DIR"))
+        XCTAssertTrue(paths.missingWatchDirectoryMessage.contains("CORTEX_SENTINEL_WATCH_DIR"))
     }
 
     func testStatusRewriteDoesNotChangeEstablishedOrder() {

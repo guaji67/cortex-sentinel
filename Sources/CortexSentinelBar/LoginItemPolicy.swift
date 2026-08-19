@@ -224,6 +224,7 @@ enum LoginItemReconciler {
 enum LoginItemRuntime {
     static let diagnosticArguments: Set<String> = [
         "--dump-state",
+        "--idle-refresh",
         "--smoke-window",
         "--smoke-popover",
         "--smoke-lines",

@@ -201,6 +201,13 @@ enum AIOUsageStatus: Equatable, Sendable {
         return usage
     }
 
+    var hasDisplayableBalanceNumber: Bool {
+        guard let usage else {
+            return false
+        }
+        return usage.remaining != nil || usage.weeklyUsedPercentage != nil
+    }
+
     var hasFailure: Bool {
         switch self {
         case .failed, .timedOut, .invalid:
@@ -431,6 +438,50 @@ struct SentinelTopChannelPresentation: Equatable {
             summary += " · 含官方 GPT（烧周额度）"
         }
         routeSummary = summary
+    }
+}
+
+/// 面板余额块：没有任何账号余额数字时收成一行；有数字则原样展开。
+enum BalanceSectionPresentation: Equatable {
+    case compact(statusText: String)
+    case expanded
+
+    static let queryingStatusText = "查询中"
+    static let missingAIOStatusText = "未找到 AIO 数据库"
+
+    static func resolve(
+        official: OfficialUsageSnapshot,
+        aio: AIOSnapshot
+    ) -> Self {
+        if hasDisplayableAccount(official: official, aio: aio) {
+            return .expanded
+        }
+        if aio.sourceState == .invalid {
+            return .expanded
+        }
+        let relays = aio.providers.filter { !$0.isOfficialOAuthProvider }
+        if relays.contains(where: { $0.usage.hasFailure }) {
+            return .expanded
+        }
+        if official.errorMessage != nil {
+            return .expanded
+        }
+        if aio.sourceState == .unconfigured {
+            return .compact(statusText: missingAIOStatusText)
+        }
+        return .compact(statusText: queryingStatusText)
+    }
+
+    private static func hasDisplayableAccount(
+        official: OfficialUsageSnapshot,
+        aio: AIOSnapshot
+    ) -> Bool {
+        if official.weeklyRemainingPercentage != nil {
+            return true
+        }
+        return aio.providers.contains { provider in
+            !provider.isOfficialOAuthProvider && provider.usage.hasDisplayableBalanceNumber
+        }
     }
 }
 

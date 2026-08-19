@@ -46,7 +46,7 @@ final class SentinelSettingsTests: XCTestCase {
         XCTAssertEqual(SentinelSettingsCopy.notifyTaskProblemTitle, "任务出问题了")
         XCTAssertEqual(SentinelSettingsCopy.notifyTaskProblemHint, "卡住、失败、被杀")
         XCTAssertEqual(SentinelSettingsCopy.notifyChannelTitle, "通道熔断或余额不够")
-        XCTAssertEqual(SentinelSettingsCopy.notifyCadenceTitle, "怎么说")
+        XCTAssertEqual(SentinelSettingsCopy.notifyCadenceTitle, "什么时候说")
         XCTAssertEqual(SentinelSettingsCopy.notifyCadenceHint, "攒起来的会合成一条，比如「3 条线干完了」。")
         XCTAssertEqual(SentinelSettingsCopy.notifyCadenceEvery, "每条都弹")
         XCTAssertEqual(SentinelSettingsCopy.notifyCadence1m, "攒 1 分钟一起说")
@@ -57,11 +57,26 @@ final class SentinelSettingsTests: XCTestCase {
         XCTAssertEqual(SentinelSettingsCopy.historyTitle, "最多留")
         XCTAssertEqual(SentinelSettingsCopy.historyUnit, "条")
         XCTAssertEqual(SentinelSettingsCopy.historyHint, "超出的旧记录会自动清掉，正在跑的线不会被清。")
-        XCTAssertEqual(SentinelSettingsCopy.startupGroupTitle, "启动与目录")
+        XCTAssertEqual(SentinelSettingsCopy.startupGroupTitle, "启动与文件夹")
+        XCTAssertEqual(SentinelTheme.Metrics.settingsCountFieldWidth, 60)
         XCTAssertEqual(SentinelSettingsCopy.watchTitle, "盯这个文件夹")
         XCTAssertEqual(SentinelSettingsCopy.watchChoose, "选择")
         XCTAssertEqual(SentinelSettingsCopy.watchHint, "派工工具把状态文件写在这里。")
         XCTAssertEqual(SentinelSettingsCopy.watchLockedHint, "由启动配置指定")
+    }
+
+    @MainActor
+    func testWatchPathDisplayAbbreviatesHomeWithoutChangingStoredPath() {
+        let stored = (NSHomeDirectory() as NSString)
+            .appendingPathComponent(".cortex-sentinel/logs")
+        let model = SentinelSettingsModel.preview(fixture: .default)
+        model.watchPath = stored
+        XCTAssertEqual(model.watchPath, stored)
+        XCTAssertEqual(model.watchPathDisplay, "~/.cortex-sentinel/logs")
+        XCTAssertEqual(
+            model.watchPathDisplay,
+            (stored as NSString).abbreviatingWithTildeInPath
+        )
     }
 
     func testSwitchAndCountDefaultsThenRoundTrip() {

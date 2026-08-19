@@ -151,6 +151,12 @@ final class LoginItemPolicyTests: XCTestCase {
     func testCLIAndTestsNeverReconcileLoginItem() {
         XCTAssertFalse(
             LoginItemRuntime.shouldReconcileOnLaunch(
+                arguments: ["/tmp/CortexSentinelBar", "--idle-refresh"],
+                environment: [:]
+            )
+        )
+        XCTAssertFalse(
+            LoginItemRuntime.shouldReconcileOnLaunch(
                 arguments: ["/tmp/CortexSentinelBar", "--dump-state"],
                 environment: [:]
             )

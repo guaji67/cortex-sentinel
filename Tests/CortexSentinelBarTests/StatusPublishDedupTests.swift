@@ -96,9 +96,14 @@ final class StatusPublishDedupTests: XCTestCase {
         )
     }
 
-    func testOtherCodexProcessesChangePublishesOnceAndKeepsNewValue() {
+    func testOtherCodexProcessesChangePublishesOnceAndKeepsNewValue() async throws {
         let box = OtherCodexProcessBox()
-        let store = makeStore(otherCodexProcessReader: { _ in box.value })
+        let store = makeStore(
+            otherCodexProcessReader: { _ in box.value },
+            extraEnvironment: ["CORTEX_INPUT_STATUS_URL": "http://127.0.0.1:1/status"]
+        )
+        store.setPanelPresented(true)
+        try await Task.sleep(nanoseconds: 150_000_000)
         let next = [
             OtherCodexProcess(processID: 4242, worktreeName: "wt-alpha", elapsed: "00:12"),
         ]
@@ -250,11 +255,14 @@ final class StatusPublishDedupTests: XCTestCase {
     }
 
     private func makeStore(
-        otherCodexProcessReader: @escaping (Set<Int>) -> [OtherCodexProcess] = { _ in [] }
+        otherCodexProcessReader: @escaping (Set<Int>) -> [OtherCodexProcess] = { _ in [] },
+        extraEnvironment: [String: String] = [:]
     ) -> SentinelStore {
-        SentinelStore(
+        var environment = ["CORTEX_SENTINEL_WATCH_DIR": root.path]
+        extraEnvironment.forEach { environment[$0.key] = $0.value }
+        return SentinelStore(
             defaults: defaults,
-            environment: ["CORTEX_SENTINEL_WATCH_DIR": root.path],
+            environment: environment,
             otherCodexProcessReader: otherCodexProcessReader
         )
     }

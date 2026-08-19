@@ -63,7 +63,7 @@ final class SentinelSettingsTests: XCTestCase {
         XCTAssertEqual(SentinelSettingsCopy.watchTitle, "盯这个文件夹")
         XCTAssertEqual(SentinelSettingsCopy.watchChoose, "选择")
         XCTAssertEqual(SentinelSettingsCopy.watchHint, "派工工具把任务状态写在这里，一般不用改。")
-        XCTAssertEqual(SentinelSettingsCopy.watchLockedHint, "装的时候定好的，要换得重装")
+        XCTAssertEqual(SentinelSettingsCopy.watchLockedHint, "装的时候定好的，要换得重装。")
         XCTAssertEqual(SentinelSettingsCopy.versionPrefix, "版本")
         XCTAssertEqual(SentinelSettingsCopy.versionDevLabel, "开发版")
         XCTAssertEqual(

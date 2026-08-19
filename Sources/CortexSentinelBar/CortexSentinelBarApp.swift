@@ -19,6 +19,7 @@ enum CortexSentinelBarMain {
     static let renderPanelPNGArgument = "--render-panel-png"
     static let panelFixtureArgument = "--panel-fixture"
     static let dumpStateArgument = "--dump-state"
+    static let idleRefreshArgument = "--idle-refresh"
     static let smokeSettingsArgument = "--smoke-settings"
     static let openSettingsArgument = "--open-settings"
 
@@ -27,6 +28,10 @@ enum CortexSentinelBarMain {
         let arguments = ProcessInfo.processInfo.arguments
         if arguments.contains(dumpStateArgument) {
             runDumpStateCLI()
+            return
+        }
+        if arguments.contains(idleRefreshArgument) {
+            runIdleRefreshCLI()
             return
         }
         if arguments.contains(openSettingsArgument) {
@@ -114,6 +119,21 @@ enum CortexSentinelBarMain {
         } catch {
             FileHandle.standardError.write(Data("设置窗离屏渲染失败：\(error.localizedDescription)\n".utf8))
             exit(1)
+        }
+    }
+
+    /// 无界面空转：连续刷 refreshStatuses，给 `sample` 采热栈。
+    /// 不启 NSApplication、不申请通知权限、不碰登录项。
+    /// 产品定时器仍是 5 秒；这里只把「每一轮」压到前台，方便对着数栈帧。
+    @MainActor
+    private static func runIdleRefreshCLI() {
+        let store = SentinelStore()
+        store.refreshStatuses()
+        FileHandle.standardOutput.write(
+            Data("idle-refresh pid=\(ProcessInfo.processInfo.processIdentifier)\n".utf8)
+        )
+        while true {
+            store.refreshStatuses()
         }
     }
 

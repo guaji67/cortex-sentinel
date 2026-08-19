@@ -5,11 +5,33 @@ import SwiftUI
 @MainActor
 final class SentinelApplicationDelegate: NSObject, NSApplicationDelegate {
     private var statusBarController: SentinelStatusBarController?
+    /// `didFinishLaunching` 时 `currentAppleEvent` 往往已经空了，必须更早截住。
+    private var launchAppleEvent: LaunchAppleEventSummary?
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        launchAppleEvent = LaunchAppleEventSummary.fromCurrentAppleEvent()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let controller = SentinelStatusBarController(store: SentinelStore())
         statusBarController = controller
         controller.start()
+        let signals = LaunchdSupervisionProbe.collectFromCurrentProcess().signals
+        if PanelOpenPolicy.shouldPresentOnColdLaunch(
+            signals: signals,
+            automaticallyLaunched: LaunchAppleEventSummary.isAutomaticLaunch(launchAppleEvent)
+        ) {
+            controller.presentPanel()
+        }
+    }
+
+    /// 已经在跑时，用户从「应用程序」再点一次图标：系统只发 reopen，不走冷启动。
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows flag: Bool
+    ) -> Bool {
+        statusBarController?.presentPanel()
+        return false
     }
 }
 
@@ -81,6 +103,22 @@ final class SentinelStatusBarController: NSObject, NSPopoverDelegate {
             }
         }
         store.start()
+    }
+
+    /// 把菜单栏那块面板弹出来。已打开则不动，避免 reopen 把面板关掉。
+    func presentPanel() {
+        guard let button = statusItem?.button else {
+            return
+        }
+        if popover.isShown {
+            return
+        }
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        popover.show(
+            relativeTo: button.bounds,
+            of: button,
+            preferredEdge: .minY
+        )
     }
 
     private func updateStatusItem() {

@@ -3,7 +3,8 @@ import Foundation
 /// 使用者面板实际能看见的那一窗：最近完成 8 条、历史最多 500 条。
 ///
 /// 分组仍按 mtime 切活跃 / 24h 终态 / 更早历史；这一层只决定**露出顺序和条数**。
-/// 不写 `codex-line-registry.json`，也不删 status 文件。被裁的线源文件仍在 logs/。
+/// 不写 `codex-line-registry.json`。磁盘上状态文件条数由 `StatusFileRetention` /
+/// `StatusFileCleaner` 另管，不在这里删。
 struct SentinelBoardWindow: Equatable {
     static let historyDisplayCap = 500
     static let recencyCriterion = "按状态文件 mtime 倒序（无 mtime 则 updated_at，再无则登记时间）；最近完成最多 8 条，历史最多 500 条"
@@ -65,8 +66,12 @@ struct SentinelBoardWindow: Equatable {
     }
 
     static func recencyDate(for presentation: LinePresentation) -> Date? {
-        presentation.line.effectiveUpdatedAt
-            ?? presentation.registration.map { Date(timeIntervalSince1970: $0.registeredAt) }
+        recencyDate(for: presentation.line, registration: presentation.registration)
+    }
+
+    static func recencyDate(for line: LineStatus, registration: CodexLineRegistration?) -> Date? {
+        line.effectiveUpdatedAt
+            ?? registration.map { Date(timeIntervalSince1970: $0.registeredAt) }
     }
 
     func archive() -> HistoryTrimArchive {
@@ -92,7 +97,7 @@ struct SentinelBoardWindow: Equatable {
         try data.write(to: url, options: .atomic)
     }
 
-    private static func recencyPrecedes(lhs: LinePresentation, rhs: LinePresentation) -> Bool {
+    static func recencyPrecedes(lhs: LinePresentation, rhs: LinePresentation) -> Bool {
         switch (recencyDate(for: lhs), recencyDate(for: rhs)) {
         case let (lhsDate?, rhsDate?) where lhsDate != rhsDate:
             return lhsDate > rhsDate

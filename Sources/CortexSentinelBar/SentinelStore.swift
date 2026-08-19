@@ -187,7 +187,16 @@ final class SentinelStore: ObservableObject {
 
     private func runLogCleanup() {
         let logsDirectory = paths.logsDirectory
+        let registryURL = paths.lineRegistryURL
         Task.detached(priority: .utility) {
+            let registry = CodexLineRegistryReader.read(at: registryURL)
+            // 先按条数清状态文件，再跑体积清理：刚失去 status 的派工日志
+            // 若已静默超时，同一轮就能被 LogCleaner 当成孤儿收掉。
+            StatusFileCleaner.run(
+                logsDirectory: logsDirectory,
+                registry: registry,
+                dryRun: false
+            )
             LogCleaner.run(logsDirectory: logsDirectory, dryRun: false)
         }
     }

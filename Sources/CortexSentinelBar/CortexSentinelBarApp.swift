@@ -159,13 +159,21 @@ enum CortexSentinelBarMain {
         }
     }
 
-    /// 日志清理 CLI（第 5 点 dry-run 证据用）：打印计划；--cleanup-dry-run 绝不删，
-    /// --cleanup-run 才真删。目录由 SentinelPaths.discover() 决定（尊重 CORTEX_SENTINEL_WATCH_DIR / CORTEX_REPO_ROOT）。
+    /// 清理 CLI：打印计划；--cleanup-dry-run 绝不删，--cleanup-run 才真删。
+    /// 目录由 SentinelPaths.discover() 决定（尊重 CORTEX_SENTINEL_WATCH_DIR / CORTEX_REPO_ROOT）。
+    /// 条数规则和体积规则各打一份报告，互不覆盖。
     private static func runCleanupCLI(dryRun: Bool) {
         let paths = SentinelPaths.discover()
-        let plan = LogCleaner.run(logsDirectory: paths.logsDirectory, dryRun: dryRun)
+        let registry = CodexLineRegistryReader.read(at: paths.lineRegistryURL)
+        let statusPlan = StatusFileCleaner.run(
+            logsDirectory: paths.logsDirectory,
+            registry: registry,
+            dryRun: dryRun
+        )
+        let logPlan = LogCleaner.run(logsDirectory: paths.logsDirectory, dryRun: dryRun)
         print("logs 目录：\(paths.logsDirectory.path)")
-        print(plan.reportText(dryRun: dryRun))
+        print(statusPlan.reportText(dryRun: dryRun))
+        print(logPlan.reportText(dryRun: dryRun))
     }
 }
 

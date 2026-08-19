@@ -213,6 +213,66 @@ final class SentinelBoardWindowTests: XCTestCase {
         )
     }
 
+    func testRecencyDateFallsBackFromMtimeToUpdatedAtToRegisteredAt() throws {
+        let updatedAt = now.addingTimeInterval(-100)
+        let registeredAt = now.timeIntervalSince1970 - 200
+        let registry = try makeRegistry([
+            ("fallback-line", "codex", "回退", registeredAt),
+        ])
+        let registration = registry.registration(for: "fallback-line")
+
+        let withMtime = makeLine(
+            slug: "fallback-line",
+            engine: .codex,
+            state: .done,
+            age: 10
+        )
+        XCTAssertEqual(
+            SentinelBoardWindow.recencyDate(for: withMtime, registration: registration),
+            withMtime.sourceModifiedAt
+        )
+
+        let noMtime = LineStatus(
+            sourceFile: URL(fileURLWithPath: "/tmp/codex-babysitter-fallback-line.status.json"),
+            slug: "fallback-line",
+            engine: .codex,
+            workdir: nil,
+            branch: nil,
+            state: .done,
+            restarts: 0,
+            reportsRestarts: true,
+            rolloutAgeSeconds: nil,
+            updatedAt: updatedAt,
+            sourceModifiedAt: nil,
+            relay: nil
+        )
+        XCTAssertEqual(
+            SentinelBoardWindow.recencyDate(for: noMtime, registration: registration),
+            updatedAt
+        )
+
+        let onlyRegistered = LineStatus(
+            sourceFile: URL(fileURLWithPath: "/tmp/codex-babysitter-fallback-line.status.json"),
+            slug: "fallback-line",
+            engine: .codex,
+            workdir: nil,
+            branch: nil,
+            state: .done,
+            restarts: 0,
+            reportsRestarts: true,
+            rolloutAgeSeconds: nil,
+            updatedAt: nil,
+            sourceModifiedAt: nil,
+            relay: nil
+        )
+        XCTAssertEqual(
+            SentinelBoardWindow.recencyDate(for: onlyRegistered, registration: registration),
+            Date(timeIntervalSince1970: registeredAt)
+        )
+        XCTAssertEqual(SentinelBoardWindow.historyDisplayCap, 500)
+        XCTAssertEqual(StatusFileRetention.defaultCap, 500)
+    }
+
     private func makeRegistry(
         _ entries: [(slug: String, engine: String, label: String, registeredAt: TimeInterval)],
         host: String? = nil

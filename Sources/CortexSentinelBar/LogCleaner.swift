@@ -8,7 +8,7 @@ import Foundation
 ///   3. `*babysitter*.stdout`
 ///   4. `*babysitter*.nohup.out`
 ///
-/// 绝不动：`codex-line-registry.json`、`codex-babysitter-*.status.json`、
+/// 绝不动：`codex-line-registry.json`、状态文件（条数清理见 `StatusFileCleaner`）、
 /// `aio-*`/switch-log、以及一切非派工域文件（web-dev*、dev-server.log、
 /// cortex-daily.log、realtime-loop.log、screen_cortex/、contact-fact-queue.json、
 /// cortex-run-now-* 等）。因为采用「只列白名单」而非「黑名单排除」，这些文件天然不进候选。
@@ -112,9 +112,13 @@ enum LogCleaner {
             let modifiedAt = values?.contentModificationDate
 
             if let state = stateMap[slug] {
+                if state.isCleanupProtectedLive {
+                    protectedActive.append(name)
+                    continue
+                }
                 switch state {
                 case .running, .waitingRelay:
-                    protectedActive.append(name)
+                    break
                 case .done, .dead, .killed, .help:
                     phase1.append(
                         LogCleanupCandidate(

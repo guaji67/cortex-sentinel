@@ -356,6 +356,17 @@ enum LineState: Equatable {
     var isRetrying: Bool {
         self == .retrying || self == .backoff
     }
+
+    /// 清理时当作活线：派工日志和状态文件都不许删。
+    /// 口径跟 `LogCleaner` 原来的 running / waitingRelay 保护一致。
+    var isCleanupProtectedLive: Bool {
+        switch self {
+        case .running, .waitingRelay:
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 struct LineRelay: Decodable, Equatable {

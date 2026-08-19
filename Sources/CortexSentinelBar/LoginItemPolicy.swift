@@ -1,3 +1,4 @@
+import AppKit
 import Darwin
 import Foundation
 import ServiceManagement
@@ -365,6 +366,63 @@ enum LaunchdSupervisionProbe {
         let program = arguments?.first
         let environment = root["EnvironmentVariables"] as? [String: String] ?? [:]
         return (label, program, environment)
+    }
+}
+
+/// 用户从「应用程序」点图标时要不要弹出菜单栏面板。
+///
+/// 冷启动：复用 `LaunchdSupervisionProbe` 的托管判定；登录项自动拉起靠
+/// Open Application 事件上的 `lgit` / `svit`（没事件也当成自动拉起）。
+/// 已经在跑时走 `applicationShouldHandleReopen`，不经过这里，一律弹。
+enum PanelOpenPolicy {
+    static func shouldPresentOnColdLaunch(
+        signals: LaunchdSupervisionSignals,
+        automaticallyLaunched: Bool
+    ) -> Bool {
+        if signals.isLaunchdManaged {
+            return false
+        }
+        if automaticallyLaunched {
+            return false
+        }
+        return true
+    }
+}
+
+/// 启动当下那条 Apple Event 的摘要。真正读事件只在
+/// `applicationWillFinishLaunching`，那时 `currentAppleEvent` 还在。
+struct LaunchAppleEventSummary: Equatable {
+    /// `keyAELaunchedAsLogInItem` / `'lgit'`
+    static let launchedAsLoginItemKeyword: AEKeyword = 0x6C676974
+    /// `keyAELaunchedAsServiceItem` / `'svit'`
+    static let launchedAsServiceItemKeyword: AEKeyword = 0x73766974
+
+    var launchedAsLoginItem: Bool
+    var launchedAsServiceItem: Bool
+
+    var isAutomaticLaunch: Bool {
+        launchedAsLoginItem || launchedAsServiceItem
+    }
+
+    /// 没有 Open Application 事件 → 典型是 launchd / 登录项静默拉起。
+    static func isAutomaticLaunch(_ summary: LaunchAppleEventSummary?) -> Bool {
+        summary?.isAutomaticLaunch ?? true
+    }
+
+    static func fromCurrentAppleEvent(
+        event: NSAppleEventDescriptor? = NSAppleEventManager.shared().currentAppleEvent
+    ) -> LaunchAppleEventSummary? {
+        guard let event else {
+            return nil
+        }
+        return LaunchAppleEventSummary(
+            launchedAsLoginItem: event.paramDescriptor(
+                forKeyword: launchedAsLoginItemKeyword
+            )?.booleanValue ?? false,
+            launchedAsServiceItem: event.paramDescriptor(
+                forKeyword: launchedAsServiceItemKeyword
+            )?.booleanValue ?? false
+        )
     }
 }
 

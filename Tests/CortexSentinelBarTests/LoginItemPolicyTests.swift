@@ -168,6 +168,79 @@ final class LoginItemPolicyTests: XCTestCase {
             )
         )
     }
+
+    func testColdLaunchPresentsOnlyWhenUserOpenedUnmanagedApp() {
+        let managed = LaunchdSupervisionSignals(
+            plistTargetsThisApp: true,
+            parentIsLaunchd: true,
+            environmentMatchesPlist: true
+        )
+        XCTAssertFalse(
+            PanelOpenPolicy.shouldPresentOnColdLaunch(
+                signals: managed,
+                automaticallyLaunched: false
+            )
+        )
+        XCTAssertFalse(
+            PanelOpenPolicy.shouldPresentOnColdLaunch(
+                signals: managed,
+                automaticallyLaunched: true
+            )
+        )
+        XCTAssertFalse(
+            PanelOpenPolicy.shouldPresentOnColdLaunch(
+                signals: .none,
+                automaticallyLaunched: true
+            )
+        )
+        XCTAssertTrue(
+            PanelOpenPolicy.shouldPresentOnColdLaunch(
+                signals: .none,
+                automaticallyLaunched: false
+            )
+        )
+        // 单信号不算托管：用户点图标仍应弹（reopen 另走，冷启动也弹）
+        XCTAssertTrue(
+            PanelOpenPolicy.shouldPresentOnColdLaunch(
+                signals: LaunchdSupervisionSignals(
+                    plistTargetsThisApp: false,
+                    parentIsLaunchd: true,
+                    environmentMatchesPlist: false
+                ),
+                automaticallyLaunched: false
+            )
+        )
+    }
+
+    func testMissingAppleEventCountsAsAutomaticLaunch() {
+        XCTAssertTrue(LaunchAppleEventSummary.isAutomaticLaunch(nil))
+        XCTAssertTrue(
+            LaunchAppleEventSummary(
+                launchedAsLoginItem: true,
+                launchedAsServiceItem: false
+            ).isAutomaticLaunch
+        )
+        XCTAssertTrue(
+            LaunchAppleEventSummary(
+                launchedAsLoginItem: false,
+                launchedAsServiceItem: true
+            ).isAutomaticLaunch
+        )
+        XCTAssertFalse(
+            LaunchAppleEventSummary(
+                launchedAsLoginItem: false,
+                launchedAsServiceItem: false
+            ).isAutomaticLaunch
+        )
+        XCTAssertFalse(
+            LaunchAppleEventSummary.isAutomaticLaunch(
+                LaunchAppleEventSummary(
+                    launchedAsLoginItem: false,
+                    launchedAsServiceItem: false
+                )
+            )
+        )
+    }
 }
 
 private struct FakeLoginItemError: Error {}

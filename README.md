@@ -68,7 +68,7 @@ launchd 安装时会把选中的那一项写进 `~/Library/LaunchAgents/com.cort
 
 ## 构建与安装
 
-见 [INSTALL.md](INSTALL.md)。没有开发环境时，打开安装盘，把「Cortex哨兵」拖到「应用程序」。从源码安装：
+见 [INSTALL.md](INSTALL.md)。没有开发环境时，打开安装盘，把「Cortex哨兵」拖到「应用程序」——这个包没有经过 Apple 公证，第一次打开会被系统拦一次，INSTALL.md 里写了怎么过。从源码安装：
 
 ```bash
 bash scripts/install-app.sh
@@ -76,9 +76,11 @@ bash scripts/install-app.sh
 
 本机需要能跑 `swift`。
 
-## 文档
+## 仓库里有什么
 
-- `docs/` — 历版工单与交付报告，给维护者看，不是用户手册
-- `screenshots/` — 各版本运行截图
+- `Sources/` — 应用本体
+- `Tests/` — 单元测试，`swift test` 跑
+- `scripts/` — 构建、打安装盘、装到系统
+- `Resources/` — Info.plist 与应用图标
 
-`screenshots/` 与 `docs/` 里可能有开发期运行数据。公开发布前请自行审查。
+这个仓库是从一个内部开发仓整理出来的，只带了程序本身。历版工单、设计文档、开发期的运行数据都没有带过来，所以这里看不到它们，提交历史也是从整理那天重新开始的。

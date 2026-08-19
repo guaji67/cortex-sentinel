@@ -27,7 +27,31 @@ enum SentinelSettingsCopy {
     static let watchTitle = "盯这个文件夹"
     static let watchChoose = "选择"
     static let watchHint = "派工工具把状态文件写在这里。"
-    static let watchLockedHint = "由启动配置指定"
+    static let watchLockedHint = "装的时候定好的，要换得重装"
+    static let versionPrefix = "版本"
+    static let versionDevLabel = "开发版"
+}
+
+enum SentinelAppVersion {
+    static let devBundleVersion = "dev"
+
+    static func displayLine(
+        shortVersion: String,
+        bundleVersion: String
+    ) -> String {
+        let buildLabel = bundleVersion == devBundleVersion
+            ? SentinelSettingsCopy.versionDevLabel
+            : bundleVersion
+        return "\(SentinelSettingsCopy.versionPrefix) \(shortVersion)（\(buildLabel)）"
+    }
+
+    static func displayLine(bundle: Bundle = .main) -> String {
+        let shortVersion = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+            ?? ""
+        let bundleVersion = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+            ?? devBundleVersion
+        return displayLine(shortVersion: shortVersion, bundleVersion: bundleVersion)
+    }
 }
 
 /// UserDefaults 键。一律带 bundle 前缀，避免跟别的 app 撞。

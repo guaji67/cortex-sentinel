@@ -62,7 +62,25 @@ final class SentinelSettingsTests: XCTestCase {
         XCTAssertEqual(SentinelSettingsCopy.watchTitle, "盯这个文件夹")
         XCTAssertEqual(SentinelSettingsCopy.watchChoose, "选择")
         XCTAssertEqual(SentinelSettingsCopy.watchHint, "派工工具把状态文件写在这里。")
-        XCTAssertEqual(SentinelSettingsCopy.watchLockedHint, "由启动配置指定")
+        XCTAssertEqual(SentinelSettingsCopy.watchLockedHint, "装的时候定好的，要换得重装")
+        XCTAssertEqual(SentinelSettingsCopy.versionPrefix, "版本")
+        XCTAssertEqual(SentinelSettingsCopy.versionDevLabel, "开发版")
+        XCTAssertEqual(
+            SentinelAppVersion.displayLine(shortVersion: "1.0", bundleVersion: "ede0793"),
+            "版本 1.0（ede0793）"
+        )
+        XCTAssertEqual(
+            SentinelAppVersion.displayLine(shortVersion: "1.0", bundleVersion: "dev"),
+            "版本 1.0（开发版）"
+        )
+        XCTAssertEqual(SettingsPreviewFixture.watchLocked.rawValue, "watch-locked")
+    }
+
+    @MainActor
+    func testWatchLockedPreviewFixtureLocksDirectoryChoice() {
+        XCTAssertTrue(SentinelSettingsModel.preview(fixture: .watchLocked).isWatchLocked)
+        XCTAssertFalse(SentinelSettingsModel.preview(fixture: .default).isWatchLocked)
+        XCTAssertFalse(SentinelSettingsModel.preview(fixture: .masterOff).isWatchLocked)
     }
 
     @MainActor
@@ -271,6 +289,18 @@ final class SentinelSettingsTests: XCTestCase {
     func testRenderSettingsPNGWritesNonEmptyFile() throws {
         let url = root.appendingPathComponent("settings-default.png")
         try SettingsPNGRenderer.render(fixture: .default, to: url)
+        let data = try Data(contentsOf: url)
+        XCTAssertGreaterThan(data.count, 0)
+        XCTAssertEqual(
+            Array(data.prefix(8)),
+            [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+        )
+    }
+
+    @MainActor
+    func testRenderWatchLockedSettingsPNGWritesNonEmptyFile() throws {
+        let url = root.appendingPathComponent("settings-watch-locked.png")
+        try SettingsPNGRenderer.render(fixture: .watchLocked, to: url)
         let data = try Data(contentsOf: url)
         XCTAssertGreaterThan(data.count, 0)
         XCTAssertEqual(

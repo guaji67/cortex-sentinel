@@ -1,6 +1,10 @@
 import AppKit
 import SwiftUI
 
+enum SentinelRuntimeNotification {
+    static let openSettings = Notification.Name("com.falcon.cortex.sentinelbar.openSettings")
+}
+
 @main
 enum CortexSentinelBarMain {
     static let smokeWindowArgument = "--smoke-window"
@@ -14,12 +18,17 @@ enum CortexSentinelBarMain {
     static let settingsFixtureArgument = "--settings-fixture"
     static let dumpStateArgument = "--dump-state"
     static let smokeSettingsArgument = "--smoke-settings"
+    static let openSettingsArgument = "--open-settings"
 
     @MainActor
     static func main() {
         let arguments = ProcessInfo.processInfo.arguments
         if arguments.contains(dumpStateArgument) {
             runDumpStateCLI()
+            return
+        }
+        if arguments.contains(openSettingsArgument) {
+            runOpenSettingsCLI()
             return
         }
         if arguments.contains(cleanupDryRunArgument) || arguments.contains(cleanupRunArgument) {
@@ -67,6 +76,16 @@ enum CortexSentinelBarMain {
         controller.start()
         application.run()
         withExtendedLifetime(controller) {}
+    }
+
+    /// 通知已经在跑的那一份打开设置窗，自己马上退出，避免再拉起第二个实例。
+    private static func runOpenSettingsCLI() {
+        DistributedNotificationCenter.default().postNotificationName(
+            SentinelRuntimeNotification.openSettings,
+            object: nil,
+            userInfo: nil,
+            deliverImmediately: true
+        )
     }
 
     @MainActor

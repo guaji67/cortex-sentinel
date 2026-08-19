@@ -35,6 +35,7 @@ final class SentinelStore: ObservableObject {
     private let notifier: SentinelNotifier
     private let loginItemRegistrar: any LoginItemRegistrar
     private let lineRegistryCache: CodexLineRegistryCache
+    private let lineStatusCache: LineStatusFileCache
     private let otherCodexProcessReader: (Set<Int>) -> [OtherCodexProcess]
     private let now: @Sendable () -> Date
     private let aioUsageClient: AIOUsageClient
@@ -62,11 +63,13 @@ final class SentinelStore: ObservableObject {
         defaults: UserDefaults = SentinelSettings.resolvedDefaults(),
         environment: [String: String] = ProcessInfo.processInfo.environment,
         lineRegistryCache: CodexLineRegistryCache = CodexLineRegistryCache(),
+        lineStatusCache: LineStatusFileCache = LineStatusFileCache(),
         otherCodexProcessReader: @escaping (Set<Int>) -> [OtherCodexProcess] = {
             OtherCodexProcessReader.read(excluding: $0)
         },
         now: @escaping @Sendable () -> Date = { Date() },
-        aioUsageClient: AIOUsageClient = AIOUsageClient()
+        aioUsageClient: AIOUsageClient = AIOUsageClient(),
+        notificationSendHandler: ((SentinelNotificationDraft) -> Void)? = nil
     ) {
         self.defaults = defaults
         self.environment = environment
@@ -86,7 +89,9 @@ final class SentinelStore: ObservableObject {
         self.historyRetainCount = SentinelSettings.historyRetainCount(defaults: defaults)
         self.loginItemRegistrar = loginItemRegistrar
         self.notifier = SentinelNotifier()
+        self.notifier.sendHandler = notificationSendHandler
         self.lineRegistryCache = lineRegistryCache
+        self.lineStatusCache = lineStatusCache
         let settingsModel = SentinelSettingsModel(
             defaults: defaults,
             loginItem: LoginItemSettingsPresentation.make(
@@ -337,12 +342,15 @@ final class SentinelStore: ObservableObject {
     }
 
     func refreshAll() {
-        let updatedLines = SentinelFileReader.readLines(in: paths.logsDirectory)
+        let updatedLines = SentinelFileReader.readLines(
+            in: paths.logsDirectory,
+            cache: lineStatusCache
+        )
         let registry = lineRegistryCache.read(at: paths.lineRegistryURL)
         apply(
             lines: updatedLines,
             aio: aio,
-            otherCodexProcesses: readOtherCodexProcesses(excluding: updatedLines),
+            otherCodexProcesses: otherCodexProcessesForCurrentPanel(excluding: updatedLines),
             lineRegistry: registry,
             inputStatus: inputStatus
         )
@@ -354,12 +362,15 @@ final class SentinelStore: ObservableObject {
     }
 
     func refreshStatuses() {
-        let updatedLines = SentinelFileReader.readLines(in: paths.logsDirectory)
+        let updatedLines = SentinelFileReader.readLines(
+            in: paths.logsDirectory,
+            cache: lineStatusCache
+        )
         let registry = lineRegistryCache.read(at: paths.lineRegistryURL)
         apply(
             lines: updatedLines,
             aio: aio,
-            otherCodexProcesses: readOtherCodexProcesses(excluding: updatedLines),
+            otherCodexProcesses: otherCodexProcessesForCurrentPanel(excluding: updatedLines),
             lineRegistry: registry,
             inputStatus: inputStatus
         )
@@ -401,6 +412,10 @@ final class SentinelStore: ObservableObject {
         refreshOfficialUsage(reason: .panelOpen)
         refreshAIO(force: true, includeUsage: true, sequential: true)
         refreshInputStatus(force: true)
+        let processes = readOtherCodexProcesses(excluding: lines)
+        if otherCodexProcesses != processes {
+            otherCodexProcesses = processes
+        }
     }
 
     func refreshOfficialUsageManually() {
@@ -728,6 +743,13 @@ final class SentinelStore: ObservableObject {
         channelStatus = channelStatus
         unclaimedTerminals = unclaimedTerminals
         officialUsage = officialUsage
+    }
+
+    private func otherCodexProcessesForCurrentPanel(excluding lines: [LineStatus]) -> [OtherCodexProcess] {
+        guard isPanelPresented else {
+            return otherCodexProcesses
+        }
+        return readOtherCodexProcesses(excluding: lines)
     }
 
     private func readOtherCodexProcesses(excluding lines: [LineStatus]) -> [OtherCodexProcess] {

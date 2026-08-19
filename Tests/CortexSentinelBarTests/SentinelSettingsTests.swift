@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+import SwiftUI
 import XCTest
 @testable import CortexSentinelBar
 
@@ -32,15 +34,32 @@ final class SentinelSettingsTests: XCTestCase {
         XCTAssertTrue(SentinelSettingsKey.loginItemEnabled.hasPrefix(SentinelSettingsKey.bundlePrefix + "."))
         XCTAssertTrue(SentinelSettingsKey.historyRetainCount.hasPrefix(SentinelSettingsKey.bundlePrefix + "."))
         XCTAssertTrue(SentinelSettingsKey.notifyOnTaskComplete.hasPrefix(SentinelSettingsKey.bundlePrefix + "."))
+        XCTAssertTrue(SentinelSettingsKey.notifyCategoryTaskComplete.hasPrefix(SentinelSettingsKey.bundlePrefix + "."))
+        XCTAssertTrue(SentinelSettingsKey.notifyCategoryTaskProblem.hasPrefix(SentinelSettingsKey.bundlePrefix + "."))
+        XCTAssertTrue(SentinelSettingsKey.notifyCategoryChannelAlert.hasPrefix(SentinelSettingsKey.bundlePrefix + "."))
+        XCTAssertTrue(SentinelSettingsKey.notifyCadence.hasPrefix(SentinelSettingsKey.bundlePrefix + "."))
         XCTAssertTrue(SentinelSettingsKey.watchDirectory.hasPrefix(SentinelSettingsKey.bundlePrefix + "."))
+        XCTAssertEqual(SentinelSettingsCopy.windowTitle, "哨兵设置")
+        XCTAssertEqual(SentinelSettingsCopy.notifyGroupTitle, "通知")
+        XCTAssertEqual(SentinelSettingsCopy.notifyMasterTitle, "通知我")
+        XCTAssertEqual(SentinelSettingsCopy.notifyTaskCompleteTitle, "任务干完了")
+        XCTAssertEqual(SentinelSettingsCopy.notifyTaskProblemTitle, "任务出问题了")
+        XCTAssertEqual(SentinelSettingsCopy.notifyTaskProblemHint, "卡住、失败、被杀")
+        XCTAssertEqual(SentinelSettingsCopy.notifyChannelTitle, "通道熔断或余额不够")
+        XCTAssertEqual(SentinelSettingsCopy.notifyCadenceTitle, "怎么说")
+        XCTAssertEqual(SentinelSettingsCopy.notifyCadenceHint, "攒起来的会合成一条，比如「3 条线干完了」。")
+        XCTAssertEqual(SentinelSettingsCopy.notifyCadenceEvery, "每条都弹")
+        XCTAssertEqual(SentinelSettingsCopy.notifyCadence1m, "攒 1 分钟一起说")
+        XCTAssertEqual(SentinelSettingsCopy.notifyCadence5m, "攒 5 分钟一起说")
+        XCTAssertEqual(SentinelSettingsCopy.historyGroupTitle, "历史")
         XCTAssertEqual(SentinelSettingsCopy.loginItemTitle, "开机时自动启动")
         XCTAssertEqual(SentinelSettingsCopy.loginItemManagedHint, "由系统服务托管，改这里没用")
-        XCTAssertEqual(SentinelSettingsCopy.historyTitle, "历史最多保留")
+        XCTAssertEqual(SentinelSettingsCopy.historyTitle, "最多留")
         XCTAssertEqual(SentinelSettingsCopy.historyUnit, "条")
         XCTAssertEqual(SentinelSettingsCopy.historyHint, "超出的旧记录会自动清掉，正在跑的线不会被清。")
-        XCTAssertEqual(SentinelSettingsCopy.notifyTitle, "任务结束时通知我")
+        XCTAssertEqual(SentinelSettingsCopy.startupGroupTitle, "启动与目录")
         XCTAssertEqual(SentinelSettingsCopy.watchTitle, "盯这个文件夹")
-        XCTAssertEqual(SentinelSettingsCopy.watchChoose, "选择…")
+        XCTAssertEqual(SentinelSettingsCopy.watchChoose, "选择")
         XCTAssertEqual(SentinelSettingsCopy.watchHint, "派工工具把状态文件写在这里。")
         XCTAssertEqual(SentinelSettingsCopy.watchLockedHint, "由启动配置指定")
     }
@@ -48,6 +67,13 @@ final class SentinelSettingsTests: XCTestCase {
     func testSwitchAndCountDefaultsThenRoundTrip() {
         XCTAssertTrue(SentinelSettings.loginItemEnabled(defaults: defaults))
         XCTAssertTrue(SentinelSettings.notifyOnTaskComplete(defaults: defaults))
+        let notify = SentinelNotifyPreferences.load(defaults: defaults)
+        XCTAssertTrue(notify.masterEnabled)
+        XCTAssertTrue(notify.taskCompleteEnabled)
+        XCTAssertTrue(notify.taskProblemEnabled)
+        XCTAssertTrue(notify.channelAlertEnabled)
+        XCTAssertEqual(notify.cadence, .coalesce1m)
+        XCTAssertEqual(notify.cadence.title, "攒 1 分钟一起说")
         XCTAssertEqual(
             SentinelSettings.historyRetainCount(defaults: defaults),
             StatusFileRetention.defaultCap
@@ -56,10 +82,18 @@ final class SentinelSettingsTests: XCTestCase {
 
         SentinelSettings.setLoginItemEnabled(false, defaults: defaults)
         SentinelSettings.setNotifyOnTaskComplete(false, defaults: defaults)
+        SentinelSettings.setNotifyCategoryEnabled(
+            false,
+            key: SentinelSettingsKey.notifyCategoryTaskComplete,
+            defaults: defaults
+        )
+        SentinelSettings.setNotifyCadence(.every, defaults: defaults)
         SentinelSettings.setHistoryRetainCount(12, defaults: defaults)
 
         XCTAssertFalse(SentinelSettings.loginItemEnabled(defaults: defaults))
         XCTAssertFalse(SentinelSettings.notifyOnTaskComplete(defaults: defaults))
+        XCTAssertFalse(SentinelSettings.notifyMasterEnabled(defaults: defaults))
+        XCTAssertEqual(SentinelSettings.notifyCadence(defaults: defaults), .every)
         XCTAssertEqual(SentinelSettings.historyRetainCount(defaults: defaults), 12)
     }
 
@@ -177,6 +211,57 @@ final class SentinelSettingsTests: XCTestCase {
         XCTAssertTrue(locked.isWatchDirectoryLocked)
         locked.setWatchDirectory(second)
         XCTAssertEqual(locked.paths.logsDirectory.path, first.path)
+    }
+
+    @MainActor
+    func testSettingsViewBodyDoesNotReevaluateWhenStoreStatusPublishes() {
+        let store = SentinelStore(defaults: defaults, environment: [:])
+        let settingsCounter = SentinelViewBodyCounter()
+        let storeCounter = SentinelViewBodyCounter()
+        let settingsHost = NSHostingController(
+            rootView: SentinelSettingsView(model: store.settingsModel, bodyCounter: settingsCounter)
+        )
+        let storeHost = NSHostingController(
+            rootView: SettingsViewRedrawProbe.storeObservingProbe(store: store, counter: storeCounter)
+        )
+        settingsHost.view.frame = NSRect(x: 0, y: 0, width: 460, height: 800)
+        storeHost.view.frame = NSRect(x: 0, y: 0, width: 40, height: 20)
+        settingsHost.view.layoutSubtreeIfNeeded()
+        storeHost.view.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        let settingsBaseline = settingsCounter.count
+        let storeBaseline = storeCounter.count
+        XCTAssertGreaterThan(settingsBaseline, 0)
+        XCTAssertGreaterThan(storeBaseline, 0)
+
+        for _ in 0..<4 {
+            store.emitStatusRefreshPublicationsForTests()
+        }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertEqual(
+            settingsCounter.count,
+            settingsBaseline,
+            "store 刷新不应让设置窗 body 再求值"
+        )
+        XCTAssertGreaterThan(
+            storeCounter.count,
+            storeBaseline,
+            "对照：订阅整个 store 的视图必须随刷新重绘"
+        )
+    }
+
+    @MainActor
+    func testRenderSettingsPNGWritesNonEmptyFile() throws {
+        let url = root.appendingPathComponent("settings-default.png")
+        try SettingsPNGRenderer.render(fixture: .default, to: url)
+        let data = try Data(contentsOf: url)
+        XCTAssertGreaterThan(data.count, 0)
+        XCTAssertEqual(
+            Array(data.prefix(8)),
+            [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+        )
     }
 
     func testNotificationPlannerFindsCompletedLines() {

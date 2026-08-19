@@ -2,15 +2,30 @@ import Foundation
 
 /// 设置窗口文案。工单逐字指定，测试按常量对齐，不要在界面里另写一份。
 enum SentinelSettingsCopy {
-    static let windowTitle = "设置"
-    static let loginItemTitle = "开机时自动启动"
-    static let loginItemManagedHint = "由系统服务托管，改这里没用"
-    static let historyTitle = "历史最多保留"
+    static let windowTitle = "哨兵设置"
+
+    static let notifyGroupTitle = "通知"
+    static let notifyMasterTitle = "通知我"
+    static let notifyTaskCompleteTitle = "任务干完了"
+    static let notifyTaskProblemTitle = "任务出问题了"
+    static let notifyTaskProblemHint = "卡住、失败、被杀"
+    static let notifyChannelTitle = "通道熔断或余额不够"
+    static let notifyCadenceTitle = "怎么说"
+    static let notifyCadenceHint = "攒起来的会合成一条，比如「3 条线干完了」。"
+    static let notifyCadenceEvery = "每条都弹"
+    static let notifyCadence1m = "攒 1 分钟一起说"
+    static let notifyCadence5m = "攒 5 分钟一起说"
+
+    static let historyGroupTitle = "历史"
+    static let historyTitle = "最多留"
     static let historyUnit = "条"
     static let historyHint = "超出的旧记录会自动清掉，正在跑的线不会被清。"
-    static let notifyTitle = "任务结束时通知我"
+
+    static let startupGroupTitle = "启动与目录"
+    static let loginItemTitle = "开机时自动启动"
+    static let loginItemManagedHint = "由系统服务托管，改这里没用"
     static let watchTitle = "盯这个文件夹"
-    static let watchChoose = "选择…"
+    static let watchChoose = "选择"
     static let watchHint = "派工工具把状态文件写在这里。"
     static let watchLockedHint = "由启动配置指定"
 }
@@ -20,8 +35,92 @@ enum SentinelSettingsKey {
     static let bundlePrefix = "com.falcon.cortex.sentinelbar"
     static let loginItemEnabled = "\(bundlePrefix).loginItemEnabled"
     static let historyRetainCount = "\(bundlePrefix).historyRetainCount"
+    /// 主开关。沿用旧键：以前关掉等于四种通知全关。
     static let notifyOnTaskComplete = "\(bundlePrefix).notifyOnTaskComplete"
+    static let notifyCategoryTaskComplete = "\(bundlePrefix).notifyCategoryTaskComplete"
+    static let notifyCategoryTaskProblem = "\(bundlePrefix).notifyCategoryTaskProblem"
+    static let notifyCategoryChannelAlert = "\(bundlePrefix).notifyCategoryChannelAlert"
+    static let notifyCadence = "\(bundlePrefix).notifyCadence"
     static let watchDirectory = "\(bundlePrefix).watchDirectory"
+}
+
+enum SentinelNotifyCadence: String, CaseIterable, Equatable {
+    case every
+    case coalesce1m
+    case coalesce5m
+
+    static let `default` = SentinelNotifyCadence.coalesce1m
+
+    var title: String {
+        switch self {
+        case .every:
+            return SentinelSettingsCopy.notifyCadenceEvery
+        case .coalesce1m:
+            return SentinelSettingsCopy.notifyCadence1m
+        case .coalesce5m:
+            return SentinelSettingsCopy.notifyCadence5m
+        }
+    }
+
+    var windowLength: TimeInterval? {
+        switch self {
+        case .every:
+            return nil
+        case .coalesce1m:
+            return 60
+        case .coalesce5m:
+            return 300
+        }
+    }
+}
+
+struct SentinelNotifyPreferences: Equatable {
+    var masterEnabled: Bool
+    var taskCompleteEnabled: Bool
+    var taskProblemEnabled: Bool
+    var channelAlertEnabled: Bool
+    var cadence: SentinelNotifyCadence
+
+    static let `default` = SentinelNotifyPreferences(
+        masterEnabled: true,
+        taskCompleteEnabled: true,
+        taskProblemEnabled: true,
+        channelAlertEnabled: true,
+        cadence: .default
+    )
+
+    static func load(defaults: UserDefaults) -> SentinelNotifyPreferences {
+        SentinelNotifyPreferences(
+            masterEnabled: SentinelSettings.notifyMasterEnabled(defaults: defaults),
+            taskCompleteEnabled: SentinelSettings.notifyCategoryEnabled(
+                key: SentinelSettingsKey.notifyCategoryTaskComplete,
+                defaults: defaults
+            ),
+            taskProblemEnabled: SentinelSettings.notifyCategoryEnabled(
+                key: SentinelSettingsKey.notifyCategoryTaskProblem,
+                defaults: defaults
+            ),
+            channelAlertEnabled: SentinelSettings.notifyCategoryEnabled(
+                key: SentinelSettingsKey.notifyCategoryChannelAlert,
+                defaults: defaults
+            ),
+            cadence: SentinelSettings.notifyCadence(defaults: defaults)
+        )
+    }
+
+    func allows(_ category: SentinelNotifyCategory) -> Bool {
+        guard masterEnabled else {
+            return false
+        }
+        switch category {
+        case .taskComplete:
+            return taskCompleteEnabled
+        case .taskProblem:
+            return taskProblemEnabled
+        case .channelAlert:
+            return channelAlertEnabled
+        }
+    }
 }
 
 /// 监视目录从哪来。环境变量在时设置项只读，不参与解析。
@@ -127,6 +226,36 @@ enum SentinelNotificationPlanner {
             return !prior.isTerminal
         }
     }
+
+    static func newlyCriticalLines(
+        priorStates: [String: LineState],
+        lines: [LineStatus],
+        now: Date
+    ) -> [LineStatus] {
+        lines.filter { line in
+            line.isActive(now: now)
+                && line.state.isCritical
+                && priorStates[line.id]?.isCritical != true
+        }
+    }
+
+    static func newlyOpenedCircuits(
+        prior: [Int64: Bool]?,
+        providers: [AIOProvider]
+    ) -> [AIOProvider] {
+        providers.filter { provider in
+            provider.circuitState.isOpen && prior?[provider.id] != true
+        }
+    }
+
+    static func newlyLowBalanceProviders(
+        prior: Set<Int64>?,
+        providers: [AIOProvider]
+    ) -> [AIOProvider] {
+        providers.filter { provider in
+            provider.isLowBalance && prior?.contains(provider.id) != true
+        }
+    }
 }
 
 enum SentinelSettings {
@@ -148,10 +277,7 @@ enum SentinelSettings {
     }
 
     static func loginItemEnabled(defaults: UserDefaults) -> Bool {
-        if defaults.object(forKey: SentinelSettingsKey.loginItemEnabled) == nil {
-            return true
-        }
-        return defaults.bool(forKey: SentinelSettingsKey.loginItemEnabled)
+        bool(forKey: SentinelSettingsKey.loginItemEnabled, defaults: defaults, fallback: true)
     }
 
     static func setLoginItemEnabled(_ value: Bool, defaults: UserDefaults) {
@@ -178,15 +304,41 @@ enum SentinelSettings {
         defaults.set(max(1, value), forKey: SentinelSettingsKey.historyRetainCount)
     }
 
+    static func notifyMasterEnabled(defaults: UserDefaults) -> Bool {
+        notifyOnTaskComplete(defaults: defaults)
+    }
+
+    static func setNotifyMasterEnabled(_ value: Bool, defaults: UserDefaults) {
+        setNotifyOnTaskComplete(value, defaults: defaults)
+    }
+
     static func notifyOnTaskComplete(defaults: UserDefaults) -> Bool {
-        if defaults.object(forKey: SentinelSettingsKey.notifyOnTaskComplete) == nil {
-            return true
-        }
-        return defaults.bool(forKey: SentinelSettingsKey.notifyOnTaskComplete)
+        bool(forKey: SentinelSettingsKey.notifyOnTaskComplete, defaults: defaults, fallback: true)
     }
 
     static func setNotifyOnTaskComplete(_ value: Bool, defaults: UserDefaults) {
         defaults.set(value, forKey: SentinelSettingsKey.notifyOnTaskComplete)
+    }
+
+    static func notifyCategoryEnabled(key: String, defaults: UserDefaults) -> Bool {
+        bool(forKey: key, defaults: defaults, fallback: true)
+    }
+
+    static func setNotifyCategoryEnabled(_ value: Bool, key: String, defaults: UserDefaults) {
+        defaults.set(value, forKey: key)
+    }
+
+    static func notifyCadence(defaults: UserDefaults) -> SentinelNotifyCadence {
+        guard let raw = defaults.string(forKey: SentinelSettingsKey.notifyCadence),
+              let cadence = SentinelNotifyCadence(rawValue: raw)
+        else {
+            return .default
+        }
+        return cadence
+    }
+
+    static func setNotifyCadence(_ value: SentinelNotifyCadence, defaults: UserDefaults) {
+        defaults.set(value.rawValue, forKey: SentinelSettingsKey.notifyCadence)
     }
 
     static func watchDirectoryPath(defaults: UserDefaults) -> String? {
@@ -207,6 +359,7 @@ enum SentinelSettings {
             signals: signals,
             wantsEnabled: loginItemEnabled(defaults: defaults)
         )
+        let notify = SentinelNotifyPreferences.load(defaults: defaults)
         let loginState = login.isOn ? "开" : "关"
         let loginLock = login.trailingHint.map { "（\($0)）" } ?? ""
         let watchLock = watch.source.isLockedByEnvironment
@@ -214,10 +367,21 @@ enum SentinelSettings {
             : ""
         return [
             "设置：",
-            "  \(SentinelSettingsCopy.loginItemTitle)：\(loginState)\(loginLock)",
+            "  \(SentinelSettingsCopy.notifyMasterTitle)：\(notify.masterEnabled ? "开" : "关")",
+            "  \(SentinelSettingsCopy.notifyTaskCompleteTitle)：\(notify.taskCompleteEnabled ? "开" : "关")",
+            "  \(SentinelSettingsCopy.notifyTaskProblemTitle)：\(notify.taskProblemEnabled ? "开" : "关")",
+            "  \(SentinelSettingsCopy.notifyChannelTitle)：\(notify.channelAlertEnabled ? "开" : "关")",
+            "  \(SentinelSettingsCopy.notifyCadenceTitle)：\(notify.cadence.title)",
             "  \(SentinelSettingsCopy.historyTitle)：\(historyRetainCount(defaults: defaults)) \(SentinelSettingsCopy.historyUnit)（默认 \(StatusFileRetention.defaultCap)，常量 StatusFileRetention.defaultCap）",
-            "  \(SentinelSettingsCopy.notifyTitle)：\(notifyOnTaskComplete(defaults: defaults) ? "开" : "关")",
+            "  \(SentinelSettingsCopy.loginItemTitle)：\(loginState)\(loginLock)",
             "  \(SentinelSettingsCopy.watchTitle)：\(watch.logsDirectory.path)\(watchLock)",
         ]
+    }
+
+    private static func bool(forKey key: String, defaults: UserDefaults, fallback: Bool) -> Bool {
+        if defaults.object(forKey: key) == nil {
+            return fallback
+        }
+        return defaults.bool(forKey: key)
     }
 }

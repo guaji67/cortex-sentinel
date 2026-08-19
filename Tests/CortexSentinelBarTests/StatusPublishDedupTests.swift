@@ -1,0 +1,338 @@
+import Combine
+import Foundation
+import XCTest
+@testable import CortexSentinelBar
+
+@MainActor
+final class StatusPublishDedupTests: XCTestCase {
+    private var defaults: UserDefaults!
+    private var suiteName: String!
+    private var root: URL!
+    private let fileManager = FileManager.default
+
+    override func setUpWithError() throws {
+        suiteName = "status-publish-\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suiteName)
+        defaults.removePersistentDomain(forName: suiteName)
+        root = fileManager.temporaryDirectory.appendingPathComponent(
+            "status-publish-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        if let suiteName {
+            defaults?.removePersistentDomain(forName: suiteName)
+        }
+        if let root {
+            try? fileManager.removeItem(at: root)
+        }
+    }
+
+    func testUnchangedDiskEmitsZeroPublicationsAcrossRepeatedRefreshes() {
+        let store = makeStore()
+        let count = countPublications(store) {
+            for _ in 0..<5 {
+                store.refreshStatuses()
+            }
+        }
+        XCTAssertEqual(count, 0)
+        XCTAssertEqual(store.lines, [])
+        XCTAssertEqual(store.aio, .unconfigured)
+        XCTAssertEqual(store.otherCodexProcesses, [])
+        XCTAssertEqual(store.lineRegistry, .empty)
+        XCTAssertEqual(store.inputStatus, .empty)
+        XCTAssertEqual(store.channelStatus, .missing)
+        XCTAssertEqual(store.unclaimedTerminals, [])
+    }
+
+    func testLinesChangePublishesOnceAndKeepsNewValue() throws {
+        let store = makeStore()
+        let count = countPublications(store) {
+            try? write(
+                "codex-babysitter-alpha.status.json",
+                #"{"slug":"alpha","state":"running","updated_at":"2026-08-19T20:00:00Z"}"#
+            )
+            store.refreshStatuses()
+        }
+        XCTAssertEqual(count, 1)
+        XCTAssertEqual(store.lines.map(\.slug), ["alpha"])
+        XCTAssertEqual(store.lines.first?.state, .running)
+        XCTAssertEqual(store.unclaimedTerminals, [])
+        XCTAssertEqual(
+            countPublications(store) { store.refreshStatuses() },
+            0,
+            "同一份状态文件再刷不应再发"
+        )
+    }
+
+    func testAIOChangePublishesOnceAndKeepsNewValue() {
+        let store = makeStore()
+        let next = fixtureAIO()
+        let count = countPublications(store) {
+            store.apply(
+                lines: store.lines,
+                aio: next,
+                otherCodexProcesses: store.otherCodexProcesses,
+                lineRegistry: store.lineRegistry,
+                inputStatus: store.inputStatus
+            )
+        }
+        XCTAssertEqual(count, 1)
+        XCTAssertEqual(store.aio, next)
+        XCTAssertEqual(store.lines, [])
+        XCTAssertEqual(
+            countPublications(store) {
+                store.apply(
+                    lines: store.lines,
+                    aio: next,
+                    otherCodexProcesses: store.otherCodexProcesses,
+                    lineRegistry: store.lineRegistry,
+                    inputStatus: store.inputStatus
+                )
+            },
+            0
+        )
+    }
+
+    func testOtherCodexProcessesChangePublishesOnceAndKeepsNewValue() {
+        let box = OtherCodexProcessBox()
+        let store = makeStore(otherCodexProcessReader: { _ in box.value })
+        let next = [
+            OtherCodexProcess(processID: 4242, worktreeName: "wt-alpha", elapsed: "00:12"),
+        ]
+        let count = countPublications(store) {
+            box.value = next
+            store.refreshStatuses()
+        }
+        XCTAssertEqual(count, 1)
+        XCTAssertEqual(store.otherCodexProcesses, next)
+        XCTAssertEqual(store.lines, [])
+        XCTAssertEqual(
+            countPublications(store) { store.refreshStatuses() },
+            0
+        )
+    }
+
+    func testLineRegistryChangePublishesOnceAndKeepsNewValue() throws {
+        let store = makeStore()
+        let count = countPublications(store) {
+            try? write("codex-line-registry.json", registryJSON(slug: "alpha", label: "甲线"))
+            store.refreshStatuses()
+        }
+        XCTAssertEqual(count, 1)
+        XCTAssertEqual(store.lineRegistry.lines.map(\.slug), ["alpha"])
+        XCTAssertEqual(store.lineRegistry.lines.first?.labelZH, "甲线")
+        XCTAssertEqual(store.lines, [])
+        XCTAssertEqual(store.unclaimedTerminals, [])
+        XCTAssertEqual(
+            countPublications(store) { store.refreshStatuses() },
+            0
+        )
+    }
+
+    func testInputStatusChangePublishesOnceAndKeepsNewValue() {
+        let store = makeStore()
+        let next = fixtureInputStatus()
+        let count = countPublications(store) {
+            store.apply(
+                lines: store.lines,
+                aio: store.aio,
+                otherCodexProcesses: store.otherCodexProcesses,
+                lineRegistry: store.lineRegistry,
+                inputStatus: next
+            )
+        }
+        XCTAssertEqual(count, 1)
+        XCTAssertEqual(store.inputStatus, next)
+        XCTAssertEqual(store.aio, .unconfigured)
+        XCTAssertEqual(
+            countPublications(store) {
+                store.apply(
+                    lines: store.lines,
+                    aio: store.aio,
+                    otherCodexProcesses: store.otherCodexProcesses,
+                    lineRegistry: store.lineRegistry,
+                    inputStatus: next
+                )
+            },
+            0
+        )
+    }
+
+    func testChannelStatusChangePublishesOnceAndKeepsNewValue() throws {
+        let store = makeStore()
+        let count = countPublications(store) {
+            try? write("channel-status.json", channelJSON(running: 2))
+            store.refreshStatuses()
+        }
+        XCTAssertEqual(count, 1)
+        XCTAssertEqual(store.channelStatus.grok.status, .alive)
+        XCTAssertEqual(store.channelStatus.grok.running, 2)
+        XCTAssertEqual(store.channelStatus.codex.status, .degraded)
+        XCTAssertEqual(store.lines, [])
+        XCTAssertEqual(
+            countPublications(store) { store.refreshStatuses() },
+            0
+        )
+    }
+
+    func testUnclaimedTerminalsChangePublishesOnceAndKeepsNewValue() throws {
+        let stamp = isoNow()
+        try write(
+            "codex-babysitter-done-line.status.json",
+            "{\"slug\":\"done-line\",\"state\":\"done\",\"updated_at\":\"\(stamp)\",\"exit_code\":0}"
+        )
+        let store = makeStore()
+        store.refreshStatuses()
+        XCTAssertEqual(store.lines.map(\.slug), ["done-line"])
+        XCTAssertEqual(store.unclaimedTerminals.map(\.slug), ["done-line"])
+
+        let count = countPublications(store) {
+            try? write(
+                "line-terminal-ack.json",
+                "{\"acks\":{\"done-line\":{\"state\":\"done\",\"updated_at\":\"\(stamp)\"}}}"
+            )
+            store.refreshStatuses()
+        }
+        XCTAssertEqual(count, 1)
+        XCTAssertEqual(store.unclaimedTerminals, [])
+        XCTAssertEqual(store.lines.map(\.slug), ["done-line"])
+        XCTAssertEqual(
+            countPublications(store) { store.refreshStatuses() },
+            0
+        )
+    }
+
+    func testOfficialUsageChangePublishesOnceAndKeepsNewValue() {
+        let store = makeStore()
+        let next = OfficialUsageSnapshot(
+            planType: "plus",
+            email: "plus@example.test",
+            weeklyWindow: nil,
+            fiveHourWindow: nil,
+            checkedAt: Date(timeIntervalSince1970: 1_787_000_000),
+            stale: false,
+            errorMessage: nil,
+            refreshFailedAt: nil
+        )
+        let count = countPublications(store) {
+            store.setOfficialUsageIfChanged(next)
+        }
+        XCTAssertEqual(count, 1)
+        XCTAssertEqual(store.officialUsage, next)
+        XCTAssertEqual(
+            countPublications(store) { store.setOfficialUsageIfChanged(next) },
+            0
+        )
+    }
+
+    func testMultipleSourcesInOneRefreshPublishOnlyChangedCount() throws {
+        let store = makeStore()
+        let count = countPublications(store) {
+            try? write(
+                "codex-babysitter-alpha.status.json",
+                #"{"slug":"alpha","state":"running","updated_at":"2026-08-19T20:00:00Z"}"#
+            )
+            try? write("codex-line-registry.json", registryJSON(slug: "alpha", label: "甲线"))
+            try? write("channel-status.json", channelJSON(running: 1))
+            store.refreshStatuses()
+        }
+        XCTAssertEqual(count, 3, "三条数据源变了，应发合并后的 3 次，不是 0 也不是整表 7 次")
+        XCTAssertEqual(store.lines.map(\.slug), ["alpha"])
+        XCTAssertEqual(store.lineRegistry.lines.first?.labelZH, "甲线")
+        XCTAssertEqual(store.channelStatus.grok.running, 1)
+        XCTAssertEqual(store.unclaimedTerminals, [])
+        XCTAssertEqual(store.aio, .unconfigured)
+        XCTAssertEqual(store.inputStatus, .empty)
+        XCTAssertEqual(store.otherCodexProcesses, [])
+    }
+
+    private func makeStore(
+        otherCodexProcessReader: @escaping (Set<Int>) -> [OtherCodexProcess] = { _ in [] }
+    ) -> SentinelStore {
+        SentinelStore(
+            defaults: defaults,
+            environment: ["CORTEX_SENTINEL_WATCH_DIR": root.path],
+            otherCodexProcessReader: otherCodexProcessReader
+        )
+    }
+
+    private func countPublications(_ store: SentinelStore, _ body: () -> Void) -> Int {
+        var count = 0
+        let cancellable = store.objectWillChange.sink { count += 1 }
+        body()
+        withExtendedLifetime(cancellable) {}
+        return count
+    }
+
+    private func write(_ name: String, _ contents: String) throws {
+        try Data(contents.utf8).write(to: root.appendingPathComponent(name))
+    }
+
+    private func isoNow() -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.string(from: Date())
+    }
+
+    private func registryJSON(slug: String, label: String) -> String {
+        """
+        [
+          {
+            "engine": "codex",
+            "slug": "\(slug)",
+            "label_zh": "\(label)",
+            "dispatcher_zh": "测试派工",
+            "registered_at": 1784823993
+          }
+        ]
+        """
+    }
+
+    private func channelJSON(running: Int) -> String {
+        """
+        {
+          "generated_at": "2026-08-18T23:40:00Z",
+          "channels": {
+            "grok": {"status": "alive", "evidence": "在跑", "running": \(running)},
+            "codex": {"status": "degraded", "evidence": "不通"}
+          }
+        }
+        """
+    }
+
+    private func fixtureAIO() -> AIOSnapshot {
+        AIOSnapshot(
+            sourceState: .available,
+            gatewayEnabled: true,
+            routeMode: .direct,
+            providers: [],
+            lastHitProviderID: 12,
+            lastHitProviderName: "fixture-aio",
+            readAt: Date(timeIntervalSince1970: 1_787_000_000),
+            errorMessage: nil
+        )
+    }
+
+    private func fixtureInputStatus() -> InputStatusSnapshot {
+        InputStatusSnapshot(
+            allOK: true,
+            probes: [
+                InputStatusProbe(
+                    model: "gpt-5.6-sol",
+                    uptimePercentage: 99.5,
+                    isOK: true,
+                    latencyMilliseconds: 120
+                ),
+            ],
+            readAt: Date(timeIntervalSince1970: 1_787_000_000),
+            errorMessage: nil
+        )
+    }
+}
+
+private final class OtherCodexProcessBox {
+    var value: [OtherCodexProcess] = []
+}

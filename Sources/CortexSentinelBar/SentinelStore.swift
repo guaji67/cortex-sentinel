@@ -35,6 +35,7 @@ final class SentinelStore: ObservableObject {
     private let notifier: SentinelNotifier
     private let loginItemRegistrar: any LoginItemRegistrar
     private let lineRegistryCache: CodexLineRegistryCache
+    private let otherCodexProcessReader: (Set<Int>) -> [OtherCodexProcess]
     private var statusTimer: Timer?
     private var aioTimer: Timer?
     private var inputStatusTimer: Timer?
@@ -57,10 +58,14 @@ final class SentinelStore: ObservableObject {
         loginItemRegistrar: any LoginItemRegistrar = SMAppServiceLoginItemRegistrar(),
         defaults: UserDefaults = SentinelSettings.resolvedDefaults(),
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        lineRegistryCache: CodexLineRegistryCache = CodexLineRegistryCache()
+        lineRegistryCache: CodexLineRegistryCache = CodexLineRegistryCache(),
+        otherCodexProcessReader: @escaping (Set<Int>) -> [OtherCodexProcess] = {
+            OtherCodexProcessReader.read(excluding: $0)
+        }
     ) {
         self.defaults = defaults
         self.environment = environment
+        self.otherCodexProcessReader = otherCodexProcessReader
         let resolvedPaths = paths ?? SentinelPaths.discover(
             environment: environment,
             defaults: defaults
@@ -356,16 +361,22 @@ final class SentinelStore: ObservableObject {
     }
 
     private func refreshChannelStatus() {
-        channelStatus = SentinelFileReader.readChannelStatus(at: paths.channelStatusURL)
+        let next = SentinelFileReader.readChannelStatus(at: paths.channelStatusURL)
+        if channelStatus != next {
+            channelStatus = next
+        }
     }
 
     private func refreshUnclaimed(lines: [LineStatus], registry: CodexLineRegistry) {
         let ack = SentinelFileReader.readTerminalAck(at: paths.lineTerminalAckURL)
-        unclaimedTerminals = UnclaimedTerminalAggregation.entries(
+        let next = UnclaimedTerminalAggregation.entries(
             lines: lines,
             registry: registry,
             ack: ack
         )
+        if unclaimedTerminals != next {
+            unclaimedTerminals = next
+        }
     }
 
     func refreshRelays() {
@@ -422,11 +433,13 @@ final class SentinelStore: ObservableObject {
             self.isOfficialUsageRefreshing = false
             switch result {
             case let .success(snapshot):
-                self.officialUsage = snapshot
+                self.setOfficialUsageIfChanged(snapshot)
             case let .failure(error):
-                self.officialUsage = self.officialUsage.preservingLastSuccess(
-                    errorMessage: error.userMessage,
-                    failedAt: Date()
+                self.setOfficialUsageIfChanged(
+                    self.officialUsage.preservingLastSuccess(
+                        errorMessage: error.userMessage,
+                        failedAt: Date()
+                    )
                 )
             }
         }
@@ -587,7 +600,7 @@ final class SentinelStore: ObservableObject {
         _ = NSWorkspace.shared.open(paths.logsDirectory)
     }
 
-    private func apply(
+    func apply(
         lines: [LineStatus],
         aio: AIOSnapshot,
         otherCodexProcesses: [OtherCodexProcess],
@@ -600,17 +613,33 @@ final class SentinelStore: ObservableObject {
             registry: lineRegistry,
             preferences: settingsModel.preferences
         )
-        self.lines = lines
-        self.aio = aio
-        self.otherCodexProcesses = otherCodexProcesses
-        self.lineRegistry = lineRegistry
-        self.inputStatus = inputStatus
+        if self.lines != lines {
+            self.lines = lines
+        }
+        if self.aio != aio {
+            self.aio = aio
+        }
+        if self.otherCodexProcesses != otherCodexProcesses {
+            self.otherCodexProcesses = otherCodexProcesses
+        }
+        if self.lineRegistry != lineRegistry {
+            self.lineRegistry = lineRegistry
+        }
+        if self.inputStatus != inputStatus {
+            self.inputStatus = inputStatus
+        }
         relayRecoveryCoordinator.requestEligibleProbes(
             lines: lines,
             aio: aio,
             inputStatus: inputStatus,
             logsDirectory: paths.logsDirectory
         )
+    }
+
+    func setOfficialUsageIfChanged(_ snapshot: OfficialUsageSnapshot) {
+        if officialUsage != snapshot {
+            officialUsage = snapshot
+        }
     }
 
     func emitStatusRefreshPublicationsForTests() {
@@ -626,7 +655,7 @@ final class SentinelStore: ObservableObject {
 
     private func readOtherCodexProcesses(excluding lines: [LineStatus]) -> [OtherCodexProcess] {
         let managedProcessIDs = Set(lines.compactMap(\.processID))
-        return OtherCodexProcessReader.read(excluding: managedProcessIDs)
+        return otherCodexProcessReader(managedProcessIDs)
     }
 }
 

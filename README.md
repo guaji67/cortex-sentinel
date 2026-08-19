@@ -68,7 +68,7 @@ launchd 安装时会把选中的那一项写进 `~/Library/LaunchAgents/com.cort
 
 ## 构建与安装
 
-见 [INSTALL.md](INSTALL.md)。没有开发环境时，需要一份已经编好的 App（安装盘里的 `Payload/Cortex哨兵.app`），然后双击 `Install-Cortex-Sentinel.command`。从源码安装：
+见 [INSTALL.md](INSTALL.md)。没有开发环境时，打开安装盘，把「Cortex哨兵」拖到「应用程序」。从源码安装：
 
 ```bash
 bash scripts/install-app.sh

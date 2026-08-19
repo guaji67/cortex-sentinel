@@ -1,5 +1,5 @@
 #!/bin/bash
-# 生成供维护者自有 arm64 Mac 使用的 LAN 内部分发 DMG。
+# 生成可拖拽安装的 arm64 DMG：一侧应用，一侧「应用程序」快捷方式。
 
 set -euo pipefail
 
@@ -14,7 +14,7 @@ fi
 commit="$(git -C "$package_dir" rev-parse HEAD)"
 commit_short="$(git -C "$package_dir" rev-parse --short=12 HEAD)"
 version="$(defaults read "$package_dir/Resources/Info" CFBundleShortVersionString)"
-candidate_id="cortex-sentinel-${version}-${commit_short}-arm64-lan"
+candidate_id="cortex-sentinel-${version}-arm64"
 mkdir -p "$output_dir"
 output_dir="$(cd "$output_dir" && pwd)"
 dmg_path="$output_dir/$candidate_id.dmg"
@@ -28,7 +28,7 @@ codesign --verify --deep --strict "$source_app"
 
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/cortex-sentinel-dmg.XXXXXX")"
 mount_dir="$(mktemp -d "${TMPDIR:-/tmp}/cortex-sentinel-mount.XXXXXX")"
-volume_dir="$work_dir/Cortex 哨兵安装器"
+volume_dir="$work_dir/Cortex 哨兵"
 mounted=0
 
 cleanup() {
@@ -39,36 +39,31 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$volume_dir/Payload" "$volume_dir/scripts"
-ditto "$source_app" "$volume_dir/Payload/Cortex哨兵.app"
-install -m 0755 "$package_dir/Install-Cortex-Sentinel.command" \
-  "$volume_dir/安装 Cortex 哨兵.command"
-install -m 0755 "$package_dir/scripts/install-app.sh" "$volume_dir/scripts/install-app.sh"
-cp "$package_dir/INSTALL.md" "$volume_dir/安装说明.md"
+mkdir -p "$volume_dir"
+ditto "$source_app" "$volume_dir/Cortex哨兵.app"
+ln -s /Applications "$volume_dir/Applications"
 
 binary_sha256="$(shasum -a 256 "$source_app/Contents/MacOS/CortexSentinelBar" | awk '{print $1}')"
-installer_sha256="$(shasum -a 256 "$package_dir/scripts/install-app.sh" | awk '{print $1}')"
-generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+generated_at="$(TZ=Asia/Shanghai date +%Y-%m-%dT%H:%M:%S%z)"
 
-cat > "$volume_dir/manifest.json" <<EOF
+cat > "$manifest_path" <<EOF
 {
   "candidate_id": "$candidate_id",
   "commit": "$commit",
+  "commit_short": "$commit_short",
   "version": "$version",
   "architecture": "arm64",
-  "distribution_scope": "falcon_lan_internal",
+  "distribution_scope": "public",
   "signature": "adhoc",
   "notarized": false,
   "generated_at": "$generated_at",
-  "app_binary_sha256": "$binary_sha256",
-  "installer_sha256": "$installer_sha256"
+  "app_binary_sha256": "$binary_sha256"
 }
 EOF
-jq empty "$volume_dir/manifest.json"
-cp "$volume_dir/manifest.json" "$manifest_path"
+jq empty "$manifest_path"
 
 rm -f "$dmg_path" "$checksum_path"
-hdiutil create -quiet -ov -format UDZO -volname "Cortex 哨兵安装器" \
+hdiutil create -quiet -ov -format UDZO -volname "Cortex 哨兵" \
   -srcfolder "$volume_dir" "$dmg_path"
 hdiutil verify "$dmg_path"
 (
@@ -79,14 +74,22 @@ hdiutil verify "$dmg_path"
 echo "== 挂载验收 =="
 hdiutil attach -quiet -readonly -nobrowse -mountpoint "$mount_dir" "$dmg_path"
 mounted=1
-codesign --verify --deep --strict "$mount_dir/Payload/Cortex哨兵.app"
-bash -n "$mount_dir/安装 Cortex 哨兵.command"
-bash -n "$mount_dir/scripts/install-app.sh"
-mounted_binary_sha256="$(shasum -a 256 "$mount_dir/Payload/Cortex哨兵.app/Contents/MacOS/CortexSentinelBar" | awk '{print $1}')"
+codesign --verify --deep --strict "$mount_dir/Cortex哨兵.app"
+if [ ! -L "$mount_dir/Applications" ]; then
+  echo "失败：DMG 内没有应用程序快捷方式" >&2
+  exit 1
+fi
+if [ "$(readlink "$mount_dir/Applications")" != "/Applications" ]; then
+  echo "失败：应用程序快捷方式目标不正确：$(readlink "$mount_dir/Applications")" >&2
+  exit 1
+fi
+mounted_binary_sha256="$(shasum -a 256 "$mount_dir/Cortex哨兵.app/Contents/MacOS/CortexSentinelBar" | awk '{print $1}')"
 if [ "$mounted_binary_sha256" != "$binary_sha256" ]; then
   echo "失败：DMG 内 app hash 不匹配" >&2
   exit 1
 fi
+echo "== 卷内条目 =="
+ls -la "$mount_dir"
 hdiutil detach "$mount_dir" -quiet
 mounted=0
 

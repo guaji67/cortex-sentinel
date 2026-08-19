@@ -4,7 +4,7 @@ macOS 菜单栏应用。装好后菜单栏出现「Cortex 哨兵」图标；面�
 
 ## 没有开发环境
 
-需要一份已经编好的 `Cortex哨兵.app`。若你拿到的是安装盘，打开后里面应有 `Payload/Cortex哨兵.app` 和「安装 Cortex 哨兵.command」。双击那个 command 即可，目标机不需要 Swift 或 Xcode。
+需要一份已经编好的 `Cortex哨兵.app`。若你拿到的是安装盘，打开后一侧是应用、一侧是「应用程序」快捷方式，把应用拖进「应用程序」即可。目标机不需要 Swift 或 Xcode。
 
 本仓库源码本身不附带预编译包。只有 Mac、没有编译工具时，不能单靠 clone 源码装上；要先在一台装了 Swift 的机器上构建（见下一节），再把 app 拷过去，或用 `scripts/build-dmg.sh` 打安装盘。
 
@@ -54,7 +54,7 @@ codesign --verify --deep --strict .build/CortexSentinelBar.app
 bash scripts/build-dmg.sh
 ```
 
-产出带预构建 app 的 DMG。外发给不认识的机器前应改用 Developer ID、Hardened Runtime、公证和 stapling；当前脚本做不到这些。
+产出 `dist/cortex-sentinel-<version>-arm64.dmg`：打开后拖到「应用程序」即可安装。外发给不认识的机器前应改用 Developer ID、Hardened Runtime、公证和 stapling；当前脚本做不到这些。
 
 ## 开发调试（不装系统）
 

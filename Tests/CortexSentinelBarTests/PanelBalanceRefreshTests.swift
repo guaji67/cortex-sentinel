@@ -220,6 +220,7 @@ final class PanelBalanceRefreshTests: XCTestCase {
             defaults: defaults,
             environment: [
                 "CORTEX_SENTINEL_WATCH_DIR": root.path,
+                "CORTEX_DATA_ROOT": root.path,
                 "CORTEX_AIO_DB_PATH": databaseURL.path,
                 "CORTEX_CODEX_CONFIG_PATH": configURL.path,
                 "CORTEX_CODEX_AUTH_PATH": root.appendingPathComponent("missing-auth.json").path,

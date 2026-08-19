@@ -28,7 +28,7 @@ final class PanelPNGRendererTests: XCTestCase {
         XCTAssertEqual(PanelPreviewFixture.channelDown.rawValue, "channel-down")
         XCTAssertEqual(
             PanelPreviewFixture.allCases.map(\.rawValue),
-            ["idle", "busy", "unclaimed", "channel-down"]
+            ["idle", "busy", "unclaimed", "channel-down", "bgjobs-problems"]
         )
         XCTAssertNil(PanelPreviewFixture(rawValue: "unknown"))
     }
@@ -45,6 +45,11 @@ final class PanelPNGRendererTests: XCTestCase {
         XCTAssertEqual(session.store.channelStatus.codex.running, 0)
         XCTAssertTrue(session.store.paths.logsDirectoryExists)
         XCTAssertFalse(session.store.watchDirectoryMissing)
+        let jobs = BackgroundJobsPresentation(snapshot: session.store.backgroundJobs)
+        XCTAssertEqual(session.store.backgroundJobs.jobs.count, 2)
+        XCTAssertFalse(jobs.hasProblems)
+        XCTAssertEqual(jobs.summaryText, "后台任务 2 个，全部正常")
+        XCTAssertEqual(jobs.healthyRows.count, 2)
     }
 
     func testBusyFixtureHasEnoughRunningLinesToNeedScroll() async throws {
@@ -90,6 +95,21 @@ final class PanelPNGRendererTests: XCTestCase {
         XCTAssertEqual(session.store.channelStatus.grok.evidence, "账单未付，进程秒退")
     }
 
+    func testBgjobsProblemsFixtureExpandsTwoProblems() async throws {
+        let session = try await PanelPreviewFactory.makeSession(fixture: .bgjobsProblems)
+        defer { session.tearDown() }
+
+        let presentation = BackgroundJobsPresentation(snapshot: session.store.backgroundJobs)
+        XCTAssertTrue(presentation.hasProblems)
+        XCTAssertEqual(presentation.problemRows.count, 2)
+        XCTAssertEqual(presentation.problemRows[0].name, "内存与回收巡检")
+        XCTAssertEqual(presentation.problemRows[0].detail, "状态看不懂")
+        XCTAssertEqual(presentation.problemRows[1].name, "界面常驻服务")
+        XCTAssertTrue(presentation.problemRows[1].detail.hasPrefix("配置读不了 · "))
+        XCTAssertTrue(presentation.problemRows[1].detail.hasSuffix("…"))
+        XCTAssertEqual(presentation.summaryText, "后台任务 2 个，2 个不正常")
+    }
+
     func testRenderPanelPNGWritesNonEmptyFileForEveryFixture() async throws {
         var hashes: [String: Data] = [:]
         for fixture in PanelPreviewFixture.allCases {
@@ -108,5 +128,6 @@ final class PanelPNGRendererTests: XCTestCase {
         XCTAssertNotEqual(hashes["idle"], hashes["unclaimed"])
         XCTAssertNotEqual(hashes["idle"], hashes["channel-down"])
         XCTAssertNotEqual(hashes["busy"], hashes["unclaimed"])
+        XCTAssertNotEqual(hashes["idle"], hashes["bgjobs-problems"])
     }
 }

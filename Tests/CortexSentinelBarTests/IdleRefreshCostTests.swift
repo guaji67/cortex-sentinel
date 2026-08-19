@@ -170,6 +170,32 @@ final class IdleRefreshCostTests: XCTestCase {
         XCTAssertEqual(AIOConstants.statusRefreshIntervalWhenClosed, 120)
     }
 
+    func testBackgroundJobsFileIsReadOffMainThread() async throws {
+        try write(
+            "background-jobs-health.json",
+            """
+            {
+              "generated_at": "2026-08-20T01:40:00+08:00",
+              "jobs": [
+                {
+                  "label": "com.falcon.cortex.web",
+                  "name": "界面常驻服务",
+                  "status": "ok",
+                  "plist_status": "loaded"
+                }
+              ]
+            }
+            """
+        )
+        let store = makeStore()
+        await store.refreshStatuses()
+        XCTAssertFalse(store.lastStatusDiskReadWasOnMainThreadForTests)
+        XCTAssertEqual(store.backgroundJobs.sourceState, .available)
+        XCTAssertEqual(store.backgroundJobs.jobs.count, 1)
+        XCTAssertEqual(store.backgroundJobs.jobs[0].name, "界面常驻服务")
+        XCTAssertEqual(store.backgroundJobs.jobs[0].plistStatus, .loaded)
+    }
+
     private func makeStore(
         processReader: RecordingProcessReader = RecordingProcessReader(),
         cache: LineStatusFileCache = LineStatusFileCache(),
@@ -179,6 +205,7 @@ final class IdleRefreshCostTests: XCTestCase {
             defaults: defaults,
             environment: [
                 "CORTEX_SENTINEL_WATCH_DIR": root.path,
+                "CORTEX_DATA_ROOT": root.path,
                 "CORTEX_INPUT_STATUS_URL": "http://127.0.0.1:1/status",
                 "CORTEX_CODEX_AUTH_PATH": root.appendingPathComponent("missing-auth.json").path,
                 "CORTEX_AIO_DB_PATH": root.appendingPathComponent("missing-aio.db").path,

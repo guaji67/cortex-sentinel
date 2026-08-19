@@ -41,7 +41,7 @@ final class PanelPreviewSession {
 
 enum PanelPreviewFactory {
     @MainActor
-    static func makeSession(fixture: PanelPreviewFixture) throws -> PanelPreviewSession {
+    static func makeSession(fixture: PanelPreviewFixture) async throws -> PanelPreviewSession {
         let fileManager = FileManager.default
         let root = fileManager.temporaryDirectory.appendingPathComponent(
             "sentinel-panel-png-\(UUID().uuidString)",
@@ -59,7 +59,7 @@ enum PanelPreviewFactory {
             environment: ["CORTEX_SENTINEL_WATCH_DIR": root.path],
             otherCodexProcessReader: { _ in [] }
         )
-        store.refreshStatuses()
+        await store.refreshStatuses()
         return PanelPreviewSession(
             store: store,
             root: root,
@@ -71,14 +71,14 @@ enum PanelPreviewFactory {
 
 enum PanelPNGRenderer {
     @MainActor
-    static func render(fixture: PanelPreviewFixture, to path: String) throws {
-        try render(fixture: fixture, to: URL(fileURLWithPath: path))
+    static func render(fixture: PanelPreviewFixture, to path: String) async throws {
+        try await render(fixture: fixture, to: URL(fileURLWithPath: path))
     }
 
     @MainActor
-    static func render(fixture: PanelPreviewFixture, to url: URL) throws {
+    static func render(fixture: PanelPreviewFixture, to url: URL) async throws {
         _ = NSApplication.shared
-        let session = try PanelPreviewFactory.makeSession(fixture: fixture)
+        let session = try await PanelPreviewFactory.makeSession(fixture: fixture)
         defer { session.tearDown() }
 
         let view = SentinelMenuView(store: session.store, rendersOffscreen: true)

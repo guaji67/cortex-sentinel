@@ -521,3 +521,47 @@ enum SentinelDateParser {
         return standard.date(from: value)
     }
 }
+
+struct StatusDiskSnapshot {
+    var lines: [LineStatus]
+    var registry: CodexLineRegistry
+    var channelStatus: ChannelStatusSnapshot
+    var ack: TerminalAckLedger
+    var otherCodexProcesses: [OtherCodexProcess]?
+    var readOnMainThread: Bool
+}
+
+enum StatusDiskReader {
+    static func load(
+        logsDirectory: URL,
+        registryURL: URL,
+        channelStatusURL: URL,
+        ackURL: URL,
+        lineStatusCache: LineStatusFileCache,
+        lineRegistryCache: CodexLineRegistryCache,
+        includeOtherProcesses: Bool,
+        otherCodexProcessReader: (Set<Int>) -> [OtherCodexProcess]
+    ) -> StatusDiskSnapshot {
+        let lines = SentinelFileReader.readLines(
+            in: logsDirectory,
+            cache: lineStatusCache
+        )
+        let registry = lineRegistryCache.read(at: registryURL)
+        let channelStatus = SentinelFileReader.readChannelStatus(at: channelStatusURL)
+        let ack = SentinelFileReader.readTerminalAck(at: ackURL)
+        let processes: [OtherCodexProcess]?
+        if includeOtherProcesses {
+            processes = otherCodexProcessReader(Set(lines.compactMap(\.processID)))
+        } else {
+            processes = nil
+        }
+        return StatusDiskSnapshot(
+            lines: lines,
+            registry: registry,
+            channelStatus: channelStatus,
+            ack: ack,
+            otherCodexProcesses: processes,
+            readOnMainThread: Thread.isMainThread
+        )
+    }
+}

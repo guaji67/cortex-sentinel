@@ -33,8 +33,8 @@ final class PanelPNGRendererTests: XCTestCase {
         XCTAssertNil(PanelPreviewFixture(rawValue: "unknown"))
     }
 
-    func testIdleFixtureHasNoLinesAndAliveIdleChannels() throws {
-        let session = try PanelPreviewFactory.makeSession(fixture: .idle)
+    func testIdleFixtureHasNoLinesAndAliveIdleChannels() async throws {
+        let session = try await PanelPreviewFactory.makeSession(fixture: .idle)
         defer { session.tearDown() }
 
         XCTAssertEqual(session.store.lines, [])
@@ -47,8 +47,8 @@ final class PanelPNGRendererTests: XCTestCase {
         XCTAssertFalse(session.store.watchDirectoryMissing)
     }
 
-    func testBusyFixtureHasEnoughRunningLinesToNeedScroll() throws {
-        let session = try PanelPreviewFactory.makeSession(fixture: .busy)
+    func testBusyFixtureHasEnoughRunningLinesToNeedScroll() async throws {
+        let session = try await PanelPreviewFactory.makeSession(fixture: .busy)
         defer { session.tearDown() }
 
         XCTAssertGreaterThanOrEqual(session.store.lines.count, 8)
@@ -61,8 +61,8 @@ final class PanelPNGRendererTests: XCTestCase {
         XCTAssertGreaterThan(session.store.channelStatus.codex.runningCount, 0)
     }
 
-    func testUnclaimedFixtureExposesTerminalsWaitingToBeClaimed() throws {
-        let session = try PanelPreviewFactory.makeSession(fixture: .unclaimed)
+    func testUnclaimedFixtureExposesTerminalsWaitingToBeClaimed() async throws {
+        let session = try await PanelPreviewFactory.makeSession(fixture: .unclaimed)
         defer { session.tearDown() }
 
         XCTAssertFalse(session.store.unclaimedTerminals.isEmpty)
@@ -77,8 +77,8 @@ final class PanelPNGRendererTests: XCTestCase {
         XCTAssertEqual(session.store.channelStatus.codex.status, .alive)
     }
 
-    func testChannelDownFixtureShowsDegradedOrMissingChannel() throws {
-        let session = try PanelPreviewFactory.makeSession(fixture: .channelDown)
+    func testChannelDownFixtureShowsDegradedOrMissingChannel() async throws {
+        let session = try await PanelPreviewFactory.makeSession(fixture: .channelDown)
         defer { session.tearDown() }
 
         XCTAssertEqual(session.store.lines, [])
@@ -90,11 +90,11 @@ final class PanelPNGRendererTests: XCTestCase {
         XCTAssertEqual(session.store.channelStatus.grok.evidence, "账单未付，进程秒退")
     }
 
-    func testRenderPanelPNGWritesNonEmptyFileForEveryFixture() throws {
+    func testRenderPanelPNGWritesNonEmptyFileForEveryFixture() async throws {
         var hashes: [String: Data] = [:]
         for fixture in PanelPreviewFixture.allCases {
             let url = root.appendingPathComponent("panel-\(fixture.rawValue).png")
-            try PanelPNGRenderer.render(fixture: fixture, to: url)
+            try await PanelPNGRenderer.render(fixture: fixture, to: url)
             let data = try Data(contentsOf: url)
             XCTAssertGreaterThan(data.count, 30_000, fixture.rawValue)
             XCTAssertEqual(

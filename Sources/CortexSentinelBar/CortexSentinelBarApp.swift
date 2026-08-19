@@ -24,14 +24,14 @@ enum CortexSentinelBarMain {
     static let openSettingsArgument = "--open-settings"
 
     @MainActor
-    static func main() {
+    static func main() async {
         let arguments = ProcessInfo.processInfo.arguments
         if arguments.contains(dumpStateArgument) {
             runDumpStateCLI()
             return
         }
         if arguments.contains(idleRefreshArgument) {
-            runIdleRefreshCLI()
+            await runIdleRefreshCLI()
             return
         }
         if arguments.contains(openSettingsArgument) {
@@ -57,7 +57,7 @@ enum CortexSentinelBarMain {
         }
         if let index = arguments.firstIndex(of: renderPanelPNGArgument),
            index + 1 < arguments.count {
-            runRenderPanelPNGCLI(
+            await runRenderPanelPNGCLI(
                 outputPath: arguments[index + 1],
                 arguments: arguments
             )
@@ -124,21 +124,21 @@ enum CortexSentinelBarMain {
 
     /// 无界面空转：连续刷 refreshStatuses，给 `sample` 采热栈。
     /// 不启 NSApplication、不申请通知权限、不碰登录项。
-    /// 产品定时器仍是 5 秒；这里只把「每一轮」压到前台，方便对着数栈帧。
+    /// 产品定时器仍按设置走；这里只把「每一轮」压到前台，方便对着数栈帧。
     @MainActor
-    private static func runIdleRefreshCLI() {
+    private static func runIdleRefreshCLI() async {
         let store = SentinelStore()
-        store.refreshStatuses()
         FileHandle.standardOutput.write(
             Data("idle-refresh pid=\(ProcessInfo.processInfo.processIdentifier)\n".utf8)
         )
+        await store.refreshStatuses()
         while true {
-            store.refreshStatuses()
+            await store.refreshStatuses()
         }
     }
 
     @MainActor
-    private static func runRenderPanelPNGCLI(outputPath: String, arguments: [String]) {
+    private static func runRenderPanelPNGCLI(outputPath: String, arguments: [String]) async {
         let fixture: PanelPreviewFixture
         if let index = arguments.firstIndex(of: panelFixtureArgument),
            index + 1 < arguments.count {
@@ -155,7 +155,7 @@ enum CortexSentinelBarMain {
             fixture = .idle
         }
         do {
-            try PanelPNGRenderer.render(fixture: fixture, to: outputPath)
+            try await PanelPNGRenderer.render(fixture: fixture, to: outputPath)
             print("written \(outputPath)")
         } catch {
             FileHandle.standardError.write(Data("面板离屏渲染失败：\(error.localizedDescription)\n".utf8))
@@ -355,11 +355,11 @@ private final class SentinelSmokePopoverController: NSObject, NSPopoverDelegate 
     }
 
     func popoverWillShow(_ notification: Notification) {
-        store.setPanelPresented(true)
+        Task { await store.setPanelPresented(true) }
     }
 
     func popoverDidClose(_ notification: Notification) {
-        store.setPanelPresented(false)
+        Task { await store.setPanelPresented(false) }
     }
 }
 

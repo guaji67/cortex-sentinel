@@ -34,33 +34,76 @@ final class IdleRefreshCostTests: XCTestCase {
         }
     }
 
-    func testClosedPanelDoesNotReadProcessTable() {
+    func testClosedPanelDoesNotReadProcessTable() async {
         let reader = RecordingProcessReader()
         let store = makeStore(processReader: reader)
         for _ in 0..<6 {
-            store.refreshStatuses()
+            await store.refreshStatuses()
         }
         XCTAssertEqual(reader.callCount, 0)
         XCTAssertEqual(store.otherCodexProcesses, [])
         XCTAssertEqual(AIOConstants.statusRefreshInterval, 5)
+        XCTAssertEqual(AIOConstants.statusRefreshIntervalWhenClosed, 120)
+        XCTAssertFalse(store.lastStatusDiskReadWasOnMainThreadForTests)
     }
 
-    func testOpenPanelReadsProcessTable() {
+    func testStatusDiskReadLeavesTheMainThread() async {
+        let store = makeStore()
+        await store.refreshStatuses()
+        XCTAssertEqual(store.statusDiskRefreshCountForTests, 1)
+        XCTAssertFalse(store.lastStatusDiskReadWasOnMainThreadForTests)
+    }
+
+    func testRefreshIntervalSettingTakesEffectWithoutRestart() async {
+        let store = makeStore()
+        store.start()
+        XCTAssertEqual(store.scheduledStatusTimerInterval, 120)
+        store.settingsModel.setPanelClosedRefreshInterval(.thirtySeconds)
+        XCTAssertEqual(store.scheduledStatusTimerInterval, 30)
+        store.settingsModel.setPanelOpenRefreshInterval(.twoSeconds)
+        XCTAssertEqual(store.scheduledStatusTimerInterval, 30)
+    }
+
+    func testOpeningPanelSwitchesToOpenRefreshIntervalImmediately() async {
+        let store = makeStore()
+        store.start()
+        store.settingsModel.setPanelOpenRefreshInterval(.tenSeconds)
+        await store.setPanelPresented(true)
+        XCTAssertEqual(store.scheduledStatusTimerInterval, 10)
+        await store.setPanelPresented(false)
+        XCTAssertEqual(store.scheduledStatusTimerInterval, 120)
+    }
+
+    func testClosedPanelIdleSixtySecondsKeepsPublicationsInSingleDigits() async throws {
+        let reader = RecordingProcessReader()
+        let store = makeStore(processReader: reader)
+        await store.refreshStatuses()
+        store.start()
+        try await Task.sleep(nanoseconds: 1_200_000_000)
+        var count = 0
+        let cancellable = store.objectWillChange.sink { count += 1 }
+        try await Task.sleep(nanoseconds: 60_000_000_000)
+        withExtendedLifetime(cancellable) {}
+        XCTAssertLessThan(count, 10, "面板关着静置 60 秒 objectWillChange=\(count)")
+        XCTAssertEqual(reader.callCount, 0)
+    }
+
+    func testOpenPanelReadsProcessTable() async {
         let reader = RecordingProcessReader()
         reader.processes = [
             OtherCodexProcess(processID: 4242, worktreeName: "wt-alpha", elapsed: "00:12"),
         ]
         let store = makeStore(processReader: reader)
-        store.setPanelPresented(true)
+        await store.setPanelPresented(true)
         XCTAssertEqual(reader.callCount, 1)
         XCTAssertEqual(store.otherCodexProcesses, reader.processes)
 
-        store.refreshStatuses()
+        await store.refreshStatuses()
         XCTAssertEqual(reader.callCount, 2)
         XCTAssertEqual(store.otherCodexProcesses, reader.processes)
     }
 
-    func testClosedPanelStillNotifiesWhenStatusFileChanges() throws {
+    func testClosedPanelStillNotifiesWhenStatusFileChanges() async throws {
         let box = NotificationBox()
         let reader = RecordingProcessReader()
         let store = makeStore(processReader: reader, notificationBox: box)
@@ -68,7 +111,7 @@ final class IdleRefreshCostTests: XCTestCase {
             "codex-babysitter-alpha.status.json",
             #"{"slug":"alpha","state":"running","updated_at":"2026-08-19T20:00:00Z"}"#
         )
-        store.refreshStatuses()
+        await store.refreshStatuses()
         XCTAssertEqual(box.drafts, [])
         XCTAssertEqual(reader.callCount, 0)
 
@@ -76,7 +119,7 @@ final class IdleRefreshCostTests: XCTestCase {
             "codex-babysitter-alpha.status.json",
             #"{"slug":"alpha","state":"done","updated_at":"2026-08-19T20:01:00Z"}"#
         )
-        store.refreshStatuses()
+        await store.refreshStatuses()
         XCTAssertEqual(reader.callCount, 0)
         XCTAssertEqual(box.drafts.count, 1)
         XCTAssertEqual(box.drafts.first?.category, .taskComplete)
@@ -84,46 +127,47 @@ final class IdleRefreshCostTests: XCTestCase {
         XCTAssertEqual(store.lines.first?.state, .done)
     }
 
-    func testUnchangedStatusFileIsNotReparsed() throws {
+    func testUnchangedStatusFileIsNotReparsed() async throws {
         let cache = LineStatusFileCache()
         let store = makeStore(cache: cache)
         try write(
             "codex-babysitter-alpha.status.json",
             #"{"slug":"alpha","state":"running","updated_at":"2026-08-19T20:00:00Z"}"#
         )
-        store.refreshStatuses()
+        await store.refreshStatuses()
         XCTAssertEqual(cache.parseCount, 1)
         XCTAssertEqual(store.lines.first?.slug, "alpha")
 
-        store.refreshStatuses()
-        store.refreshStatuses()
+        await store.refreshStatuses()
+        await store.refreshStatuses()
         XCTAssertEqual(cache.parseCount, 1)
 
         try write(
             "codex-babysitter-alpha.status.json",
             #"{"slug":"alpha","state":"waiting_relay","updated_at":"2026-08-19T20:02:00Z"}"#
         )
-        store.refreshStatuses()
+        await store.refreshStatuses()
         XCTAssertEqual(cache.parseCount, 2)
         XCTAssertEqual(store.lines.first?.state, .waitingRelay)
     }
 
-    func testIdleSixtySecondsWithoutOpeningPanelDoesNotPublish() throws {
+    func testIdleSixtySecondsWithoutOpeningPanelDoesNotPublish() async throws {
         let reader = RecordingProcessReader()
         let store = makeStore(processReader: reader)
         try write(
             "codex-babysitter-alpha.status.json",
             #"{"slug":"alpha","state":"running","updated_at":"2026-08-19T20:00:00Z"}"#
         )
-        store.refreshStatuses()
-        let count = countPublications(store) {
+        await store.refreshStatuses()
+        let count = await countPublications(store) {
             for _ in 0..<12 {
-                store.refreshStatuses()
+                await store.refreshStatuses()
             }
         }
         XCTAssertEqual(count, 0)
         XCTAssertEqual(reader.callCount, 0)
         XCTAssertEqual(AIOConstants.statusRefreshInterval, 5)
+        XCTAssertEqual(AIOConstants.statusRefreshIntervalWhenClosed, 120)
     }
 
     private func makeStore(
@@ -136,6 +180,8 @@ final class IdleRefreshCostTests: XCTestCase {
             environment: [
                 "CORTEX_SENTINEL_WATCH_DIR": root.path,
                 "CORTEX_INPUT_STATUS_URL": "http://127.0.0.1:1/status",
+                "CORTEX_CODEX_AUTH_PATH": root.appendingPathComponent("missing-auth.json").path,
+                "CORTEX_AIO_DB_PATH": root.appendingPathComponent("missing-aio.db").path,
             ],
             lineStatusCache: cache,
             otherCodexProcessReader: { ids in processReader.read(ids) },
@@ -145,10 +191,10 @@ final class IdleRefreshCostTests: XCTestCase {
         )
     }
 
-    private func countPublications(_ store: SentinelStore, _ body: () -> Void) -> Int {
+    private func countPublications(_ store: SentinelStore, _ body: () async -> Void) async -> Int {
         var count = 0
         let cancellable = store.objectWillChange.sink { count += 1 }
-        body()
+        await body()
         withExtendedLifetime(cancellable) {}
         return count
     }

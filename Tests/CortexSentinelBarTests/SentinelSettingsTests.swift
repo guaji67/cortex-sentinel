@@ -39,6 +39,9 @@ final class SentinelSettingsTests: XCTestCase {
         XCTAssertTrue(SentinelSettingsKey.notifyCategoryChannelAlert.hasPrefix(SentinelSettingsKey.bundlePrefix + "."))
         XCTAssertTrue(SentinelSettingsKey.notifyCadence.hasPrefix(SentinelSettingsKey.bundlePrefix + "."))
         XCTAssertTrue(SentinelSettingsKey.watchDirectory.hasPrefix(SentinelSettingsKey.bundlePrefix + "."))
+        XCTAssertTrue(SentinelSettingsKey.panelOpenRefreshInterval.hasPrefix(SentinelSettingsKey.bundlePrefix + "."))
+        XCTAssertTrue(SentinelSettingsKey.panelClosedRefreshInterval.hasPrefix(SentinelSettingsKey.bundlePrefix + "."))
+        XCTAssertTrue(SentinelSettingsKey.balanceRecheckInterval.hasPrefix(SentinelSettingsKey.bundlePrefix + "."))
         XCTAssertEqual(SentinelSettingsCopy.windowTitle, "哨兵设置")
         XCTAssertEqual(SentinelSettingsCopy.notifyGroupTitle, "通知")
         XCTAssertEqual(SentinelSettingsCopy.notifyMasterTitle, "通知我")
@@ -52,6 +55,35 @@ final class SentinelSettingsTests: XCTestCase {
         XCTAssertEqual(SentinelSettingsCopy.notifyCadenceEvery, "每条都弹")
         XCTAssertEqual(SentinelSettingsCopy.notifyCadence1m, "攒 1 分钟一起说")
         XCTAssertEqual(SentinelSettingsCopy.notifyCadence5m, "攒 5 分钟一起说")
+        XCTAssertEqual(SentinelSettingsCopy.refreshGroupTitle, "刷新")
+        XCTAssertEqual(SentinelSettingsCopy.panelOpenRefreshTitle, "面板开着时")
+        XCTAssertEqual(SentinelSettingsCopy.panelOpenRefreshHint, "你正看着的时候查得勤一点。")
+        XCTAssertEqual(SentinelSettingsCopy.panelClosedRefreshTitle, "面板关着时")
+        XCTAssertEqual(SentinelSettingsCopy.panelClosedRefreshHint, "没人看的时候慢一点，省电。")
+        XCTAssertEqual(SentinelSettingsCopy.balanceRecheckTitle, "余额隔多久重查")
+        XCTAssertEqual(
+            SentinelSettingsCopy.balanceRecheckHint,
+            "点开面板时，上次查过超过这个时间就重查，没超过就用现成的。"
+        )
+        XCTAssertEqual(SentinelSettingsCopy.refreshInterval2s, "2 秒")
+        XCTAssertEqual(SentinelSettingsCopy.refreshInterval5s, "5 秒")
+        XCTAssertEqual(SentinelSettingsCopy.refreshInterval10s, "10 秒")
+        XCTAssertEqual(SentinelSettingsCopy.refreshInterval30s, "30 秒")
+        XCTAssertEqual(SentinelSettingsCopy.refreshInterval1m, "1 分钟")
+        XCTAssertEqual(SentinelSettingsCopy.refreshInterval2m, "2 分钟")
+        XCTAssertEqual(SentinelSettingsCopy.refreshInterval5m, "5 分钟")
+        XCTAssertEqual(SentinelPanelOpenRefreshInterval.allCases.map(\.title), ["2 秒", "5 秒", "10 秒"])
+        XCTAssertEqual(
+            SentinelPanelClosedRefreshInterval.allCases.map(\.title),
+            ["30 秒", "1 分钟", "2 分钟", "5 分钟"]
+        )
+        XCTAssertEqual(SentinelBalanceRecheckInterval.allCases.map(\.title), ["30 秒", "1 分钟", "5 分钟"])
+        XCTAssertEqual(SentinelPanelOpenRefreshInterval.default, .fiveSeconds)
+        XCTAssertEqual(SentinelPanelClosedRefreshInterval.default, .twoMinutes)
+        XCTAssertEqual(SentinelBalanceRecheckInterval.default, .thirtySeconds)
+        XCTAssertEqual(AIOConstants.statusRefreshInterval, 5)
+        XCTAssertEqual(AIOConstants.statusRefreshIntervalWhenClosed, 120)
+        XCTAssertEqual(AIOConstants.panelOpenFreshnessInterval, 30)
         XCTAssertEqual(SentinelSettingsCopy.historyGroupTitle, "历史")
         XCTAssertEqual(SentinelSettingsCopy.loginItemTitle, "开机时自动启动")
         XCTAssertEqual(SentinelSettingsCopy.loginItemManagedHint, "由系统服务托管，改这里没用")
@@ -112,6 +144,9 @@ final class SentinelSettingsTests: XCTestCase {
         XCTAssertTrue(notify.channelAlertEnabled)
         XCTAssertEqual(notify.cadence, .coalesce1m)
         XCTAssertEqual(notify.cadence.title, "攒 1 分钟一起说")
+        XCTAssertEqual(SentinelSettings.panelOpenRefreshInterval(defaults: defaults), .fiveSeconds)
+        XCTAssertEqual(SentinelSettings.panelClosedRefreshInterval(defaults: defaults), .twoMinutes)
+        XCTAssertEqual(SentinelSettings.balanceRecheckInterval(defaults: defaults), .thirtySeconds)
         XCTAssertEqual(
             SentinelSettings.historyRetainCount(defaults: defaults),
             StatusFileRetention.defaultCap
@@ -127,12 +162,18 @@ final class SentinelSettingsTests: XCTestCase {
         )
         SentinelSettings.setNotifyCadence(.every, defaults: defaults)
         SentinelSettings.setHistoryRetainCount(12, defaults: defaults)
+        SentinelSettings.setPanelOpenRefreshInterval(.twoSeconds, defaults: defaults)
+        SentinelSettings.setPanelClosedRefreshInterval(.thirtySeconds, defaults: defaults)
+        SentinelSettings.setBalanceRecheckInterval(.oneMinute, defaults: defaults)
 
         XCTAssertFalse(SentinelSettings.loginItemEnabled(defaults: defaults))
         XCTAssertFalse(SentinelSettings.notifyOnTaskComplete(defaults: defaults))
         XCTAssertFalse(SentinelSettings.notifyMasterEnabled(defaults: defaults))
         XCTAssertEqual(SentinelSettings.notifyCadence(defaults: defaults), .every)
         XCTAssertEqual(SentinelSettings.historyRetainCount(defaults: defaults), 12)
+        XCTAssertEqual(SentinelSettings.panelOpenRefreshInterval(defaults: defaults), .twoSeconds)
+        XCTAssertEqual(SentinelSettings.panelClosedRefreshInterval(defaults: defaults), .thirtySeconds)
+        XCTAssertEqual(SentinelSettings.balanceRecheckInterval(defaults: defaults), .oneMinute)
     }
 
     func testHistoryRetainCountChangeDrivesStatusFileCleanup() throws {

@@ -10,7 +10,7 @@ enum SentinelSettingsCopy {
     static let notifyTaskProblemTitle = "任务出问题了"
     static let notifyTaskProblemHint = "卡住、失败、被杀"
     static let notifyChannelTitle = "通道熔断或余额不够"
-    static let notifyCadenceTitle = "怎么说"
+    static let notifyCadenceTitle = "什么时候说"
     static let notifyCadenceHint = "攒起来的会合成一条，比如「3 条线干完了」。"
     static let notifyCadenceEvery = "每条都弹"
     static let notifyCadence1m = "攒 1 分钟一起说"
@@ -21,7 +21,7 @@ enum SentinelSettingsCopy {
     static let historyUnit = "条"
     static let historyHint = "超出的旧记录会自动清掉，正在跑的线不会被清。"
 
-    static let startupGroupTitle = "启动与目录"
+    static let startupGroupTitle = "启动与文件夹"
     static let loginItemTitle = "开机时自动启动"
     static let loginItemManagedHint = "由系统服务托管，改这里没用"
     static let watchTitle = "盯这个文件夹"

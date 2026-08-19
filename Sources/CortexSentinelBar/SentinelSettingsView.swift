@@ -57,6 +57,11 @@ final class SentinelSettingsModel: ObservableObject {
         )
     }
 
+    /// 只给设置窗正文显示。存的 `watchPath` 一个字节都不改。
+    var watchPathDisplay: String {
+        (watchPath as NSString).abbreviatingWithTildeInPath
+    }
+
     var loginItemBinding: Binding<Bool> {
         Binding(
             get: { self.loginItem.isOn },
@@ -323,20 +328,17 @@ struct SentinelSettingsView: View {
 
     private var startupGroup: some View {
         VStack(alignment: .leading, spacing: SentinelTheme.Spacing.section) {
-            HStack(alignment: .center, spacing: SentinelTheme.Spacing.md) {
+            VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xs) {
                 labeledToggle(
                     title: SentinelSettingsCopy.loginItemTitle,
                     isOn: model.loginItemBinding,
-                    identifier: "settings-login-item-toggle",
-                    expandLabel: false
+                    identifier: "settings-login-item-toggle"
                 )
                 .disabled(!model.loginItem.isControlEnabled)
                 if let hint = model.loginItem.trailingHint {
                     hintText(hint)
-                        .fixedSize(horizontal: true, vertical: false)
                         .accessibilityIdentifier("settings-login-item-hint")
                 }
-                Spacer(minLength: 0)
             }
 
             VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xs) {
@@ -357,7 +359,7 @@ struct SentinelSettingsView: View {
                     .disabled(model.isWatchLocked)
                     .accessibilityIdentifier("settings-watch-choose")
                 }
-                Text(model.watchPath)
+                Text(model.watchPathDisplay)
                     .font(SentinelTheme.Fonts.metadata)
                     .foregroundStyle(
                         model.isWatchLocked

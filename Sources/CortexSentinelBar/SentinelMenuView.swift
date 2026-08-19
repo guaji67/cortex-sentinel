@@ -495,6 +495,14 @@ struct SentinelMenuView: View {
 
             Spacer(minLength: SentinelTheme.Spacing.md)
 
+            if case .loading = provider.usage {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .controlSize(.small)
+                    .frame(width: 14, height: 14)
+                    .accessibilityLabel("正在刷新余额")
+            }
+
             Text(balance.text)
                 .font(SentinelTheme.Fonts.balanceAmount)
                 .foregroundStyle(balance.color)

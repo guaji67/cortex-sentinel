@@ -441,10 +441,45 @@ enum AIOConstants {
     static let aioRefreshInterval: TimeInterval = 60
     static let disabledUsageRefreshInterval: TimeInterval = 10 * 60
     static let manualRefreshThrottle: TimeInterval = 10
+    /// 打开面板触发的余额刷新：距上次刷新不到 30 秒就用现成的数。
+    static let panelOpenFreshnessInterval: TimeInterval = 30
+    /// 逐条刷新时，两条之间的间隔。
+    static let sequentialUsageInterval: TimeInterval = 0.5
     static let usageTimeout: TimeInterval = 15
     static let databaseBusyRetryCount = 3
     static let databaseBusyRetryDelay: TimeInterval = 0.15
     static let databaseBusyTimeoutMilliseconds: Int32 = 750
+}
+
+enum PanelBalanceRefreshPolicy {
+    static func shouldRefresh(lastRefreshAt: Date?, now: Date) -> Bool {
+        guard let lastRefreshAt else {
+            return true
+        }
+        return now.timeIntervalSince(lastRefreshAt) >= AIOConstants.panelOpenFreshnessInterval
+    }
+
+    /// 按面板从上到下的显示顺序排出要刷的中转余额，不按内部 id。
+    /// 官方 OAuth 那行走独立的官方额度接口，不进这个队列。
+    static func sequentialTargets(
+        providers: [AIOProvider],
+        targets: [AIOUsageTarget],
+        includeDisabled: Bool
+    ) -> [AIOUsageTarget] {
+        let targetsByID = Dictionary(uniqueKeysWithValues: targets.map { ($0.id, $0) })
+        return providers.compactMap { provider in
+            guard !provider.isOfficialOAuthProvider else {
+                return nil
+            }
+            guard let target = targetsByID[provider.id] else {
+                return nil
+            }
+            guard target.enabled || includeDisabled else {
+                return nil
+            }
+            return target
+        }
+    }
 }
 
 enum AIOUsageRefreshPolicy {

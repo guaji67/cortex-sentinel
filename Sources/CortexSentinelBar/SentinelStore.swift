@@ -36,12 +36,15 @@ final class SentinelStore: ObservableObject {
     private let loginItemRegistrar: any LoginItemRegistrar
     private let lineRegistryCache: CodexLineRegistryCache
     private let otherCodexProcessReader: (Set<Int>) -> [OtherCodexProcess]
+    private let now: @Sendable () -> Date
+    private let aioUsageClient: AIOUsageClient
     private var statusTimer: Timer?
     private var aioTimer: Timer?
     private var inputStatusTimer: Timer?
     private var officialUsageTimer: Timer?
     private var cleanupTimer: Timer?
     private var aioRefreshInFlight = false
+    private var aioRefreshIncludesUsage = false
     private var inputStatusRefreshInFlight = false
     private var lastAIORefreshAt: Date?
     private var lastAIOUsageRefreshAt: Date?
@@ -61,11 +64,15 @@ final class SentinelStore: ObservableObject {
         lineRegistryCache: CodexLineRegistryCache = CodexLineRegistryCache(),
         otherCodexProcessReader: @escaping (Set<Int>) -> [OtherCodexProcess] = {
             OtherCodexProcessReader.read(excluding: $0)
-        }
+        },
+        now: @escaping @Sendable () -> Date = { Date() },
+        aioUsageClient: AIOUsageClient = AIOUsageClient()
     ) {
         self.defaults = defaults
         self.environment = environment
         self.otherCodexProcessReader = otherCodexProcessReader
+        self.now = now
+        self.aioUsageClient = aioUsageClient
         let resolvedPaths = paths ?? SentinelPaths.discover(
             environment: environment,
             defaults: defaults
@@ -391,7 +398,8 @@ final class SentinelStore: ObservableObject {
         guard presented else {
             return
         }
-        refreshAIO(force: true, includeUsage: true)
+        refreshOfficialUsage(reason: .panelOpen)
+        refreshAIO(force: true, includeUsage: true, sequential: true)
         refreshInputStatus(force: true)
     }
 
@@ -400,18 +408,18 @@ final class SentinelStore: ObservableObject {
     }
 
     private func refreshOfficialUsage(reason: OfficialUsageRefreshReason) {
-        let now = Date()
+        let timestamp = self.now()
         guard OfficialUsageRefreshPolicy.shouldStart(
             reason: reason,
             lastAttemptAt: lastOfficialUsageAttemptAt,
             isInFlight: isOfficialUsageRefreshing,
-            now: now
+            now: timestamp
         ) else {
             return
         }
 
         isOfficialUsageRefreshing = true
-        lastOfficialUsageAttemptAt = now
+        lastOfficialUsageAttemptAt = timestamp
         if reason == .manual {
             beginOfficialUsageManualCooldown()
         }
@@ -455,32 +463,40 @@ final class SentinelStore: ObservableObject {
         }
     }
 
-    private func refreshAIO(force: Bool, includeUsage: Bool) {
-        let now = Date()
+    func refreshAIO(force: Bool, includeUsage: Bool, sequential: Bool = false) {
+        let timestamp = self.now()
         if aioRefreshInFlight {
-            pendingAIOUsageRefresh = pendingAIOUsageRefresh || includeUsage
+            if includeUsage && !aioRefreshIncludesUsage {
+                pendingAIOUsageRefresh = true
+            }
             return
         }
         let relevantLastRefreshAt = includeUsage ? lastAIOUsageRefreshAt : lastAIORefreshAt
         if let relevantLastRefreshAt {
-            let elapsed = now.timeIntervalSince(relevantLastRefreshAt)
-            let minimumInterval = force
-                ? AIOConstants.manualRefreshThrottle
-                : AIOConstants.aioRefreshInterval
+            let elapsed = timestamp.timeIntervalSince(relevantLastRefreshAt)
+            let minimumInterval: TimeInterval
+            if sequential {
+                minimumInterval = AIOConstants.panelOpenFreshnessInterval
+            } else if force {
+                minimumInterval = AIOConstants.manualRefreshThrottle
+            } else {
+                minimumInterval = AIOConstants.aioRefreshInterval
+            }
             if elapsed < minimumInterval {
                 return
             }
         }
 
         aioRefreshInFlight = true
-        lastAIORefreshAt = now
+        aioRefreshIncludesUsage = includeUsage
+        lastAIORefreshAt = timestamp
         if includeUsage {
-            lastAIOUsageRefreshAt = now
+            lastAIOUsageRefreshAt = timestamp
         }
         let includeDisabledUsage = includeUsage
             && AIOUsageRefreshPolicy.shouldRefreshDisabledUsage(
                 lastRefreshAt: lastDisabledAIOUsageRefreshAt,
-                now: now
+                now: timestamp
             )
         let databaseURL = paths.aioDatabaseURL
         let manifestURL = paths.aioManifestURL
@@ -488,69 +504,130 @@ final class SentinelStore: ObservableObject {
         let cachedUsage = Dictionary(
             uniqueKeysWithValues: aio.providers.map { ($0.id, $0.usage) }
         )
+        let usageClient = aioUsageClient
 
         Task { @MainActor [weak self] in
-            let result = await Task.detached {
-                let base = AIODataReader.read(
+            let base = await Task.detached {
+                AIODataReader.read(
                     databaseURL: databaseURL,
                     manifestURL: manifestURL,
                     configURL: configURL
-                )
-                guard base.sourceState == .available else {
-                    return (snapshot: base, attemptedDisabledUsage: false)
-                }
-                let cachedBase = base.replacingUsage(cachedUsage)
-                guard includeUsage else {
-                    return (snapshot: cachedBase, attemptedDisabledUsage: false)
-                }
-                let usageTargets = AIODataReader.readUsageTargets(databaseURL: databaseURL)
-                let freshUsage = await AIOUsageClient().fetchAll(
-                    targets: usageTargets,
-                    includeDisabled: includeDisabledUsage
-                )
-                let mergedUsage = AIOUsageRefreshPolicy.merge(
-                    cached: cachedUsage,
-                    fresh: freshUsage,
-                    providers: base.providers
-                )
-                let attemptedDisabledUsage = includeDisabledUsage
-                    && base.providers.contains {
-                        !$0.enabled && !$0.isOfficialOAuthProvider
-                    }
-                return (
-                    snapshot: base.replacingUsage(mergedUsage),
-                    attemptedDisabledUsage: attemptedDisabledUsage
                 )
             }.value
 
             guard let self else {
                 return
             }
+
+            let attemptedDisabledUsage: Bool
+            let snapshot: AIOSnapshot
+            if base.sourceState != .available {
+                snapshot = base
+                attemptedDisabledUsage = false
+            } else if !includeUsage {
+                snapshot = base.replacingUsage(cachedUsage)
+                attemptedDisabledUsage = false
+            } else {
+                let usageTargets = await Task.detached {
+                    AIODataReader.readUsageTargets(databaseURL: databaseURL)
+                }.value
+                attemptedDisabledUsage = includeDisabledUsage
+                    && base.providers.contains {
+                        !$0.enabled && !$0.isOfficialOAuthProvider
+                    }
+                if sequential {
+                    snapshot = await self.refreshUsageSequentially(
+                        base: base,
+                        cachedUsage: cachedUsage,
+                        targets: usageTargets,
+                        includeDisabled: includeDisabledUsage,
+                        client: usageClient
+                    )
+                } else {
+                    let freshUsage = await usageClient.fetchAll(
+                        targets: usageTargets,
+                        includeDisabled: includeDisabledUsage
+                    )
+                    let mergedUsage = AIOUsageRefreshPolicy.merge(
+                        cached: cachedUsage,
+                        fresh: freshUsage,
+                        providers: base.providers
+                    )
+                    snapshot = base.replacingUsage(mergedUsage)
+                }
+            }
+
             self.aioRefreshInFlight = false
-            if result.attemptedDisabledUsage {
-                self.lastDisabledAIOUsageRefreshAt = now
+            self.aioRefreshIncludesUsage = false
+            if attemptedDisabledUsage {
+                self.lastDisabledAIOUsageRefreshAt = timestamp
             }
             self.apply(
                 lines: self.lines,
-                aio: result.snapshot,
+                aio: snapshot,
                 otherCodexProcesses: self.otherCodexProcesses,
                 lineRegistry: self.lineRegistry,
                 inputStatus: self.inputStatus
             )
             if self.pendingAIOUsageRefresh {
                 self.pendingAIOUsageRefresh = false
-                self.refreshAIO(force: true, includeUsage: true)
+                if self.isPanelPresented {
+                    self.refreshAIO(force: true, includeUsage: true, sequential: true)
+                }
             }
         }
     }
 
+    private func refreshUsageSequentially(
+        base: AIOSnapshot,
+        cachedUsage: [Int64: AIOUsageStatus],
+        targets: [AIOUsageTarget],
+        includeDisabled: Bool,
+        client: AIOUsageClient
+    ) async -> AIOSnapshot {
+        let ordered = PanelBalanceRefreshPolicy.sequentialTargets(
+            providers: base.providers,
+            targets: targets,
+            includeDisabled: includeDisabled
+        )
+        var cached = cachedUsage
+        for (index, target) in ordered.enumerated() {
+            if index > 0 {
+                await client.pause(AIOConstants.sequentialUsageInterval)
+            }
+            var loading = cached
+            loading[target.id] = .loading
+            apply(
+                lines: lines,
+                aio: base.replacingUsage(loading),
+                otherCodexProcesses: otherCodexProcesses,
+                lineRegistry: lineRegistry,
+                inputStatus: inputStatus
+            )
+            let status = await client.fetch(target: target)
+            cached = AIOUsageRefreshPolicy.merge(
+                cached: cached,
+                fresh: [target.id: status],
+                providers: base.providers
+            )
+            apply(
+                lines: lines,
+                aio: base.replacingUsage(cached),
+                otherCodexProcesses: otherCodexProcesses,
+                lineRegistry: lineRegistry,
+                inputStatus: inputStatus
+            )
+        }
+        return base.replacingUsage(cached)
+    }
+
     private func refreshInputStatus(force: Bool) {
-        let now = Date()
+        let timestamp = self.now()
         if inputStatusRefreshInFlight {
             return
         }
         if let lastInputStatusRefreshAt {
-            let elapsed = now.timeIntervalSince(lastInputStatusRefreshAt)
+            let elapsed = timestamp.timeIntervalSince(lastInputStatusRefreshAt)
             let minimumInterval = force
                 ? AIOConstants.manualRefreshThrottle
                 : InputStatusRefreshPolicy.automaticInterval(
@@ -562,7 +639,7 @@ final class SentinelStore: ObservableObject {
         }
 
         inputStatusRefreshInFlight = true
-        lastInputStatusRefreshAt = now
+        lastInputStatusRefreshAt = timestamp
         let client = InputStatusClient(endpoint: paths.inputStatusURL)
 
         Task { @MainActor [weak self] in

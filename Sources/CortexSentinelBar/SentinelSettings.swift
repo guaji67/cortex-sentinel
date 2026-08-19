@@ -8,10 +8,11 @@ enum SentinelSettingsCopy {
     static let notifyMasterTitle = "通知我"
     static let notifyTaskCompleteTitle = "任务干完了"
     static let notifyTaskProblemTitle = "任务出问题了"
-    static let notifyTaskProblemHint = "卡住、失败、被杀"
-    static let notifyChannelTitle = "通道熔断或余额不够"
+    static let notifyTaskProblemHint = "卡住、失败、被中止"
+    static let notifyChannelTitle = "AI 通道出问题或余额不够"
+    static let notifyChannelHint = "连不上、被熔断、你的额度快用完"
     static let notifyCadenceTitle = "什么时候说"
-    static let notifyCadenceHint = "攒起来的会合成一条，比如「3 条线干完了」。"
+    static let notifyCadenceHint = "攒起来的会合成一条，比如「3 个任务干完了」。"
     static let notifyCadenceEvery = "每条都弹"
     static let notifyCadence1m = "攒 1 分钟一起说"
     static let notifyCadence5m = "攒 5 分钟一起说"
@@ -19,14 +20,14 @@ enum SentinelSettingsCopy {
     static let historyGroupTitle = "历史"
     static let historyTitle = "最多留"
     static let historyUnit = "条"
-    static let historyHint = "超出的旧记录会自动清掉，正在跑的线不会被清。"
+    static let historyHint = "超出的旧记录会自动清掉，正在跑的任务不会被清。"
 
     static let startupGroupTitle = "启动与文件夹"
     static let loginItemTitle = "开机时自动启动"
     static let loginItemManagedHint = "由系统服务托管，改这里没用"
     static let watchTitle = "盯这个文件夹"
     static let watchChoose = "选择"
-    static let watchHint = "派工工具把状态文件写在这里。"
+    static let watchHint = "派工工具把任务状态写在这里，一般不用改。"
     static let watchLockedHint = "装的时候定好的，要换得重装"
     static let versionPrefix = "版本"
     static let versionDevLabel = "开发版"
@@ -35,14 +36,32 @@ enum SentinelSettingsCopy {
 enum SentinelAppVersion {
     static let devBundleVersion = "dev"
 
+    static let gitHashDisplayLength = 7
+
     static func displayLine(
         shortVersion: String,
         bundleVersion: String
     ) -> String {
         let buildLabel = bundleVersion == devBundleVersion
             ? SentinelSettingsCopy.versionDevLabel
-            : bundleVersion
+            : shortenedGitHash(bundleVersion)
         return "\(SentinelSettingsCopy.versionPrefix) \(shortVersion)（\(buildLabel)）"
+    }
+
+    /// 出包写入的是 12 位短哈希；设置窗只显示 7 位。非哈希版本号原样留下。
+    static func shortenedGitHash(_ bundleVersion: String) -> String {
+        guard bundleVersion.count > gitHashDisplayLength else {
+            return bundleVersion
+        }
+        let isGitHash = bundleVersion.unicodeScalars.allSatisfy { scalar in
+            (scalar.value >= 0x30 && scalar.value <= 0x39)
+                || (scalar.value >= 0x61 && scalar.value <= 0x66)
+                || (scalar.value >= 0x41 && scalar.value <= 0x46)
+        }
+        guard isGitHash else {
+            return bundleVersion
+        }
+        return String(bundleVersion.prefix(gitHashDisplayLength))
     }
 
     static func displayLine(bundle: Bundle = .main) -> String {

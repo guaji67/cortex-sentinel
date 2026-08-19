@@ -36,7 +36,7 @@ enum SentinelNotificationCopy {
     }
 
     static func mergedTaskCompleteBody(count: Int) -> String {
-        "\(count) 条线干完了"
+        "\(count) 个任务干完了"
     }
 
     static func mergedTaskProblemBody(count: Int) -> String {

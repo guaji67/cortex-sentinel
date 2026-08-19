@@ -260,11 +260,15 @@ struct SentinelSettingsView: View {
                     hintText(SentinelSettingsCopy.notifyTaskProblemHint)
                         .padding(.leading, 4)
                 }
-                labeledToggle(
-                    title: SentinelSettingsCopy.notifyChannelTitle,
-                    isOn: model.channelAlertBinding,
-                    identifier: "settings-notify-channel-toggle"
-                )
+                VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xs) {
+                    labeledToggle(
+                        title: SentinelSettingsCopy.notifyChannelTitle,
+                        isOn: model.channelAlertBinding,
+                        identifier: "settings-notify-channel-toggle"
+                    )
+                    hintText(SentinelSettingsCopy.notifyChannelHint)
+                        .padding(.leading, 4)
+                }
 
                 VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xs) {
                     HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
@@ -279,7 +283,7 @@ struct SentinelSettingsView: View {
             }
             .padding(.leading, SentinelTheme.Metrics.settingsCategoryIndent)
             .disabled(!model.notifyMasterEnabled)
-            .opacity(model.notifyMasterEnabled ? 1 : SentinelTheme.Metrics.disabledOpacity)
+            .opacity(model.notifyMasterEnabled ? 1 : 0.7)
         }
     }
 
@@ -349,17 +353,18 @@ struct SentinelSettingsView: View {
                         .font(SentinelTheme.Fonts.rowTitle)
                         .foregroundStyle(SentinelTheme.Colors.foreground)
                     Spacer(minLength: SentinelTheme.Spacing.sm)
-                    Button(SentinelSettingsCopy.watchChoose) {
-                        model.chooseWatchDirectory?()
-                    }
-                    .buttonStyle(
-                        SentinelButtonStyle(
-                            kind: .secondary,
-                            compact: true
+                    if !model.isWatchLocked {
+                        Button(SentinelSettingsCopy.watchChoose) {
+                            model.chooseWatchDirectory?()
+                        }
+                        .buttonStyle(
+                            SentinelButtonStyle(
+                                kind: .secondary,
+                                compact: true
+                            )
                         )
-                    )
-                    .disabled(model.isWatchLocked)
-                    .accessibilityIdentifier("settings-watch-choose")
+                        .accessibilityIdentifier("settings-watch-choose")
+                    }
                 }
                 Text(model.watchPathDisplay)
                     .font(SentinelTheme.Fonts.metadata)

@@ -132,12 +132,30 @@ enum CortexSentinelBarMain {
         if let footerText = board.footerText {
             print("  脚注：\(footerText)")
         }
+        printLoginItemDiagnostics()
         let archiveURL = paths.logsDirectory.appendingPathComponent("sentinel-history-hidden.json")
         do {
             try board.writeArchive(to: archiveURL)
             print("  隐藏归档：\(archiveURL.path)")
         } catch {
             print("  隐藏归档写入失败：\(error.localizedDescription)")
+        }
+    }
+
+    /// 只诊断，绝不调用 `SMAppService.register()`。
+    private static func printLoginItemDiagnostics() {
+        let details = LaunchdSupervisionProbe.collectFromCurrentProcess()
+        let status = SMAppServiceLoginItemRegistrar().status
+        let plan = LoginItemReconciler.plan(
+            signals: details.signals,
+            status: status
+        )
+        for line in LoginItemDiagnostics.dumpLines(
+            details: details,
+            loginItemStatus: status,
+            menuBarWouldRegister: plan.action == .register
+        ) {
+            print(line)
         }
     }
 

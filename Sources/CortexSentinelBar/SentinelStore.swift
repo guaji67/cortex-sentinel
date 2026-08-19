@@ -14,10 +14,12 @@ final class SentinelStore: ObservableObject {
     @Published private(set) var unclaimedTerminals: [UnclaimedTerminalEntry] = []
     @Published private(set) var isOfficialUsageRefreshing = false
     @Published private(set) var isOfficialUsageRefreshCoolingDown = false
+    @Published private(set) var loginItemPresentation: LoginItemPanelPresentation = .disabled
 
     let paths: SentinelPaths
 
     private let notifier = SentinelNotifier()
+    private let loginItemRegistrar: any LoginItemRegistrar
     private var statusTimer: Timer?
     private var aioTimer: Timer?
     private var inputStatusTimer: Timer?
@@ -35,8 +37,12 @@ final class SentinelStore: ObservableObject {
     private var pendingAIOUsageRefresh = false
     private var relayRecoveryCoordinator = RelayRecoveryProbeCoordinator()
 
-    init(paths: SentinelPaths = .discover()) {
+    init(
+        paths: SentinelPaths = .discover(),
+        loginItemRegistrar: any LoginItemRegistrar = SMAppServiceLoginItemRegistrar()
+    ) {
         self.paths = paths
+        self.loginItemRegistrar = loginItemRegistrar
     }
 
     deinit {
@@ -92,6 +98,7 @@ final class SentinelStore: ObservableObject {
             return
         }
         hasStarted = true
+        reconcileLoginItem()
         notifier.requestAuthorization()
         refreshAll()
 
@@ -141,6 +148,41 @@ final class SentinelStore: ObservableObject {
                 self?.runLogCleanup()
             }
         }
+    }
+
+    func enableLoginItem() {
+        guard loginItemPresentation.showsToggle else {
+            return
+        }
+        guard LoginItemRuntime.shouldReconcileOnLaunch() else {
+            return
+        }
+        let signals = LaunchdSupervisionProbe.collectFromCurrentProcess().signals
+        guard !signals.isLaunchdManaged else {
+            loginItemPresentation = .systemManaged
+            return
+        }
+        let plan = LoginItemReconcilePlan(presentation: .disabled, action: .register)
+        loginItemPresentation = LoginItemReconciler.apply(
+            plan: plan,
+            registrar: loginItemRegistrar
+        )
+    }
+
+    private func reconcileLoginItem() {
+        let details = LaunchdSupervisionProbe.collectFromCurrentProcess()
+        let plan = LoginItemReconciler.plan(
+            signals: details.signals,
+            status: loginItemRegistrar.status
+        )
+        guard LoginItemRuntime.shouldReconcileOnLaunch() else {
+            loginItemPresentation = plan.presentation
+            return
+        }
+        loginItemPresentation = LoginItemReconciler.apply(
+            plan: plan,
+            registrar: loginItemRegistrar
+        )
     }
 
     private func runLogCleanup() {

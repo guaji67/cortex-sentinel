@@ -232,6 +232,7 @@ enum LoginItemRuntime {
         "--cleanup-run",
         "--render-statusbar",
         "--render-settings-png",
+        "--render-panel-png",
         "--smoke-settings",
         "--open-settings",
     ]

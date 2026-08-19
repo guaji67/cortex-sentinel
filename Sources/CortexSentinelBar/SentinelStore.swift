@@ -35,6 +35,7 @@ final class SentinelStore: ObservableObject {
     private let environment: [String: String]
     private let notifier: SentinelNotifier
     private let loginItemRegistrar: any LoginItemRegistrar
+    private let lineRegistryCache: CodexLineRegistryCache
     private var statusTimer: Timer?
     private var aioTimer: Timer?
     private var inputStatusTimer: Timer?
@@ -56,7 +57,8 @@ final class SentinelStore: ObservableObject {
         paths: SentinelPaths? = nil,
         loginItemRegistrar: any LoginItemRegistrar = SMAppServiceLoginItemRegistrar(),
         defaults: UserDefaults = SentinelSettings.resolvedDefaults(),
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        lineRegistryCache: CodexLineRegistryCache = CodexLineRegistryCache()
     ) {
         self.defaults = defaults
         self.environment = environment
@@ -73,6 +75,7 @@ final class SentinelStore: ObservableObject {
         self.notifyOnTaskComplete = SentinelSettings.notifyOnTaskComplete(defaults: defaults)
         self.loginItemRegistrar = loginItemRegistrar
         self.notifier = SentinelNotifier()
+        self.lineRegistryCache = lineRegistryCache
     }
 
     deinit {
@@ -277,9 +280,10 @@ final class SentinelStore: ObservableObject {
     private func runLogCleanup() {
         let logsDirectory = paths.logsDirectory
         let registryURL = paths.lineRegistryURL
+        let registryCache = lineRegistryCache
         let cap = historyRetainCount
         Task.detached(priority: .utility) {
-            let registry = CodexLineRegistryReader.read(at: registryURL)
+            let registry = registryCache.read(at: registryURL)
             // 先按条数清状态文件，再跑体积清理：刚失去 status 的派工日志
             // 若已静默超时，同一轮就能被 LogCleaner 当成孤儿收掉。
             StatusFileCleaner.run(
@@ -294,31 +298,33 @@ final class SentinelStore: ObservableObject {
 
     func refreshAll() {
         let updatedLines = SentinelFileReader.readLines(in: paths.logsDirectory)
+        let registry = lineRegistryCache.read(at: paths.lineRegistryURL)
         apply(
             lines: updatedLines,
             aio: aio,
             otherCodexProcesses: readOtherCodexProcesses(excluding: updatedLines),
-            lineRegistry: CodexLineRegistryReader.read(at: paths.lineRegistryURL),
+            lineRegistry: registry,
             inputStatus: inputStatus
         )
         refreshAIO(force: true, includeUsage: false)
         refreshInputStatus(force: true)
         refreshOfficialUsage(reason: .startup)
         refreshChannelStatus()
-        refreshUnclaimed(lines: updatedLines, registry: CodexLineRegistryReader.read(at: paths.lineRegistryURL))
+        refreshUnclaimed(lines: updatedLines, registry: registry)
     }
 
     func refreshStatuses() {
         let updatedLines = SentinelFileReader.readLines(in: paths.logsDirectory)
+        let registry = lineRegistryCache.read(at: paths.lineRegistryURL)
         apply(
             lines: updatedLines,
             aio: aio,
             otherCodexProcesses: readOtherCodexProcesses(excluding: updatedLines),
-            lineRegistry: CodexLineRegistryReader.read(at: paths.lineRegistryURL),
+            lineRegistry: registry,
             inputStatus: inputStatus
         )
         refreshChannelStatus()
-        refreshUnclaimed(lines: updatedLines, registry: CodexLineRegistryReader.read(at: paths.lineRegistryURL))
+        refreshUnclaimed(lines: updatedLines, registry: registry)
     }
 
     private func refreshChannelStatus() {

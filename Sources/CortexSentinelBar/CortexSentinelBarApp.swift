@@ -197,6 +197,16 @@ enum CortexSentinelBarMain {
         print(
             "  活跃口径：本机 \(originCounts.local) · 外机 \(originCounts.remote) · 机器未知 \(originCounts.unknown)（通道行和标题只数本机）"
         )
+        let backgroundJobs = BackgroundJobsReader.read(at: paths.backgroundJobsHealthURL)
+        let backgroundPresentation = BackgroundJobsPresentation(snapshot: backgroundJobs)
+        print("后台任务：\(paths.backgroundJobsHealthURL.path)")
+        print("  \(backgroundPresentation.summaryText)")
+        for row in backgroundPresentation.problemRows {
+            print("    - \(row.name) · \(row.detail)")
+        }
+        for job in backgroundJobs.jobs {
+            print("    · \(job.name) [\(job.statusText)] \(job.intervalText) 上次跑：\(job.lastRunText)")
+        }
         let ack = SentinelFileReader.readTerminalAck(at: paths.lineTerminalAckURL)
         let unclaimed = UnclaimedTerminalAggregation.entries(lines: lines, registry: registry, ack: ack)
         print("未认领终态：\(unclaimed.count) 条")

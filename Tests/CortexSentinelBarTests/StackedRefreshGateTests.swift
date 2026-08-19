@@ -210,6 +210,7 @@ final class StackedRefreshGateTests: XCTestCase {
             defaults: defaults,
             environment: [
                 "CORTEX_SENTINEL_WATCH_DIR": root.path,
+                "CORTEX_DATA_ROOT": root.path,
                 "CORTEX_INPUT_STATUS_URL": "http://127.0.0.1:1/status",
                 "CORTEX_CODEX_AUTH_PATH": root.appendingPathComponent("missing-auth.json").path,
                 "CORTEX_AIO_DB_PATH": root.appendingPathComponent("missing-aio.db").path,

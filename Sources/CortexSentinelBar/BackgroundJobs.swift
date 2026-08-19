@@ -49,27 +49,45 @@ enum BackgroundJobPlistStatus: String, Equatable {
     case loaded
     case missing
     case unreadable
+    case unrecognized
 
     static let missingDisplayText = "配置不在了"
     static let unreadableDisplayText = "配置读不了"
+    static let unrecognizedDisplayText = "状态看不懂"
+    static let detailCharacterLimit = 40
+    static let detailEllipsis = "…"
 
-    /// 缺字段或空值按 loaded，老快照不能被判成坏的。
-    static func parse(_ rawValue: String?) -> BackgroundJobPlistStatus {
-        switch rawValue?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        {
-        case "missing":
-            return .missing
-        case "unreadable":
-            return .unreadable
-        default:
+    /// 缺字段按 loaded，保老快照。字段在但值不认识（含空串、JSON null）算有问题。
+    fileprivate static func parse(_ field: JSONStringField) -> BackgroundJobPlistStatus {
+        switch field {
+        case .absent:
             return .loaded
+        case let .present(rawValue):
+            switch rawValue?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            {
+            case "loaded":
+                return .loaded
+            case "missing":
+                return .missing
+            case "unreadable":
+                return .unreadable
+            default:
+                return .unrecognized
+            }
         }
     }
 
     var isProblem: Bool {
         self != .loaded
+    }
+
+    static func truncatedDetail(_ text: String) -> String {
+        if text.count <= detailCharacterLimit {
+            return text
+        }
+        return String(text.prefix(detailCharacterLimit)) + detailEllipsis
     }
 }
 
@@ -100,8 +118,10 @@ struct BackgroundJob: Identifiable, Equatable {
             }
             return [
                 BackgroundJobPlistStatus.unreadableDisplayText,
-                plistErrorDetail,
+                BackgroundJobPlistStatus.truncatedDetail(plistErrorDetail),
             ].joined(separator: " · ")
+        case .unrecognized:
+            return BackgroundJobPlistStatus.unrecognizedDisplayText
         case .loaded:
             break
         }
@@ -279,6 +299,11 @@ private struct BackgroundJobsPayload: Decodable {
     }
 }
 
+private enum JSONStringField: Equatable {
+    case absent
+    case present(String?)
+}
+
 private struct BackgroundJobPayload: Decodable {
     let label: String?
     let name: String?
@@ -289,7 +314,7 @@ private struct BackgroundJobPayload: Decodable {
     let statusText: String?
     let reason: String?
     let lastExitCode: Int?
-    let plistStatus: String?
+    let plistStatusField: JSONStringField
     let plistErrorDetail: String?
 
     enum CodingKeys: String, CodingKey {
@@ -304,6 +329,27 @@ private struct BackgroundJobPayload: Decodable {
         case lastExitCode = "last_exit_code"
         case plistStatus = "plist_status"
         case plistErrorDetail = "plist_error_detail"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        label = try container.decodeIfPresent(String.self, forKey: .label)
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+        intervalText = try container.decodeIfPresent(String.self, forKey: .intervalText)
+        lastRunAt = try container.decodeIfPresent(String.self, forKey: .lastRunAt)
+        lastRunText = try container.decodeIfPresent(String.self, forKey: .lastRunText)
+        status = try container.decodeIfPresent(String.self, forKey: .status)
+        statusText = try container.decodeIfPresent(String.self, forKey: .statusText)
+        reason = try container.decodeIfPresent(String.self, forKey: .reason)
+        lastExitCode = try container.decodeIfPresent(Int.self, forKey: .lastExitCode)
+        if container.contains(.plistStatus) {
+            plistStatusField = .present(
+                try container.decodeIfPresent(String.self, forKey: .plistStatus)
+            )
+        } else {
+            plistStatusField = .absent
+        }
+        plistErrorDetail = try container.decodeIfPresent(String.self, forKey: .plistErrorDetail)
     }
 }
 
@@ -350,7 +396,7 @@ enum BackgroundJobsReader {
             statusText: normalized(payload.statusText) ?? status.displayName,
             reason: normalized(payload.reason) ?? "",
             lastExitCode: payload.lastExitCode,
-            plistStatus: BackgroundJobPlistStatus.parse(payload.plistStatus),
+            plistStatus: BackgroundJobPlistStatus.parse(payload.plistStatusField),
             plistErrorDetail: normalized(payload.plistErrorDetail) ?? ""
         )
     }
@@ -534,40 +580,5 @@ struct BackgroundJobsSectionView: View {
             return SentinelTheme.Colors.secondaryForeground
         }
         return SentinelTheme.Colors.success
-    }
-}
-
-/// 这一步不能改 Theme.swift。下一条接线会把 Equatable 写进枚举声明，到时候删掉这个扩展。
-extension SentinelRowTone: Equatable {}
-
-extension SentinelPaths {
-    /// 后台任务健康快照。监视目录里有就用那份（测试/本机覆盖），否则退到数据根 health/。
-    /// 下一条接线会把这个方法挪进 SentinelFileReader.swift，到时候删掉这个扩展。
-    var backgroundJobsHealthURL: URL {
-        Self.backgroundJobsHealthURL(logsDirectory: logsDirectory)
-    }
-
-    static func backgroundJobsHealthURL(
-        logsDirectory: URL,
-        environment: [String: String] = ProcessInfo.processInfo.environment,
-        fileManager: FileManager = .default
-    ) -> URL {
-        if let configured = environment["CORTEX_BACKGROUND_JOBS_HEALTH_PATH"], !configured.isEmpty {
-            return URL(fileURLWithPath: configured)
-        }
-        let inLogs = logsDirectory.appendingPathComponent("background-jobs-health.json")
-        if fileManager.fileExists(atPath: inLogs.path) {
-            return inLogs
-        }
-        let dataRoot: URL
-        if let configured = environment["CORTEX_DATA_ROOT"], !configured.isEmpty {
-            dataRoot = URL(fileURLWithPath: configured, isDirectory: true)
-        } else {
-            dataRoot = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("CortexData", isDirectory: true)
-        }
-        return dataRoot
-            .appendingPathComponent("health", isDirectory: true)
-            .appendingPathComponent("background-jobs-health.json")
     }
 }

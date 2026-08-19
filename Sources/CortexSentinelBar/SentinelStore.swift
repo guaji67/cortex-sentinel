@@ -10,6 +10,7 @@ final class SentinelStore: ObservableObject {
     @Published private(set) var inputStatus: InputStatusSnapshot = .empty
     @Published private(set) var officialUsage: OfficialUsageSnapshot = .empty
     @Published private(set) var channelStatus: ChannelStatusSnapshot = .missing
+    @Published private(set) var backgroundJobs: BackgroundJobsSnapshot = .missing
     @Published private(set) var unclaimedTerminals: [UnclaimedTerminalEntry] = []
     @Published private(set) var isOfficialUsageRefreshing = false
     @Published private(set) var isOfficialUsageRefreshCoolingDown = false
@@ -390,6 +391,7 @@ final class SentinelStore: ObservableObject {
         let lineRegistryCache = lineRegistryCache
         let includeOtherProcesses = isPanelPresented
         let reader = otherCodexProcessReader
+        let env = environment
         let snapshot = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let loaded = StatusDiskReader.load(
@@ -400,7 +402,8 @@ final class SentinelStore: ObservableObject {
                     lineStatusCache: lineStatusCache,
                     lineRegistryCache: lineRegistryCache,
                     includeOtherProcesses: includeOtherProcesses,
-                    otherCodexProcessReader: reader
+                    otherCodexProcessReader: reader,
+                    environment: env
                 )
                 continuation.resume(returning: loaded)
             }
@@ -415,6 +418,9 @@ final class SentinelStore: ObservableObject {
         )
         if channelStatus != snapshot.channelStatus {
             channelStatus = snapshot.channelStatus
+        }
+        if backgroundJobs != snapshot.backgroundJobs {
+            backgroundJobs = snapshot.backgroundJobs
         }
         refreshUnclaimed(lines: snapshot.lines, registry: snapshot.registry, ack: snapshot.ack)
     }
@@ -783,6 +789,7 @@ final class SentinelStore: ObservableObject {
         lineRegistry = lineRegistry
         inputStatus = inputStatus
         channelStatus = channelStatus
+        backgroundJobs = backgroundJobs
         unclaimedTerminals = unclaimedTerminals
         officialUsage = officialUsage
     }

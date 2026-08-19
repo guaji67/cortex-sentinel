@@ -91,6 +91,33 @@ final class AIOUsageClientTests: XCTestCase {
         )
     }
 
+    func testFetchSequentialFollowsGivenOrderAndWaitsHalfSecondBetweenRows() async throws {
+        let loader = RecordingUsageLoader(data: try fixtureData(named: "usage-metered"))
+        let sleeper = RecordingSleeper()
+        let statuses = await AIOUsageClient(
+            requestLoader: loader,
+            sleep: { await sleeper.sleep($0) }
+        ).fetchSequential(
+            targets: [
+                makeTarget(id: 3, enabled: true),
+                makeTarget(id: 1, enabled: true),
+                makeTarget(id: 2, enabled: false),
+            ]
+        )
+
+        XCTAssertEqual(statuses.count, 3)
+        XCTAssertEqual(
+            loader.recordedURLs,
+            [
+                "https://provider-3.fixture.test/v1/usage",
+                "https://provider-1.fixture.test/v1/usage",
+                "https://provider-2.fixture.test/v1/usage",
+            ]
+        )
+        XCTAssertEqual(sleeper.intervals, [0.5, 0.5])
+        XCTAssertEqual(AIOConstants.sequentialUsageInterval, 0.5)
+    }
+
     func testOfficialUsageDecodesWeeklyWindowFromCurrentGatewaySchema() throws {
         let data = Data(
             """
@@ -178,5 +205,20 @@ private final class RecordingUsageLoader: AIOUsageRequestLoading, @unchecked Sen
             headerFields: nil
         )!
         return (data, response)
+    }
+}
+
+private final class RecordingSleeper: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [TimeInterval] = []
+
+    var intervals: [TimeInterval] {
+        lock.withLock { recorded }
+    }
+
+    func sleep(_ interval: TimeInterval) async {
+        lock.withLock {
+            recorded.append(interval)
+        }
     }
 }

@@ -430,11 +430,16 @@ extension URLSession: AIOUsageRequestLoading {}
 
 struct AIOUsageClient: Sendable {
     private let requestLoader: any AIOUsageRequestLoading
+    private let sleep: @Sendable (TimeInterval) async -> Void
 
     init(
-        requestLoader: any AIOUsageRequestLoading = URLSession.shared
+        requestLoader: any AIOUsageRequestLoading = URLSession.shared,
+        sleep: @escaping @Sendable (TimeInterval) async -> Void = {
+            try? await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000))
+        }
     ) {
         self.requestLoader = requestLoader
+        self.sleep = sleep
     }
 
     func fetchAll(
@@ -454,6 +459,27 @@ struct AIOUsageClient: Sendable {
             }
             return results
         }
+    }
+
+    /// 按传入顺序逐条刷，两条之间间隔 `interval`。第一条立刻开始，最后一条刷完不再多睡。
+    func fetchSequential(
+        targets: [AIOUsageTarget],
+        interval: TimeInterval = AIOConstants.sequentialUsageInterval,
+        onStart: (@Sendable (Int64) async -> Void)? = nil
+    ) async -> [Int64: AIOUsageStatus] {
+        var results: [Int64: AIOUsageStatus] = [:]
+        for (index, target) in targets.enumerated() {
+            if index > 0 {
+                await sleep(interval)
+            }
+            await onStart?(target.id)
+            results[target.id] = await fetch(target: target)
+        }
+        return results
+    }
+
+    func pause(_ interval: TimeInterval) async {
+        await sleep(interval)
     }
 
     func fetch(target: AIOUsageTarget) async -> AIOUsageStatus {

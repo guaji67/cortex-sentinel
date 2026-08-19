@@ -194,6 +194,37 @@ final class OfficialUsageTests: XCTestCase {
         XCTAssertEqual(OfficialUsageConstants.manualRefreshThrottle, 5)
     }
 
+    func testPanelOpenRefreshUsesThirtySecondFreshnessGate() {
+        let lastAttemptAt = Date(timeIntervalSince1970: 1_000)
+
+        XCTAssertFalse(
+            OfficialUsageRefreshPolicy.shouldStart(
+                reason: .panelOpen,
+                lastAttemptAt: lastAttemptAt,
+                isInFlight: false,
+                now: lastAttemptAt.addingTimeInterval(29)
+            )
+        )
+        XCTAssertTrue(
+            OfficialUsageRefreshPolicy.shouldStart(
+                reason: .panelOpen,
+                lastAttemptAt: lastAttemptAt,
+                isInFlight: false,
+                now: lastAttemptAt.addingTimeInterval(31)
+            )
+        )
+        XCTAssertFalse(
+            OfficialUsageRefreshPolicy.shouldStart(
+                reason: .panelOpen,
+                lastAttemptAt: lastAttemptAt,
+                isInFlight: true,
+                now: lastAttemptAt.addingTimeInterval(31)
+            )
+        )
+        XCTAssertEqual(AIOConstants.panelOpenFreshnessInterval, 30)
+        XCTAssertEqual(OfficialUsageConstants.automaticRefreshInterval, 600)
+    }
+
     func testAuthReaderRejectsMissingAccessToken() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CortexSentinel-auth-\(UUID().uuidString)", isDirectory: true)

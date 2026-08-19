@@ -36,7 +36,7 @@ final class SentinelStore: ObservableObject {
     private let loginItemRegistrar: any LoginItemRegistrar
     private let lineRegistryCache: CodexLineRegistryCache
     private let lineStatusCache: LineStatusFileCache
-    private let otherCodexProcessReader: (Set<Int>) -> [OtherCodexProcess]
+    private let otherCodexProcessReader: @Sendable (Set<Int>) -> [OtherCodexProcess]
     private let now: @Sendable () -> Date
     private let aioUsageClient: AIOUsageClient
     private var statusTimer: Timer?
@@ -52,10 +52,17 @@ final class SentinelStore: ObservableObject {
     private var lastDisabledAIOUsageRefreshAt: Date?
     private var lastInputStatusRefreshAt: Date?
     private var lastOfficialUsageAttemptAt: Date?
+    private var lastPanelOpenFullRefreshAt: Date?
     private var hasStarted = false
     private var isPanelPresented = false
     private var pendingAIOUsageRefresh = false
     private var relayRecoveryCoordinator = RelayRecoveryProbeCoordinator()
+    private(set) var statusDiskRefreshCountForTests = 0
+    private(set) var aioUsageRefreshCountForTests = 0
+    private(set) var inputStatusRefreshCountForTests = 0
+    private(set) var officialUsageRefreshCountForTests = 0
+    private(set) var lastStatusDiskReadWasOnMainThreadForTests = false
+    private(set) var scheduledStatusTimerInterval: TimeInterval = 0
 
     init(
         paths: SentinelPaths? = nil,
@@ -64,7 +71,7 @@ final class SentinelStore: ObservableObject {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         lineRegistryCache: CodexLineRegistryCache = CodexLineRegistryCache(),
         lineStatusCache: LineStatusFileCache = LineStatusFileCache(),
-        otherCodexProcessReader: @escaping (Set<Int>) -> [OtherCodexProcess] = {
+        otherCodexProcessReader: @escaping @Sendable (Set<Int>) -> [OtherCodexProcess] = {
             OtherCodexProcessReader.read(excluding: $0)
         },
         now: @escaping @Sendable () -> Date = { Date() },
@@ -109,6 +116,9 @@ final class SentinelStore: ObservableObject {
         }
         settingsModel.applyHistoryRetainCount = { [weak self] value in
             self?.setHistoryRetainCount(value)
+        }
+        settingsModel.applyRefreshIntervals = { [weak self] in
+            self?.rescheduleStatusTimer()
         }
         settingsModel.chooseWatchDirectory = { [weak self] in
             self?.chooseWatchDirectory()
@@ -170,16 +180,11 @@ final class SentinelStore: ObservableObject {
         hasStarted = true
         reconcileLoginItem()
         notifier.requestAuthorization()
-        refreshAll()
-
-        statusTimer = Timer.scheduledTimer(
-            withTimeInterval: AIOConstants.statusRefreshInterval,
-            repeats: true
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.refreshStatuses()
-            }
+        Task { @MainActor [weak self] in
+            await self?.refreshAll()
         }
+
+        scheduleStatusTimer()
         aioTimer = Timer.scheduledTimer(
             withTimeInterval: AIOConstants.aioRefreshInterval,
             repeats: true
@@ -188,7 +193,7 @@ final class SentinelStore: ObservableObject {
                 guard let self else {
                     return
                 }
-                self.refreshAIO(force: false, includeUsage: self.isPanelPresented)
+                await self.refreshAIO(force: false, includeUsage: self.isPanelPresented)
             }
         }
         inputStatusTimer = Timer.scheduledTimer(
@@ -196,7 +201,7 @@ final class SentinelStore: ObservableObject {
             repeats: true
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.refreshInputStatus(force: false)
+                await self?.refreshInputStatus(force: false)
             }
         }
         officialUsageTimer = Timer.scheduledTimer(
@@ -268,7 +273,7 @@ final class SentinelStore: ObservableObject {
         applyResolvedPaths()
         settingsModel.watchPath = paths.logsDirectory.path
         settingsModel.isWatchLocked = isWatchDirectoryLocked
-        refreshAll()
+        Task { await self.refreshAll() }
         runLogCleanup()
     }
 
@@ -322,6 +327,33 @@ final class SentinelStore: ObservableObject {
         )
     }
 
+    func statusPollInterval() -> TimeInterval {
+        isPanelPresented
+            ? SentinelSettings.panelOpenRefreshInterval(defaults: defaults).rawValue
+            : SentinelSettings.panelClosedRefreshInterval(defaults: defaults).rawValue
+    }
+
+    private func rescheduleStatusTimer() {
+        scheduleStatusTimer()
+    }
+
+    private func scheduleStatusTimer() {
+        guard hasStarted else {
+            return
+        }
+        statusTimer?.invalidate()
+        let interval = statusPollInterval()
+        scheduledStatusTimerInterval = interval
+        statusTimer = Timer.scheduledTimer(
+            withTimeInterval: interval,
+            repeats: true
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                await self?.refreshStatuses()
+            }
+        }
+    }
+
     private func runLogCleanup() {
         let logsDirectory = paths.logsDirectory
         let registryURL = paths.lineRegistryURL
@@ -341,52 +373,57 @@ final class SentinelStore: ObservableObject {
         }
     }
 
-    func refreshAll() {
-        let updatedLines = SentinelFileReader.readLines(
-            in: paths.logsDirectory,
-            cache: lineStatusCache
-        )
-        let registry = lineRegistryCache.read(at: paths.lineRegistryURL)
-        apply(
-            lines: updatedLines,
-            aio: aio,
-            otherCodexProcesses: otherCodexProcessesForCurrentPanel(excluding: updatedLines),
-            lineRegistry: registry,
-            inputStatus: inputStatus
-        )
-        refreshAIO(force: true, includeUsage: false)
-        refreshInputStatus(force: true)
+    func refreshAll() async {
+        await refreshStatuses()
+        await refreshAIO(force: true, includeUsage: false)
+        await refreshInputStatus(force: true)
         refreshOfficialUsage(reason: .startup)
-        refreshChannelStatus()
-        refreshUnclaimed(lines: updatedLines, registry: registry)
     }
 
-    func refreshStatuses() {
-        let updatedLines = SentinelFileReader.readLines(
-            in: paths.logsDirectory,
-            cache: lineStatusCache
-        )
-        let registry = lineRegistryCache.read(at: paths.lineRegistryURL)
+    func refreshStatuses() async {
+        statusDiskRefreshCountForTests += 1
+        let logsDirectory = paths.logsDirectory
+        let registryURL = paths.lineRegistryURL
+        let channelStatusURL = paths.channelStatusURL
+        let ackURL = paths.lineTerminalAckURL
+        let lineStatusCache = lineStatusCache
+        let lineRegistryCache = lineRegistryCache
+        let includeOtherProcesses = isPanelPresented
+        let reader = otherCodexProcessReader
+        let snapshot = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let loaded = StatusDiskReader.load(
+                    logsDirectory: logsDirectory,
+                    registryURL: registryURL,
+                    channelStatusURL: channelStatusURL,
+                    ackURL: ackURL,
+                    lineStatusCache: lineStatusCache,
+                    lineRegistryCache: lineRegistryCache,
+                    includeOtherProcesses: includeOtherProcesses,
+                    otherCodexProcessReader: reader
+                )
+                continuation.resume(returning: loaded)
+            }
+        }
+        lastStatusDiskReadWasOnMainThreadForTests = snapshot.readOnMainThread
         apply(
-            lines: updatedLines,
+            lines: snapshot.lines,
             aio: aio,
-            otherCodexProcesses: otherCodexProcessesForCurrentPanel(excluding: updatedLines),
-            lineRegistry: registry,
+            otherCodexProcesses: snapshot.otherCodexProcesses ?? otherCodexProcesses,
+            lineRegistry: snapshot.registry,
             inputStatus: inputStatus
         )
-        refreshChannelStatus()
-        refreshUnclaimed(lines: updatedLines, registry: registry)
-    }
-
-    private func refreshChannelStatus() {
-        let next = SentinelFileReader.readChannelStatus(at: paths.channelStatusURL)
-        if channelStatus != next {
-            channelStatus = next
+        if channelStatus != snapshot.channelStatus {
+            channelStatus = snapshot.channelStatus
         }
+        refreshUnclaimed(lines: snapshot.lines, registry: snapshot.registry, ack: snapshot.ack)
     }
 
-    private func refreshUnclaimed(lines: [LineStatus], registry: CodexLineRegistry) {
-        let ack = SentinelFileReader.readTerminalAck(at: paths.lineTerminalAckURL)
+    private func refreshUnclaimed(
+        lines: [LineStatus],
+        registry: CodexLineRegistry,
+        ack: TerminalAckLedger
+    ) {
         let next = UnclaimedTerminalAggregation.entries(
             lines: lines,
             registry: registry,
@@ -398,41 +435,63 @@ final class SentinelStore: ObservableObject {
     }
 
     func refreshRelays() {
-        refreshAIO(force: true, includeUsage: true)
+        Task { await refreshAIO(force: true, includeUsage: true) }
     }
 
-    func setPanelPresented(_ presented: Bool) {
+    func setPanelPresented(_ presented: Bool) async {
         guard isPanelPresented != presented else {
             return
         }
         isPanelPresented = presented
+        rescheduleStatusTimer()
         guard presented else {
             return
         }
-        refreshOfficialUsage(reason: .panelOpen)
-        refreshAIO(force: true, includeUsage: true, sequential: true)
-        refreshInputStatus(force: true)
-        let processes = readOtherCodexProcesses(excluding: lines)
-        if otherCodexProcesses != processes {
-            otherCodexProcesses = processes
+        await refreshOnPanelOpenIfNeeded()
+    }
+
+    private func refreshOnPanelOpenIfNeeded() async {
+        let timestamp = now()
+        let interval = SentinelSettings.balanceRecheckInterval(defaults: defaults).rawValue
+        guard PanelBalanceRefreshPolicy.shouldRefresh(
+            lastRefreshAt: lastPanelOpenFullRefreshAt,
+            now: timestamp,
+            interval: interval
+        ) else {
+            return
         }
+        lastPanelOpenFullRefreshAt = timestamp
+        await refreshStatuses()
+        await refreshAIO(force: true, includeUsage: true, bypassMinimumInterval: true)
+        await refreshInputStatus(force: true, bypassMinimumInterval: true)
+        refreshOfficialUsage(reason: .panelOpen, bypassMinimumInterval: true)
     }
 
     func refreshOfficialUsageManually() {
         refreshOfficialUsage(reason: .manual)
     }
 
-    private func refreshOfficialUsage(reason: OfficialUsageRefreshReason) {
+    private func refreshOfficialUsage(
+        reason: OfficialUsageRefreshReason,
+        bypassMinimumInterval: Bool = false
+    ) {
         let timestamp = self.now()
-        guard OfficialUsageRefreshPolicy.shouldStart(
-            reason: reason,
-            lastAttemptAt: lastOfficialUsageAttemptAt,
-            isInFlight: isOfficialUsageRefreshing,
-            now: timestamp
-        ) else {
+        if isOfficialUsageRefreshing {
             return
         }
+        if !bypassMinimumInterval {
+            guard OfficialUsageRefreshPolicy.shouldStart(
+                reason: reason,
+                lastAttemptAt: lastOfficialUsageAttemptAt,
+                isInFlight: isOfficialUsageRefreshing,
+                now: timestamp,
+                panelOpenInterval: SentinelSettings.balanceRecheckInterval(defaults: defaults).rawValue
+            ) else {
+                return
+            }
+        }
 
+        officialUsageRefreshCountForTests += 1
         isOfficialUsageRefreshing = true
         lastOfficialUsageAttemptAt = timestamp
         if reason == .manual {
@@ -478,7 +537,11 @@ final class SentinelStore: ObservableObject {
         }
     }
 
-    func refreshAIO(force: Bool, includeUsage: Bool, sequential: Bool = false) {
+    func refreshAIO(
+        force: Bool,
+        includeUsage: Bool,
+        bypassMinimumInterval: Bool = false
+    ) async {
         let timestamp = self.now()
         if aioRefreshInFlight {
             if includeUsage && !aioRefreshIncludesUsage {
@@ -487,16 +550,11 @@ final class SentinelStore: ObservableObject {
             return
         }
         let relevantLastRefreshAt = includeUsage ? lastAIOUsageRefreshAt : lastAIORefreshAt
-        if let relevantLastRefreshAt {
+        if !bypassMinimumInterval, let relevantLastRefreshAt {
             let elapsed = timestamp.timeIntervalSince(relevantLastRefreshAt)
-            let minimumInterval: TimeInterval
-            if sequential {
-                minimumInterval = AIOConstants.panelOpenFreshnessInterval
-            } else if force {
-                minimumInterval = AIOConstants.manualRefreshThrottle
-            } else {
-                minimumInterval = AIOConstants.aioRefreshInterval
-            }
+            let minimumInterval = force
+                ? AIOConstants.manualRefreshThrottle
+                : AIOConstants.aioRefreshInterval
             if elapsed < minimumInterval {
                 return
             }
@@ -507,6 +565,7 @@ final class SentinelStore: ObservableObject {
         lastAIORefreshAt = timestamp
         if includeUsage {
             lastAIOUsageRefreshAt = timestamp
+            aioUsageRefreshCountForTests += 1
         }
         let includeDisabledUsage = includeUsage
             && AIOUsageRefreshPolicy.shouldRefreshDisabledUsage(
@@ -521,79 +580,60 @@ final class SentinelStore: ObservableObject {
         )
         let usageClient = aioUsageClient
 
-        Task { @MainActor [weak self] in
-            let base = await Task.detached {
-                AIODataReader.read(
-                    databaseURL: databaseURL,
-                    manifestURL: manifestURL,
-                    configURL: configURL
-                )
-            }.value
-
-            guard let self else {
-                return
-            }
-
-            let attemptedDisabledUsage: Bool
-            let snapshot: AIOSnapshot
-            if base.sourceState != .available {
-                snapshot = base
-                attemptedDisabledUsage = false
-            } else if !includeUsage {
-                snapshot = base.replacingUsage(cachedUsage)
-                attemptedDisabledUsage = false
-            } else {
-                let usageTargets = await Task.detached {
-                    AIODataReader.readUsageTargets(databaseURL: databaseURL)
-                }.value
-                attemptedDisabledUsage = includeDisabledUsage
-                    && base.providers.contains {
-                        !$0.enabled && !$0.isOfficialOAuthProvider
-                    }
-                if sequential {
-                    snapshot = await self.refreshUsageSequentially(
-                        base: base,
-                        cachedUsage: cachedUsage,
-                        targets: usageTargets,
-                        includeDisabled: includeDisabledUsage,
-                        client: usageClient
-                    )
-                } else {
-                    let freshUsage = await usageClient.fetchAll(
-                        targets: usageTargets,
-                        includeDisabled: includeDisabledUsage
-                    )
-                    let mergedUsage = AIOUsageRefreshPolicy.merge(
-                        cached: cachedUsage,
-                        fresh: freshUsage,
-                        providers: base.providers
-                    )
-                    snapshot = base.replacingUsage(mergedUsage)
-                }
-            }
-
-            self.aioRefreshInFlight = false
-            self.aioRefreshIncludesUsage = false
-            if attemptedDisabledUsage {
-                self.lastDisabledAIOUsageRefreshAt = timestamp
-            }
-            self.apply(
-                lines: self.lines,
-                aio: snapshot,
-                otherCodexProcesses: self.otherCodexProcesses,
-                lineRegistry: self.lineRegistry,
-                inputStatus: self.inputStatus
+        let base = await Task.detached {
+            AIODataReader.read(
+                databaseURL: databaseURL,
+                manifestURL: manifestURL,
+                configURL: configURL
             )
-            if self.pendingAIOUsageRefresh {
-                self.pendingAIOUsageRefresh = false
-                if self.isPanelPresented {
-                    self.refreshAIO(force: true, includeUsage: true, sequential: true)
+        }.value
+
+        let attemptedDisabledUsage: Bool
+        let snapshot: AIOSnapshot
+        if base.sourceState != .available {
+            snapshot = base
+            attemptedDisabledUsage = false
+        } else if !includeUsage {
+            snapshot = base.replacingUsage(cachedUsage)
+            attemptedDisabledUsage = false
+        } else {
+            let usageTargets = await Task.detached {
+                AIODataReader.readUsageTargets(databaseURL: databaseURL)
+            }.value
+            attemptedDisabledUsage = includeDisabledUsage
+                && base.providers.contains {
+                    !$0.enabled && !$0.isOfficialOAuthProvider
                 }
+            snapshot = await refreshUsageConcurrently(
+                base: base,
+                cachedUsage: cachedUsage,
+                targets: usageTargets,
+                includeDisabled: includeDisabledUsage,
+                client: usageClient
+            )
+        }
+
+        aioRefreshInFlight = false
+        aioRefreshIncludesUsage = false
+        if attemptedDisabledUsage {
+            lastDisabledAIOUsageRefreshAt = timestamp
+        }
+        apply(
+            lines: lines,
+            aio: snapshot,
+            otherCodexProcesses: otherCodexProcesses,
+            lineRegistry: lineRegistry,
+            inputStatus: inputStatus
+        )
+        if pendingAIOUsageRefresh {
+            pendingAIOUsageRefresh = false
+            if isPanelPresented {
+                await refreshAIO(force: true, includeUsage: true)
             }
         }
     }
 
-    private func refreshUsageSequentially(
+    private func refreshUsageConcurrently(
         base: AIOSnapshot,
         cachedUsage: [Int64: AIOUsageStatus],
         targets: [AIOUsageTarget],
@@ -606,42 +646,48 @@ final class SentinelStore: ObservableObject {
             includeDisabled: includeDisabled
         )
         var cached = cachedUsage
-        for (index, target) in ordered.enumerated() {
-            if index > 0 {
-                await client.pause(AIOConstants.sequentialUsageInterval)
-            }
-            var loading = cached
+        var loading = cached
+        for target in ordered {
             loading[target.id] = .loading
-            apply(
-                lines: lines,
-                aio: base.replacingUsage(loading),
-                otherCodexProcesses: otherCodexProcesses,
-                lineRegistry: lineRegistry,
-                inputStatus: inputStatus
-            )
-            let status = await client.fetch(target: target)
-            cached = AIOUsageRefreshPolicy.merge(
-                cached: cached,
-                fresh: [target.id: status],
-                providers: base.providers
-            )
-            apply(
-                lines: lines,
-                aio: base.replacingUsage(cached),
-                otherCodexProcesses: otherCodexProcesses,
-                lineRegistry: lineRegistry,
-                inputStatus: inputStatus
-            )
+        }
+        apply(
+            lines: lines,
+            aio: base.replacingUsage(loading),
+            otherCodexProcesses: otherCodexProcesses,
+            lineRegistry: lineRegistry,
+            inputStatus: inputStatus
+        )
+
+        await withTaskGroup(of: (Int64, AIOUsageStatus).self) { group in
+            for target in ordered {
+                group.addTask {
+                    (target.id, await client.fetch(target: target))
+                }
+            }
+            for await (providerID, status) in group {
+                cached = AIOUsageRefreshPolicy.merge(
+                    cached: cached,
+                    fresh: [providerID: status],
+                    providers: base.providers
+                )
+                apply(
+                    lines: lines,
+                    aio: base.replacingUsage(cached),
+                    otherCodexProcesses: otherCodexProcesses,
+                    lineRegistry: lineRegistry,
+                    inputStatus: inputStatus
+                )
+            }
         }
         return base.replacingUsage(cached)
     }
 
-    private func refreshInputStatus(force: Bool) {
+    private func refreshInputStatus(force: Bool, bypassMinimumInterval: Bool = false) async {
         let timestamp = self.now()
         if inputStatusRefreshInFlight {
             return
         }
-        if let lastInputStatusRefreshAt {
+        if !bypassMinimumInterval, let lastInputStatusRefreshAt {
             let elapsed = timestamp.timeIntervalSince(lastInputStatusRefreshAt)
             let minimumInterval = force
                 ? AIOConstants.manualRefreshThrottle
@@ -655,37 +701,33 @@ final class SentinelStore: ObservableObject {
 
         inputStatusRefreshInFlight = true
         lastInputStatusRefreshAt = timestamp
+        inputStatusRefreshCountForTests += 1
         let client = InputStatusClient(endpoint: paths.inputStatusURL)
 
-        Task { @MainActor [weak self] in
-            let result: Result<InputStatusSnapshot, InputStatusClientError>
-            do {
-                result = .success(try await client.fetch())
-            } catch let error as InputStatusClientError {
-                result = .failure(error)
-            } catch {
-                result = .failure(.network)
-            }
-
-            guard let self else {
-                return
-            }
-            self.inputStatusRefreshInFlight = false
-            let snapshot: InputStatusSnapshot
-            switch result {
-            case let .success(value):
-                snapshot = value
-            case let .failure(error):
-                snapshot = self.inputStatus.preservingData(withError: error.userMessage)
-            }
-            self.apply(
-                lines: self.lines,
-                aio: self.aio,
-                otherCodexProcesses: self.otherCodexProcesses,
-                lineRegistry: self.lineRegistry,
-                inputStatus: snapshot
-            )
+        let result: Result<InputStatusSnapshot, InputStatusClientError>
+        do {
+            result = .success(try await client.fetch())
+        } catch let error as InputStatusClientError {
+            result = .failure(error)
+        } catch {
+            result = .failure(.network)
         }
+
+        inputStatusRefreshInFlight = false
+        let snapshot: InputStatusSnapshot
+        switch result {
+        case let .success(value):
+            snapshot = value
+        case let .failure(error):
+            snapshot = inputStatus.preservingData(withError: error.userMessage)
+        }
+        apply(
+            lines: lines,
+            aio: aio,
+            otherCodexProcesses: otherCodexProcesses,
+            lineRegistry: lineRegistry,
+            inputStatus: snapshot
+        )
     }
 
     func openLogsDirectory() {
@@ -743,18 +785,6 @@ final class SentinelStore: ObservableObject {
         channelStatus = channelStatus
         unclaimedTerminals = unclaimedTerminals
         officialUsage = officialUsage
-    }
-
-    private func otherCodexProcessesForCurrentPanel(excluding lines: [LineStatus]) -> [OtherCodexProcess] {
-        guard isPanelPresented else {
-            return otherCodexProcesses
-        }
-        return readOtherCodexProcesses(excluding: lines)
-    }
-
-    private func readOtherCodexProcesses(excluding lines: [LineStatus]) -> [OtherCodexProcess] {
-        let managedProcessIDs = Set(lines.compactMap(\.processID))
-        return otherCodexProcessReader(managedProcessIDs)
     }
 }
 

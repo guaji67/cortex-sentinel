@@ -22,6 +22,21 @@ enum SentinelSettingsCopy {
     static let historyUnit = "条"
     static let historyHint = "超出的旧记录会自动清掉，正在跑的任务不会被清。"
 
+    static let refreshGroupTitle = "刷新"
+    static let panelOpenRefreshTitle = "面板开着时"
+    static let panelOpenRefreshHint = "你正看着的时候查得勤一点。"
+    static let panelClosedRefreshTitle = "面板关着时"
+    static let panelClosedRefreshHint = "没人看的时候慢一点，省电。"
+    static let balanceRecheckTitle = "余额隔多久重查"
+    static let balanceRecheckHint = "点开面板时，上次查过超过这个时间就重查，没超过就用现成的。"
+    static let refreshInterval2s = "2 秒"
+    static let refreshInterval5s = "5 秒"
+    static let refreshInterval10s = "10 秒"
+    static let refreshInterval30s = "30 秒"
+    static let refreshInterval1m = "1 分钟"
+    static let refreshInterval2m = "2 分钟"
+    static let refreshInterval5m = "5 分钟"
+
     static let startupGroupTitle = "启动与文件夹"
     static let loginItemTitle = "开机时自动启动"
     static let loginItemManagedHint = "由系统服务托管，改这里没用"
@@ -85,6 +100,73 @@ enum SentinelSettingsKey {
     static let notifyCategoryChannelAlert = "\(bundlePrefix).notifyCategoryChannelAlert"
     static let notifyCadence = "\(bundlePrefix).notifyCadence"
     static let watchDirectory = "\(bundlePrefix).watchDirectory"
+    static let panelOpenRefreshInterval = "\(bundlePrefix).panelOpenRefreshInterval"
+    static let panelClosedRefreshInterval = "\(bundlePrefix).panelClosedRefreshInterval"
+    static let balanceRecheckInterval = "\(bundlePrefix).balanceRecheckInterval"
+}
+
+protocol SentinelRefreshIntervalOption: Hashable, RawRepresentable where RawValue == TimeInterval {
+    var title: String { get }
+}
+
+enum SentinelPanelOpenRefreshInterval: TimeInterval, CaseIterable, Equatable, SentinelRefreshIntervalOption {
+    case twoSeconds = 2
+    case fiveSeconds = 5
+    case tenSeconds = 10
+
+    static let `default` = SentinelPanelOpenRefreshInterval.fiveSeconds
+
+    var title: String {
+        switch self {
+        case .twoSeconds:
+            return SentinelSettingsCopy.refreshInterval2s
+        case .fiveSeconds:
+            return SentinelSettingsCopy.refreshInterval5s
+        case .tenSeconds:
+            return SentinelSettingsCopy.refreshInterval10s
+        }
+    }
+}
+
+enum SentinelPanelClosedRefreshInterval: TimeInterval, CaseIterable, Equatable, SentinelRefreshIntervalOption {
+    case thirtySeconds = 30
+    case oneMinute = 60
+    case twoMinutes = 120
+    case fiveMinutes = 300
+
+    static let `default` = SentinelPanelClosedRefreshInterval.twoMinutes
+
+    var title: String {
+        switch self {
+        case .thirtySeconds:
+            return SentinelSettingsCopy.refreshInterval30s
+        case .oneMinute:
+            return SentinelSettingsCopy.refreshInterval1m
+        case .twoMinutes:
+            return SentinelSettingsCopy.refreshInterval2m
+        case .fiveMinutes:
+            return SentinelSettingsCopy.refreshInterval5m
+        }
+    }
+}
+
+enum SentinelBalanceRecheckInterval: TimeInterval, CaseIterable, Equatable, SentinelRefreshIntervalOption {
+    case thirtySeconds = 30
+    case oneMinute = 60
+    case fiveMinutes = 300
+
+    static let `default` = SentinelBalanceRecheckInterval.thirtySeconds
+
+    var title: String {
+        switch self {
+        case .thirtySeconds:
+            return SentinelSettingsCopy.refreshInterval30s
+        case .oneMinute:
+            return SentinelSettingsCopy.refreshInterval1m
+        case .fiveMinutes:
+            return SentinelSettingsCopy.refreshInterval5m
+        }
+    }
 }
 
 enum SentinelNotifyCadence: String, CaseIterable, Equatable {
@@ -392,6 +474,70 @@ enum SentinelSettings {
         defaults.set(url.path, forKey: SentinelSettingsKey.watchDirectory)
     }
 
+    static func panelOpenRefreshInterval(defaults: UserDefaults) -> SentinelPanelOpenRefreshInterval {
+        interval(
+            forKey: SentinelSettingsKey.panelOpenRefreshInterval,
+            defaults: defaults,
+            fallback: .default
+        )
+    }
+
+    static func setPanelOpenRefreshInterval(
+        _ value: SentinelPanelOpenRefreshInterval,
+        defaults: UserDefaults
+    ) {
+        defaults.set(value.rawValue, forKey: SentinelSettingsKey.panelOpenRefreshInterval)
+    }
+
+    static func panelClosedRefreshInterval(defaults: UserDefaults) -> SentinelPanelClosedRefreshInterval {
+        interval(
+            forKey: SentinelSettingsKey.panelClosedRefreshInterval,
+            defaults: defaults,
+            fallback: .default
+        )
+    }
+
+    static func setPanelClosedRefreshInterval(
+        _ value: SentinelPanelClosedRefreshInterval,
+        defaults: UserDefaults
+    ) {
+        defaults.set(value.rawValue, forKey: SentinelSettingsKey.panelClosedRefreshInterval)
+    }
+
+    static func balanceRecheckInterval(defaults: UserDefaults) -> SentinelBalanceRecheckInterval {
+        interval(
+            forKey: SentinelSettingsKey.balanceRecheckInterval,
+            defaults: defaults,
+            fallback: .default
+        )
+    }
+
+    static func setBalanceRecheckInterval(
+        _ value: SentinelBalanceRecheckInterval,
+        defaults: UserDefaults
+    ) {
+        defaults.set(value.rawValue, forKey: SentinelSettingsKey.balanceRecheckInterval)
+    }
+
+    private static func interval<Value: RawRepresentable>(
+        forKey key: String,
+        defaults: UserDefaults,
+        fallback: Value
+    ) -> Value where Value.RawValue == TimeInterval {
+        guard let stored = defaults.object(forKey: key) else {
+            return fallback
+        }
+        let raw: TimeInterval
+        if let number = stored as? NSNumber {
+            raw = number.doubleValue
+        } else if let value = stored as? TimeInterval {
+            raw = value
+        } else {
+            return fallback
+        }
+        return Value(rawValue: raw) ?? fallback
+    }
+
     static func dumpLines(
         defaults: UserDefaults,
         environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -415,6 +561,9 @@ enum SentinelSettings {
             "  \(SentinelSettingsCopy.notifyTaskProblemTitle)：\(notify.taskProblemEnabled ? "开" : "关")",
             "  \(SentinelSettingsCopy.notifyChannelTitle)：\(notify.channelAlertEnabled ? "开" : "关")",
             "  \(SentinelSettingsCopy.notifyCadenceTitle)：\(notify.cadence.title)",
+            "  \(SentinelSettingsCopy.panelOpenRefreshTitle)：\(panelOpenRefreshInterval(defaults: defaults).title)",
+            "  \(SentinelSettingsCopy.panelClosedRefreshTitle)：\(panelClosedRefreshInterval(defaults: defaults).title)",
+            "  \(SentinelSettingsCopy.balanceRecheckTitle)：\(balanceRecheckInterval(defaults: defaults).title)",
             "  \(SentinelSettingsCopy.historyTitle)：\(historyRetainCount(defaults: defaults)) \(SentinelSettingsCopy.historyUnit)（默认 \(StatusFileRetention.defaultCap)，常量 StatusFileRetention.defaultCap）",
             "  \(SentinelSettingsCopy.loginItemTitle)：\(loginState)\(loginLock)",
             "  \(SentinelSettingsCopy.watchTitle)：\(watch.logsDirectory.path)\(watchLock)",

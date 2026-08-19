@@ -48,24 +48,47 @@ final class PanelBalanceRefreshTests: XCTestCase {
         }
     }
 
-    func testOpeningPanelFetchesUsageInDisplayOrder() async throws {
-        let loader = RecordingUsageLoader(data: try fixtureData())
-        let sleeper = RecordingSleeper()
-        let store = makeStore(loader: loader, sleeper: sleeper)
-
-        store.setPanelPresented(true)
-        try await waitUntil { loader.recordedIDs.count == 3 }
-
-        XCTAssertEqual(loader.recordedIDs, [3, 1, 2])
-        XCTAssertEqual(sleeper.intervals, [0.5, 0.5])
-        XCTAssertEqual(
-            store.aio.providers.map(\.id),
-            [3, 1, 2]
+    func testOpeningPanelFetchesUsageConcurrentlyAndAppliesEachResult() async throws {
+        let loader = ConcurrentUsageLoader(
+            data: try fixtureData(),
+            expectedStarts: 3,
+            finishDelayNanoseconds: [
+                3: 20_000_000,
+                1: 80_000_000,
+                2: 160_000_000,
+            ]
         )
+        let store = makeStore(loader: loader)
+        var successCounts: [Int] = []
+        let cancellable = store.$aio.sink { snapshot in
+            let count = snapshot.providers.filter {
+                if case .success = $0.usage { return true }
+                return false
+            }.count
+            if successCounts.last != count {
+                successCounts.append(count)
+            }
+        }
+
+        await store.setPanelPresented(true)
+
+        XCTAssertEqual(Set(loader.recordedIDs), [1, 2, 3])
+        XCTAssertEqual(loader.peakInFlight, 3)
+        XCTAssertTrue(
+            successCounts.contains(1),
+            "每个结果应单独上屏，不能攒齐才从 0 跳到 3。实际：\(successCounts)"
+        )
+        XCTAssertTrue(
+            successCounts.contains(2),
+            "每个结果应单独上屏。实际：\(successCounts)"
+        )
+        XCTAssertEqual(successCounts.last, 3)
+        XCTAssertEqual(store.aio.providers.map(\.id), [3, 1, 2])
         XCTAssertEqual(
             store.aio.providers.compactMap { $0.usage.usage?.remaining },
             [7.25, 7.25, 7.25]
         )
+        withExtendedLifetime(cancellable) {}
     }
 
     func testPanelOpenSkipsRefreshAt29SecondsAndRefreshesAt31() async throws {
@@ -73,54 +96,87 @@ final class PanelBalanceRefreshTests: XCTestCase {
         let clock = TestClock(now: Date(timeIntervalSince1970: 1_000))
         let store = makeStore(loader: loader, clock: clock)
 
-        store.setPanelPresented(true)
-        try await waitUntil { loader.recordedIDs.count == 3 }
-        XCTAssertEqual(loader.recordedIDs, [3, 1, 2])
+        await store.setPanelPresented(true)
+        XCTAssertEqual(Set(loader.recordedIDs), [1, 2, 3])
 
-        store.setPanelPresented(false)
+        await store.setPanelPresented(false)
         clock.now = clock.now.addingTimeInterval(29)
-        store.setPanelPresented(true)
-        try await Task.sleep(nanoseconds: 80_000_000)
+        await store.setPanelPresented(true)
         XCTAssertEqual(loader.recordedIDs.count, 3)
 
-        store.setPanelPresented(false)
+        await store.setPanelPresented(false)
         clock.now = Date(timeIntervalSince1970: 1_000).addingTimeInterval(31)
-        store.setPanelPresented(true)
-        try await waitUntil { loader.recordedIDs.count == 5 }
-        XCTAssertEqual(loader.recordedIDs, [3, 1, 2, 3, 1])
+        await store.setPanelPresented(true)
+        XCTAssertEqual(loader.recordedIDs.count, 5)
+        XCTAssertEqual(Set(loader.recordedIDs.prefix(3)), [1, 2, 3])
+        XCTAssertEqual(Set(loader.recordedIDs.suffix(2)), [1, 3])
+    }
+
+    func testPanelOpenAfterThirtySecondsRefreshesEverySurface() async throws {
+        let loader = RecordingUsageLoader(data: try fixtureData())
+        let clock = TestClock(now: Date(timeIntervalSince1970: 1_000))
+        let store = makeStore(loader: loader, clock: clock)
+
+        await store.setPanelPresented(true)
+        let afterFirst = (
+            status: store.statusDiskRefreshCountForTests,
+            usage: store.aioUsageRefreshCountForTests,
+            input: store.inputStatusRefreshCountForTests,
+            official: store.officialUsageRefreshCountForTests
+        )
+        XCTAssertGreaterThanOrEqual(afterFirst.status, 1)
+        XCTAssertEqual(afterFirst.usage, 1)
+        XCTAssertEqual(afterFirst.input, 1)
+        XCTAssertEqual(afterFirst.official, 1)
+
+        await store.setPanelPresented(false)
+        clock.now = clock.now.addingTimeInterval(29)
+        await store.setPanelPresented(true)
+        XCTAssertEqual(store.statusDiskRefreshCountForTests, afterFirst.status)
+        XCTAssertEqual(store.aioUsageRefreshCountForTests, afterFirst.usage)
+        XCTAssertEqual(store.inputStatusRefreshCountForTests, afterFirst.input)
+        XCTAssertEqual(store.officialUsageRefreshCountForTests, afterFirst.official)
+
+        await store.setPanelPresented(false)
+        clock.now = Date(timeIntervalSince1970: 1_000).addingTimeInterval(31)
+        await store.setPanelPresented(true)
+        XCTAssertEqual(store.statusDiskRefreshCountForTests, afterFirst.status + 1)
+        XCTAssertEqual(store.aioUsageRefreshCountForTests, afterFirst.usage + 1)
+        XCTAssertEqual(store.inputStatusRefreshCountForTests, afterFirst.input + 1)
+        XCTAssertEqual(store.officialUsageRefreshCountForTests, afterFirst.official + 1)
+        XCTAssertFalse(store.lastStatusDiskReadWasOnMainThreadForTests)
     }
 
     func testRapidPanelToggleDoesNotStackDuplicateRequests() async throws {
         let loader = RecordingUsageLoader(
             data: try fixtureData(),
-            delayNanoseconds: 120_000_000
+            delayNanoseconds: 40_000_000
         )
         let store = makeStore(loader: loader)
 
-        store.setPanelPresented(true)
-        store.setPanelPresented(false)
-        store.setPanelPresented(true)
-        store.setPanelPresented(false)
-        store.setPanelPresented(true)
-        try await waitUntil(timeout: 3) { loader.recordedIDs.count >= 3 }
-        try await Task.sleep(nanoseconds: 400_000_000)
+        await store.setPanelPresented(true)
+        await store.setPanelPresented(false)
+        await store.setPanelPresented(true)
+        await store.setPanelPresented(false)
+        await store.setPanelPresented(true)
 
-        XCTAssertEqual(loader.recordedIDs, [3, 1, 2])
+        XCTAssertEqual(Set(loader.recordedIDs), [1, 2, 3])
+        XCTAssertEqual(loader.recordedIDs.count, 3)
     }
 
     func testIdleSixtySecondsWithoutOpeningPanelDoesNotFetchUsageOrPublish() async throws {
         let loader = RecordingUsageLoader(data: try fixtureData())
         let store = makeStore(loader: loader)
 
-        store.refreshAIO(force: true, includeUsage: false)
+        await store.refreshAIO(force: true, includeUsage: false)
         try await waitUntil { store.aio.sourceState == .available }
         XCTAssertEqual(loader.recordedIDs, [])
 
-        let count = countPublications(store) {
+        let count = await countPublications(store) {
             for _ in 0..<12 {
-                store.refreshStatuses()
+                await store.refreshStatuses()
             }
-            store.refreshAIO(force: false, includeUsage: false)
+            await store.refreshAIO(force: false, includeUsage: false)
         }
         XCTAssertEqual(count, 0)
         XCTAssertEqual(loader.recordedIDs, [])
@@ -144,7 +200,7 @@ final class PanelBalanceRefreshTests: XCTestCase {
             }
         }
 
-        store.setPanelPresented(true)
+        await store.setPanelPresented(true)
         try await waitUntil { loader.recordedIDs.count == 3 }
         try await waitUntil {
             store.aio.providers.allSatisfy {
@@ -157,8 +213,7 @@ final class PanelBalanceRefreshTests: XCTestCase {
     }
 
     private func makeStore(
-        loader: RecordingUsageLoader,
-        sleeper: RecordingSleeper = RecordingSleeper(),
+        loader: AIOUsageRequestLoading,
         clock: TestClock = TestClock(now: Date(timeIntervalSince1970: 1_000))
     ) -> SentinelStore {
         SentinelStore(
@@ -172,17 +227,14 @@ final class PanelBalanceRefreshTests: XCTestCase {
             ],
             otherCodexProcessReader: { _ in [] },
             now: { clock.now },
-            aioUsageClient: AIOUsageClient(
-                requestLoader: loader,
-                sleep: { await sleeper.sleep($0) }
-            )
+            aioUsageClient: AIOUsageClient(requestLoader: loader)
         )
     }
 
-    private func countPublications(_ store: SentinelStore, _ body: () -> Void) -> Int {
+    private func countPublications(_ store: SentinelStore, _ body: () async -> Void) async -> Int {
         var count = 0
         let cancellable = store.objectWillChange.sink { count += 1 }
-        body()
+        await body()
         withExtendedLifetime(cancellable) {}
         return count
     }
@@ -302,18 +354,68 @@ private final class TestClock: @unchecked Sendable {
     }
 }
 
-private final class RecordingSleeper: @unchecked Sendable {
+private final class ConcurrentUsageLoader: AIOUsageRequestLoading, @unchecked Sendable {
+    private let data: Data
+    private let expectedStarts: Int
+    private let finishDelayNanoseconds: [Int64: UInt64]
     private let lock = NSLock()
-    private var recorded: [TimeInterval] = []
+    private var requests: [URLRequest] = []
+    private var started = 0
+    private var inFlight = 0
+    private var peak = 0
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
 
-    var intervals: [TimeInterval] {
-        lock.withLock { recorded }
+    var recordedIDs: [Int64] {
+        lock.withLock {
+            requests.compactMap { RecordingUsageLoader.providerID(from: $0.url) }
+        }
     }
 
-    func sleep(_ interval: TimeInterval) async {
-        lock.withLock {
-            recorded.append(interval)
+    var peakInFlight: Int {
+        lock.withLock { peak }
+    }
+
+    init(
+        data: Data,
+        expectedStarts: Int,
+        finishDelayNanoseconds: [Int64: UInt64]
+    ) {
+        self.data = data
+        self.expectedStarts = expectedStarts
+        self.finishDelayNanoseconds = finishDelayNanoseconds
+    }
+
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            lock.lock()
+            requests.append(request)
+            started += 1
+            inFlight += 1
+            peak = max(peak, inFlight)
+            if started >= expectedStarts {
+                let waiters = startWaiters + [continuation]
+                startWaiters.removeAll()
+                lock.unlock()
+                waiters.forEach { $0.resume() }
+            } else {
+                startWaiters.append(continuation)
+                lock.unlock()
+            }
         }
+        let id = RecordingUsageLoader.providerID(from: request.url)
+        if let id, let delay = finishDelayNanoseconds[id], delay > 0 {
+            try await Task.sleep(nanoseconds: delay)
+        }
+        lock.withLock {
+            inFlight -= 1
+        }
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: nil
+        )!
+        return (data, response)
     }
 }
 
@@ -352,7 +454,7 @@ private final class RecordingUsageLoader: AIOUsageRequestLoading, @unchecked Sen
         return (data, response)
     }
 
-    private static func providerID(from url: URL?) -> Int64? {
+    static func providerID(from url: URL?) -> Int64? {
         guard let path = url?.path else {
             return nil
         }

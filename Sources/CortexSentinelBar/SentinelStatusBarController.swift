@@ -168,10 +168,10 @@ final class SentinelStatusBarController: NSObject, NSPopoverDelegate {
     }
 
     func popoverWillShow(_ notification: Notification) {
-        store.setPanelPresented(true)
+        Task { await store.setPanelPresented(true) }
     }
 
     func popoverDidClose(_ notification: Notification) {
-        store.setPanelPresented(false)
+        Task { await store.setPanelPresented(false) }
     }
 }

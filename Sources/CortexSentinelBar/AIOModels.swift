@@ -489,13 +489,13 @@ enum AIOConstants {
     static let lowBalanceThreshold = 10.0
     static let quotaWarningThreshold = 80.0
     static let statusRefreshInterval: TimeInterval = 5
+    /// 面板关着时的默认状态轮询。设置里可改。
+    static let statusRefreshIntervalWhenClosed: TimeInterval = 120
     static let aioRefreshInterval: TimeInterval = 60
     static let disabledUsageRefreshInterval: TimeInterval = 10 * 60
     static let manualRefreshThrottle: TimeInterval = 10
     /// 打开面板触发的余额刷新：距上次刷新不到 30 秒就用现成的数。
     static let panelOpenFreshnessInterval: TimeInterval = 30
-    /// 逐条刷新时，两条之间的间隔。
-    static let sequentialUsageInterval: TimeInterval = 0.5
     static let usageTimeout: TimeInterval = 15
     static let databaseBusyRetryCount = 3
     static let databaseBusyRetryDelay: TimeInterval = 0.15
@@ -503,11 +503,15 @@ enum AIOConstants {
 }
 
 enum PanelBalanceRefreshPolicy {
-    static func shouldRefresh(lastRefreshAt: Date?, now: Date) -> Bool {
+    static func shouldRefresh(
+        lastRefreshAt: Date?,
+        now: Date,
+        interval: TimeInterval = AIOConstants.panelOpenFreshnessInterval
+    ) -> Bool {
         guard let lastRefreshAt else {
             return true
         }
-        return now.timeIntervalSince(lastRefreshAt) >= AIOConstants.panelOpenFreshnessInterval
+        return now.timeIntervalSince(lastRefreshAt) >= interval
     }
 
     /// 按面板从上到下的显示顺序排出要刷的中转余额，不按内部 id。

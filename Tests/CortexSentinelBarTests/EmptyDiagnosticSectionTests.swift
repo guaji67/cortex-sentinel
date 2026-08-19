@@ -158,8 +158,8 @@ final class EmptyDiagnosticSectionTests: XCTestCase {
     }
 
     @MainActor
-    func testBusyFixtureHasNoInputSamplesAndNoAIOSoBothCollapse() throws {
-        let session = try PanelPreviewFactory.makeSession(fixture: .busy)
+    func testBusyFixtureHasNoInputSamplesAndNoAIOSoBothCollapse() async throws {
+        let session = try await PanelPreviewFactory.makeSession(fixture: .busy)
         defer { session.tearDown() }
 
         let probes = session.store.inputStatus.displayProbes()

@@ -314,7 +314,8 @@ enum OfficialUsageRefreshPolicy {
         reason: OfficialUsageRefreshReason,
         lastAttemptAt: Date?,
         isInFlight: Bool,
-        now: Date
+        now: Date,
+        panelOpenInterval: TimeInterval = AIOConstants.panelOpenFreshnessInterval
     ) -> Bool {
         guard !isInFlight else {
             return false
@@ -327,7 +328,7 @@ enum OfficialUsageRefreshPolicy {
         case .automatic:
             minimumInterval = OfficialUsageConstants.automaticRefreshInterval
         case .panelOpen:
-            minimumInterval = AIOConstants.panelOpenFreshnessInterval
+            minimumInterval = panelOpenInterval
         case .startup, .manual:
             minimumInterval = OfficialUsageConstants.manualRefreshThrottle
         }

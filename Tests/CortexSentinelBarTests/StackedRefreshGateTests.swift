@@ -38,19 +38,19 @@ final class StackedRefreshGateTests: XCTestCase {
     }
 
     // 1. 监视目录空 → 界面 0 条
-    func testEmptyWatchDirectoryShowsZeroLines() {
+    func testEmptyWatchDirectoryShowsZeroLines() async {
         let store = makeStore()
-        store.refreshStatuses()
+        await store.refreshStatuses()
         XCTAssertEqual(store.lines, [])
         XCTAssertEqual(store.otherCodexProcesses, [])
     }
 
     // 2. 写入「运行中」→ 界面必须看到这条，状态是运行中
-    func testWritingRunningStatusAppearsAsRunning() throws {
+    func testWritingRunningStatusAppearsAsRunning() async throws {
         let box = NotificationBox()
         let store = makeStore(notificationBox: box)
         try writeStatus(.running)
-        store.refreshStatuses()
+        await store.refreshStatuses()
         XCTAssertEqual(store.lines.count, 1)
         XCTAssertEqual(store.lines.first?.slug, "alpha")
         XCTAssertEqual(store.lines.first?.state, .running)
@@ -60,13 +60,13 @@ final class StackedRefreshGateTests: XCTestCase {
     // 3. 原地改写同一文件为「已完成」，文件名不变、字节数也不变
     //    → 界面必须变成已完成，通知必须发出一条。
     //    第 3 道闸按 mtime+size 判断；只看 size 就会漏掉这次。
-    func testSameSizeInPlaceRewriteToDoneUpdatesPanelAndNotifies() throws {
+    func testSameSizeInPlaceRewriteToDoneUpdatesPanelAndNotifies() async throws {
         let box = NotificationBox()
         let cache = LineStatusFileCache()
         let store = makeStore(cache: cache, notificationBox: box)
 
         try writeStatus(.running)
-        store.refreshStatuses()
+        await store.refreshStatuses()
         XCTAssertEqual(store.lines.first?.state, .running)
         XCTAssertEqual(box.drafts, [])
         let before = try fileIdentity()
@@ -80,7 +80,7 @@ final class StackedRefreshGateTests: XCTestCase {
             "本步要求 running / done 两份 JSON 字节数相同，否则测不到「只看 size 会漏」"
         )
 
-        store.refreshStatuses()
+        await store.refreshStatuses()
 
         let identityNote = """
         复现条件：文件名 \(statusFileName)，size \(before.size) → \(after.size)，\
@@ -99,19 +99,19 @@ final class StackedRefreshGateTests: XCTestCase {
     }
 
     // 4. 面板关着走 2 和 3 → 通知照发，且不拉进程表
-    func testClosedPanelStillNotifiesOnSameSizeInPlaceRewrite() throws {
+    func testClosedPanelStillNotifiesOnSameSizeInPlaceRewrite() async throws {
         let box = NotificationBox()
         let reader = RecordingProcessReader()
         let store = makeStore(processReader: reader, notificationBox: box)
 
         try writeStatus(.running)
-        store.refreshStatuses()
+        await store.refreshStatuses()
         XCTAssertEqual(store.lines.first?.state, .running)
         XCTAssertEqual(box.drafts, [])
         XCTAssertEqual(reader.callCount, 0)
 
         try rewriteStatusInPlace(.done)
-        store.refreshStatuses()
+        await store.refreshStatuses()
         XCTAssertEqual(store.lines.first?.state, .done)
         XCTAssertEqual(box.drafts.count, 1)
         XCTAssertEqual(box.drafts.first?.category, .taskComplete)
@@ -119,33 +119,33 @@ final class StackedRefreshGateTests: XCTestCase {
     }
 
     // 5. 面板从关到开 → 进程表那一栏要能拿到数据
-    func testOpeningPanelLoadsProcessTable() {
+    func testOpeningPanelLoadsProcessTable() async {
         let reader = RecordingProcessReader()
         reader.processes = [
             OtherCodexProcess(processID: 4242, worktreeName: "wt-alpha", elapsed: "00:12"),
         ]
         let store = makeStore(processReader: reader)
-        store.refreshStatuses()
+        await store.refreshStatuses()
         XCTAssertEqual(reader.callCount, 0)
         XCTAssertEqual(store.otherCodexProcesses, [])
 
-        store.setPanelPresented(true)
+        await store.setPanelPresented(true)
         XCTAssertEqual(reader.callCount, 1)
         XCTAssertEqual(store.otherCodexProcesses, reader.processes)
     }
 
     // 6. 连续两轮完全没有任何文件变化 → 界面刷新信号 0，通知也是 0
-    func testTwoUnchangedRefreshesEmitZeroPublicationsAndZeroNotifications() throws {
+    func testTwoUnchangedRefreshesEmitZeroPublicationsAndZeroNotifications() async throws {
         let box = NotificationBox()
         let store = makeStore(notificationBox: box)
         try writeStatus(.running)
-        store.refreshStatuses()
+        await store.refreshStatuses()
         XCTAssertEqual(store.lines.first?.state, .running)
         XCTAssertEqual(box.drafts, [])
 
-        let publications = countPublications(store) {
-            store.refreshStatuses()
-            store.refreshStatuses()
+        let publications = await countPublications(store) {
+            await store.refreshStatuses()
+            await store.refreshStatuses()
         }
         XCTAssertEqual(publications, 0)
         XCTAssertEqual(box.drafts, [])
@@ -153,7 +153,7 @@ final class StackedRefreshGateTests: XCTestCase {
     }
 
     /// 一条任务从空目录到跑完，三道闸叠着走完，每一步都跟上。
-    func testOneTaskLifecycleThroughStackedGates() throws {
+    func testOneTaskLifecycleThroughStackedGates() async throws {
         let box = NotificationBox()
         let reader = RecordingProcessReader()
         reader.processes = [
@@ -166,12 +166,12 @@ final class StackedRefreshGateTests: XCTestCase {
             notificationBox: box
         )
 
-        store.refreshStatuses()
+        await store.refreshStatuses()
         XCTAssertEqual(store.lines, [])
         XCTAssertEqual(reader.callCount, 0)
 
         try writeStatus(.running)
-        store.refreshStatuses()
+        await store.refreshStatuses()
         XCTAssertEqual(store.lines.first?.state, .running)
         XCTAssertEqual(box.drafts, [])
         XCTAssertEqual(reader.callCount, 0)
@@ -180,20 +180,21 @@ final class StackedRefreshGateTests: XCTestCase {
         try rewriteStatusInPlace(.done)
         let after = try fileIdentity()
         XCTAssertEqual(before.size, after.size)
-        store.refreshStatuses()
+        await store.refreshStatuses()
         XCTAssertEqual(store.lines.first?.state, .done)
         XCTAssertEqual(box.drafts.count, 1)
         XCTAssertEqual(box.drafts.first?.category, .taskComplete)
         XCTAssertEqual(reader.callCount, 0)
 
-        store.setPanelPresented(true)
+        await store.setPanelPresented(true)
         XCTAssertEqual(reader.callCount, 1)
         XCTAssertEqual(store.otherCodexProcesses, reader.processes)
+        try await Task.sleep(nanoseconds: 80_000_000)
 
         let idleDraftCount = box.drafts.count
-        let idlePublications = countPublications(store) {
-            store.refreshStatuses()
-            store.refreshStatuses()
+        let idlePublications = await countPublications(store) {
+            await store.refreshStatuses()
+            await store.refreshStatuses()
         }
         XCTAssertEqual(idlePublications, 0)
         XCTAssertEqual(box.drafts.count, idleDraftCount)
@@ -210,6 +211,8 @@ final class StackedRefreshGateTests: XCTestCase {
             environment: [
                 "CORTEX_SENTINEL_WATCH_DIR": root.path,
                 "CORTEX_INPUT_STATUS_URL": "http://127.0.0.1:1/status",
+                "CORTEX_CODEX_AUTH_PATH": root.appendingPathComponent("missing-auth.json").path,
+                "CORTEX_AIO_DB_PATH": root.appendingPathComponent("missing-aio.db").path,
             ],
             lineStatusCache: cache,
             otherCodexProcessReader: { ids in processReader.read(ids) },
@@ -219,10 +222,10 @@ final class StackedRefreshGateTests: XCTestCase {
         )
     }
 
-    private func countPublications(_ store: SentinelStore, _ body: () -> Void) -> Int {
+    private func countPublications(_ store: SentinelStore, _ body: () async -> Void) async -> Int {
         var count = 0
         let cancellable = store.objectWillChange.sink { count += 1 }
-        body()
+        await body()
         withExtendedLifetime(cancellable) {}
         return count
     }

@@ -14,7 +14,10 @@ final class LogCleanerTests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
-        try? fileManager.removeItem(at: root)
+        if let root {
+            try? fileManager.removeItem(at: inspectURL())
+            try? fileManager.removeItem(at: root)
+        }
     }
 
     // MARK: 白名单识别
@@ -89,6 +92,8 @@ final class LogCleanerTests: XCTestCase {
         XCTAssertTrue(plan.protectedActive.contains("kimi-zeta.log"))
         XCTAssertFalse(deleteNames.contains("web-dev.log"))
         XCTAssertFalse(deleteNames.contains("codex-line-registry.json"))
+        XCTAssertEqual(plan.whitelistFileCount, 8)
+        XCTAssertEqual(plan.totalBytesBefore, 800)
     }
 
     func testDryRunDeletesNothingButExecuteDoes() throws {
@@ -98,16 +103,32 @@ final class LogCleanerTests: XCTestCase {
         writeStatus("beta", state: "running")
         writeLog("web-dev.log", bytes: 100, ageSeconds: 7200)
 
+        let inspect = inspectURL()
         // 干跑：只出计划，磁盘不变
-        let dryPlan = LogCleaner.run(logsDirectory: root, dryRun: true, now: now, fileManager: fileManager)
+        let dryPlan = LogCleaner.run(
+            logsDirectory: root,
+            dryRun: true,
+            now: now,
+            fileManager: fileManager,
+            inspectLogURL: inspect
+        )
         XCTAssertEqual(dryPlan.candidates.map(\.fileName), ["codex-alpha.log"])
         XCTAssertTrue(fileManager.fileExists(atPath: root.appendingPathComponent("codex-alpha.log").path))
 
         // 实跑：删终态，留活线与白名单外
-        LogCleaner.run(logsDirectory: root, dryRun: false, now: now, fileManager: fileManager)
+        LogCleaner.run(
+            logsDirectory: root,
+            dryRun: false,
+            now: now,
+            fileManager: fileManager,
+            inspectLogURL: inspect
+        )
         XCTAssertFalse(fileManager.fileExists(atPath: root.appendingPathComponent("codex-alpha.log").path))
         XCTAssertTrue(fileManager.fileExists(atPath: root.appendingPathComponent("codex-beta.log").path))
         XCTAssertTrue(fileManager.fileExists(atPath: root.appendingPathComponent("web-dev.log").path))
+        XCTAssertFalse(
+            fileManager.fileExists(atPath: root.appendingPathComponent("log-cleanup-inspect.log").path)
+        )
     }
 
     // MARK: 超上限清理
@@ -137,7 +158,103 @@ final class LogCleanerTests: XCTestCase {
         XCTAssertTrue(calm.candidates.isEmpty)
     }
 
+    func testLargeTreeDoesNotForceTransientCleanupWhenWhitelistIsSmall() throws {
+        writeLog("web-dev.log", bytes: 50_000, ageSeconds: 7200)
+        writeLog("dev-server.log", bytes: 50_000, ageSeconds: 7200)
+        let shots = root.appendingPathComponent("shots", isDirectory: true)
+        try fileManager.createDirectory(at: shots, withIntermediateDirectories: true)
+        fileManager.createFile(
+            atPath: shots.appendingPathComponent("panel.png").path,
+            contents: Data(repeating: 0x63, count: 80_000)
+        )
+
+        writeLog("codex-old.log", bytes: 200, ageSeconds: 7200)
+        writeStatus("old", state: "retrying")
+        writeLog("codex-live.log", bytes: 200, ageSeconds: 5)
+        writeStatus("live", state: "running")
+
+        // 整棵树 ~180KB，白名单只有 400B。阈值 1000B 若按整树量就会去补删过渡态。
+        let plan = LogCleaner.plan(
+            logsDirectory: root,
+            now: now,
+            maxTotalBytes: 1000,
+            targetBytes: 500,
+            fileManager: fileManager
+        )
+        XCTAssertEqual(plan.totalBytesBefore, 400)
+        XCTAssertEqual(plan.whitelistFileCount, 2)
+        XCTAssertTrue(plan.candidates.isEmpty)
+        XCTAssertTrue(plan.protectedActive.contains("codex-live.log"))
+    }
+
+    func testInspectRecordHasRequiredFieldsAndOneLinePerRun() throws {
+        writeLog("codex-alpha.log", bytes: 100, ageSeconds: 7200)
+        writeStatus("alpha", state: "done")
+        let inspect = inspectURL()
+
+        LogCleaner.run(
+            logsDirectory: root,
+            dryRun: true,
+            now: now,
+            fileManager: fileManager,
+            inspectLogURL: inspect
+        )
+        let dryLines = try inspectLines(at: inspect)
+        XCTAssertEqual(dryLines.count, 1)
+        XCTAssertTrue(dryLines[0].contains("ts="))
+        XCTAssertTrue(dryLines[0].contains("scanned=1"))
+        XCTAssertTrue(dryLines[0].contains("deleted=0"))
+        XCTAssertTrue(dryLines[0].contains("reclaim_bytes=0"))
+        XCTAssertTrue(dryLines[0].contains("candidate_bytes=100"))
+        XCTAssertTrue(dryLines[0].hasPrefix("ts=\(LogCleaner.inspectTimestamp(now))"))
+        XCTAssertTrue(LogCleaner.inspectTimestamp(now).hasSuffix("+08:00"))
+
+        LogCleaner.run(
+            logsDirectory: root,
+            dryRun: false,
+            now: now,
+            fileManager: fileManager,
+            inspectLogURL: inspect
+        )
+        let realLines = try inspectLines(at: inspect)
+        XCTAssertEqual(realLines.count, 2)
+        XCTAssertTrue(realLines[1].contains("scanned=1"))
+        XCTAssertTrue(realLines[1].contains("deleted=1"))
+        XCTAssertTrue(realLines[1].contains("reclaim_bytes=100"))
+        XCTAssertTrue(realLines[1].contains("candidate_bytes=0"))
+        XCTAssertFalse(
+            fileManager.fileExists(atPath: root.appendingPathComponent("log-cleanup-inspect.log").path)
+        )
+    }
+
+    func testInspectLogTruncatesWhenOverMaxLines() throws {
+        let inspect = inspectURL()
+        let overflow = LogCleanupConstants.inspectLogMaxLines + 40
+        for _ in 0..<overflow {
+            LogCleaner.run(
+                logsDirectory: root,
+                dryRun: true,
+                now: now,
+                fileManager: fileManager,
+                inspectLogURL: inspect
+            )
+        }
+        let lines = try inspectLines(at: inspect)
+        XCTAssertEqual(lines.count, LogCleanupConstants.inspectLogMaxLines)
+    }
+
     // MARK: helpers
+
+    private func inspectURL() -> URL {
+        root.deletingLastPathComponent().appendingPathComponent(
+            "\(root.lastPathComponent).cleanup-inspect.log"
+        )
+    }
+
+    private func inspectLines(at url: URL) throws -> [String] {
+        let text = try String(contentsOf: url, encoding: .utf8)
+        return text.split(omittingEmptySubsequences: true, whereSeparator: \.isNewline).map(String.init)
+    }
 
     private func writeLog(_ name: String, bytes: Int, ageSeconds: TimeInterval) {
         let url = root.appendingPathComponent(name)

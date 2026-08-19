@@ -19,7 +19,8 @@ import Foundation
 ///   - state ∈ retrying/backoff/unknown → 非活线过渡态，正常保留，仅在超 500MB 上限时按旧到新清理
 ///   - 无 status 文件（含 kimi）→ 孤儿；但近 10 分钟内仍在写的按活线保护（防误删仍在跑、
 ///     只是没写 babysitter status 的 kimi 线，见记忆 kimi-cli-liveness），静默超 10 分钟才删
-///   - logs 总量 > 500MB 时，把上面「过渡态」候选按 mtime 从旧到新补删，直到 ≤ 400MB
+///   - 白名单候选集总量 > 500MB 时，把上面「过渡态」候选按 mtime 从旧到新补删，直到 ≤ 400MB。
+///     体积只统计白名单文件，不拿整棵 logs 树跟阈值比。
 enum LogCleanupConstants {
     static let maxTotalBytes: Int64 = 500 * 1024 * 1024
     static let targetBytes: Int64 = 400 * 1024 * 1024
@@ -27,6 +28,8 @@ enum LogCleanupConstants {
     static let orphanActiveGraceSeconds: TimeInterval = SentinelAggregation.activeStatusSeconds
     /// 自动清理巡检周期：启动时跑一次，之后每小时一次。
     static let sweepInterval: TimeInterval = 60 * 60
+    /// 巡检痕迹最多保留这么多行，超了丢最旧的。
+    static let inspectLogMaxLines = 200
 }
 
 enum LogCleanupReason: String, Equatable {
@@ -48,12 +51,19 @@ struct LogCleanupCandidate: Equatable {
 }
 
 struct LogCleanupPlan: Equatable {
+    /// 白名单候选集字节数，不是整棵 logs 树。
     let totalBytesBefore: Int64
+    let whitelistFileCount: Int
     let candidates: [LogCleanupCandidate]
     /// 被当作活线保护、明确不删的白名单文件名（供报告佐证「活线不动」）。
     let protectedActive: [String]
 
-    static let empty = LogCleanupPlan(totalBytesBefore: 0, candidates: [], protectedActive: [])
+    static let empty = LogCleanupPlan(
+        totalBytesBefore: 0,
+        whitelistFileCount: 0,
+        candidates: [],
+        protectedActive: []
+    )
 
     var reclaimBytes: Int64 {
         candidates.reduce(0) { $0 + $1.sizeBytes }
@@ -89,11 +99,12 @@ enum LogCleaner {
 
         let fileNames = entries.map { $0.lastPathComponent }
         let stateMap = statusStateMap(in: dir, fileNames: fileNames, fileManager: fileManager)
-        let totalBytesBefore = directorySize(dir, fileManager: fileManager)
 
         var phase1: [LogCleanupCandidate] = []
         var transient: [LogCleanupCandidate] = []
         var protectedActive: [String] = []
+        var whitelistBytes: Int64 = 0
+        var whitelistFileCount = 0
 
         for url in entries {
             let name = url.lastPathComponent
@@ -110,6 +121,8 @@ enum LogCleaner {
             }
             let size = Int64(values?.fileSize ?? 0)
             let modifiedAt = values?.contentModificationDate
+            whitelistBytes += size
+            whitelistFileCount += 1
 
             if let state = stateMap[slug] {
                 if state.isCleanupProtectedLive {
@@ -158,6 +171,7 @@ enum LogCleaner {
             }
         }
 
+        let totalBytesBefore = whitelistBytes
         var candidates = phase1
         var projected = totalBytesBefore - phase1.reduce(0) { $0 + $1.sizeBytes }
 
@@ -185,6 +199,7 @@ enum LogCleaner {
 
         return LogCleanupPlan(
             totalBytesBefore: totalBytesBefore,
+            whitelistFileCount: whitelistFileCount,
             candidates: candidates,
             protectedActive: protectedActive.sorted()
         )
@@ -210,6 +225,7 @@ enum LogCleaner {
     }
 
     /// 跑一轮：dryRun=true 仅返回计划、绝不删；false 才真正删除。
+    /// 无论干跑还是实跑，都在 `logs/` 外面写一行巡检痕迹。
     @discardableResult
     static func run(
         logsDirectory: URL,
@@ -217,7 +233,8 @@ enum LogCleaner {
         now: Date = Date(),
         maxTotalBytes: Int64 = LogCleanupConstants.maxTotalBytes,
         targetBytes: Int64 = LogCleanupConstants.targetBytes,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        inspectLogURL: URL? = nil
     ) -> LogCleanupPlan {
         let cleanupPlan = plan(
             logsDirectory: logsDirectory,
@@ -226,9 +243,26 @@ enum LogCleaner {
             targetBytes: targetBytes,
             fileManager: fileManager
         )
+        var deletedURLs: [URL] = []
         if !dryRun {
-            execute(cleanupPlan, fileManager: fileManager)
+            deletedURLs = execute(cleanupPlan, fileManager: fileManager)
         }
+        let deletedSet = Set(deletedURLs)
+        let reclaimBytes = cleanupPlan.candidates
+            .filter { deletedSet.contains($0.url) }
+            .reduce(Int64(0)) { $0 + $1.sizeBytes }
+        let inspectURL = inspectLogURL ?? defaultInspectLogURL(fileManager: fileManager)
+        appendInspectLine(
+            inspectLine(
+                at: now,
+                scanned: cleanupPlan.whitelistFileCount,
+                deleted: deletedURLs.count,
+                reclaimBytes: reclaimBytes,
+                candidateBytes: max(0, cleanupPlan.totalBytesBefore - reclaimBytes)
+            ),
+            to: inspectURL,
+            fileManager: fileManager
+        )
         return cleanupPlan
     }
 
@@ -290,6 +324,7 @@ enum LogCleaner {
         return map
     }
 
+    /// 整棵树体积，只给排查用。阈值判断走白名单候选集，不再读这个数。
     static func directorySize(_ dir: URL, fileManager: FileManager) -> Int64 {
         guard let enumerator = fileManager.enumerator(
             at: dir,
@@ -316,6 +351,55 @@ enum LogCleaner {
         return String(format: "%.1f MB", mb)
     }
 
+    /// 巡检痕迹不进被监视的 `logs/`，写到 Application Support。
+    static func defaultInspectLogURL(fileManager: FileManager = .default) -> URL {
+        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fileManager.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Application Support", isDirectory: true)
+        return base
+            .appendingPathComponent("CortexSentinel", isDirectory: true)
+            .appendingPathComponent("log-cleanup-inspect.log")
+    }
+
+    static func inspectTimestamp(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withColonSeparatorInTimeZone]
+        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        return formatter.string(from: date)
+    }
+
+    static func inspectLine(
+        at: Date,
+        scanned: Int,
+        deleted: Int,
+        reclaimBytes: Int64,
+        candidateBytes: Int64
+    ) -> String {
+        "ts=\(inspectTimestamp(at)) scanned=\(scanned) deleted=\(deleted) reclaim_bytes=\(reclaimBytes) candidate_bytes=\(candidateBytes)"
+    }
+
+    static func appendInspectLine(
+        _ line: String,
+        to url: URL,
+        maxLines: Int = LogCleanupConstants.inspectLogMaxLines,
+        fileManager: FileManager = .default
+    ) {
+        let directory = url.deletingLastPathComponent()
+        if !fileManager.fileExists(atPath: directory.path) {
+            try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        var lines: [String] = []
+        if let data = try? Data(contentsOf: url),
+           let text = String(data: data, encoding: .utf8) {
+            lines = text.split(omittingEmptySubsequences: true, whereSeparator: \.isNewline).map(String.init)
+        }
+        lines.append(line)
+        if lines.count > maxLines {
+            lines = Array(lines.suffix(maxLines))
+        }
+        try? (lines.joined(separator: "\n") + "\n").write(to: url, atomically: true, encoding: .utf8)
+    }
+
     private static func idleText(_ seconds: TimeInterval) -> String {
         if seconds >= 86_400 {
             return "\(Int(seconds / 86_400)) 天"
@@ -337,7 +421,8 @@ extension LogCleanupPlan {
         var lines: [String] = []
         lines.append(dryRun ? "== 日志清理 · 干跑（不删任何文件）==" : "== 日志清理 · 实跑 ==")
         lines.append(
-            "logs 总量：\(LogCleaner.formatBytes(totalBytesBefore))"
+            "白名单候选集：\(LogCleaner.formatBytes(totalBytesBefore))"
+                + " / \(whitelistFileCount) 个"
                 + " → 预计 \(LogCleaner.formatBytes(totalBytesAfter))"
                 + "（上限 500MB / 目标 400MB）"
         )

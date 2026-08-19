@@ -207,6 +207,7 @@ struct SentinelSettingsView: View {
     @ObservedObject var model: SentinelSettingsModel
     var bodyCounter: SentinelViewBodyCounter?
     var rendersOffscreen = false
+    var versionLine: String = SentinelAppVersion.displayLine()
     @State private var historyTextOverride: String?
     @State private var cadenceExpanded = false
 
@@ -222,6 +223,7 @@ struct SentinelSettingsView: View {
             settingsGroup(title: SentinelSettingsCopy.startupGroupTitle) {
                 startupGroup
             }
+            versionFooter
         }
         .padding(SentinelTheme.Spacing.sheet)
         .frame(width: SentinelTheme.Metrics.settingsWindowWidth, alignment: .leading)
@@ -482,6 +484,15 @@ struct SentinelSettingsView: View {
         .toggleStyle(SentinelSwitchToggleStyle(expandLabel: expandLabel))
         .accessibilityLabel(title)
         .accessibilityIdentifier(identifier)
+    }
+
+    private var versionFooter: some View {
+        Text(versionLine)
+            .font(SentinelTheme.Fonts.subtitle)
+            .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .allowsHitTesting(false)
+            .accessibilityIdentifier("settings-version-line")
     }
 
     private func hintText(_ text: String) -> some View {

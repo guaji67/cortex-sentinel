@@ -42,6 +42,7 @@ final class SentinelStatusBarController: NSObject, NSPopoverDelegate {
     private var statusItem: NSStatusItem?
     private var statusObservation: AnyCancellable?
     private var outsideClickMonitor: Any?
+    private var openSettingsObserver: NSObjectProtocol?
 
     init(store: SentinelStore) {
         self.store = store
@@ -52,6 +53,9 @@ final class SentinelStatusBarController: NSObject, NSPopoverDelegate {
     deinit {
         if let outsideClickMonitor {
             NSEvent.removeMonitor(outsideClickMonitor)
+        }
+        if let openSettingsObserver {
+            DistributedNotificationCenter.default().removeObserver(openSettingsObserver)
         }
     }
 
@@ -92,6 +96,15 @@ final class SentinelStatusBarController: NSObject, NSPopoverDelegate {
             }
 
         updateStatusItem()
+        openSettingsObserver = DistributedNotificationCenter.default().addObserver(
+            forName: SentinelRuntimeNotification.openSettings,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.store.openSettings()
+            }
+        }
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown]
         ) { [weak self] _ in

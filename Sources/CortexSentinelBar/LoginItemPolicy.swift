@@ -231,7 +231,9 @@ enum LoginItemRuntime {
         "--cleanup-dry-run",
         "--cleanup-run",
         "--render-statusbar",
+        "--render-settings-png",
         "--smoke-settings",
+        "--open-settings",
     ]
 
     /// 只有菜单栏常驻进程才允许调用 `register()`。

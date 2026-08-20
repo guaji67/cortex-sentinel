@@ -43,6 +43,7 @@ final class PanelPNGRendererTests: XCTestCase {
                 "channel-unreadable",
                 "channel-unrecognized",
                 "channel-undetermined",
+                "off-host-active",
             ]
         )
         XCTAssertNil(PanelPreviewFixture(rawValue: "unknown"))
@@ -152,6 +153,8 @@ final class PanelPNGRendererTests: XCTestCase {
         XCTAssertNotEqual(hashes["channel-no-record"], hashes["channel-unreadable"])
         XCTAssertNotEqual(hashes["channel-unreadable"], hashes["channel-unrecognized"])
         XCTAssertNotEqual(hashes["channel-unrecognized"], hashes["channel-undetermined"])
+        XCTAssertNotEqual(hashes["idle"], hashes["off-host-active"])
+        XCTAssertNotEqual(hashes["split-counts"], hashes["off-host-active"])
     }
 
     func testSplitCountsFixtureKeepsTheTwoNumbersOnDifferentSets() async throws {
@@ -246,7 +249,7 @@ final class PanelPNGRendererTests: XCTestCase {
             .unread
         )
         let route = SentinelTopChannelPresentation(aio: session.store.aio)
-        XCTAssertEqual(route.routeSummary, "通道情况暂时读不到")
+        XCTAssertEqual(route.routeSummary, "还不知道走的哪条路")
         XCTAssertNil(route.routeModeBadge)
     }
 
@@ -258,7 +261,7 @@ final class PanelPNGRendererTests: XCTestCase {
         XCTAssertEqual(session.store.lines.count, 2)
         XCTAssertTrue(session.store.lines.allSatisfy { $0.state == .running })
         let route = SentinelTopChannelPresentation(aio: session.store.aio)
-        XCTAssertEqual(route.routeSummary, "通道情况暂时读不到")
+        XCTAssertEqual(route.routeSummary, "没在用本地网关")
         XCTAssertNil(route.routeModeBadge)
         XCTAssertNotEqual(
             BalanceSectionPresentation.resolve(
@@ -266,6 +269,28 @@ final class PanelPNGRendererTests: XCTestCase {
                 aio: session.store.aio
             ),
             .unread
+        )
+    }
+
+    func testOffHostActiveFixturePutsRemoteAndUnknownIntoTheHeader() async throws {
+        let session = try await PanelPreviewFactory.makeSession(fixture: .offHostActive)
+        defer { session.tearDown() }
+
+        let localHost = LocalHostIdentity.current()
+        let groups = session.store.lineGroups
+        let origins = groups.activeHostOriginCounts(localHost: localHost)
+        XCTAssertEqual(origins.local, 0)
+        XCTAssertEqual(origins.remote, 1)
+        XCTAssertEqual(origins.unknown, 1)
+        XCTAssertEqual(Set(session.store.lines.map(\.slug)), ["remote-registered", "unknown-host"])
+        XCTAssertTrue(session.store.lines.allSatisfy { $0.state == .running })
+        XCTAssertEqual(
+            SentinelBoardCopy.headerSubtitle(
+                localActiveCount: groups.localActivePresentations(localHost: localHost).count,
+                recentCount: SentinelBoardWindow.snapshot(groups: groups).recentShown.count,
+                offHostActiveCount: origins.remote + origins.unknown
+            ),
+            "这台机上在跑 0 条 · 另外 2 条不在这台机上 · 0 条最近完成"
         )
     }
 

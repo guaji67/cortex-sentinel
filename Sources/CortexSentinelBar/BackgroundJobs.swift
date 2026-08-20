@@ -53,7 +53,7 @@ enum BackgroundJobPlistStatus: String, Equatable {
 
     static let missingDisplayText = "配置不在了"
     static let unreadableDisplayText = "配置读不了"
-    static let unrecognizedDisplayText = "状态看不懂"
+    static let unrecognizedDisplayText = ChannelUnknownKind.unrecognized.statusText
     static let detailCharacterLimit = 40
     static let detailEllipsis = "…"
 

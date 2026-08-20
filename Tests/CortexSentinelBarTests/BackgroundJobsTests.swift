@@ -290,6 +290,10 @@ final class BackgroundJobsTests: XCTestCase {
             snapshot.jobs[0].problemDetail,
             BackgroundJobPlistStatus.unrecognizedDisplayText
         )
+        XCTAssertEqual(
+            BackgroundJobPlistStatus.unrecognizedDisplayText,
+            ChannelUnknownKind.unrecognized.statusText
+        )
         let presentation = BackgroundJobsPresentation(snapshot: snapshot, now: now)
         XCTAssertTrue(presentation.hasProblems)
         XCTAssertEqual(presentation.problemRows.count, 1)

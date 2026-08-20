@@ -1,0 +1,47 @@
+schema_version: 1
+updated_at: "2026-08-20"
+role: >
+  Multica 执行者 id → 机器名。scripts/multica_notify_bridge.py 写派工登记 host 时查这张表。
+  机器名必须能跟哨兵本机比对：哨兵拿 host 跟 scutil --get ComputerName 和 hostname 比。
+  查不到映射一律不写 host，绝对不许回落成本机名。
+  读不出机器的执行者不要写进来。执行者凭据不许进本文件。
+
+# host 一律写 scutil --get ComputerName 的实际输出。
+# 2026-08-20 现场核过：
+#   MacBook Pro 本机 scutil --get ComputerName → MacBook Pro
+#   mini 上 scutil --get ComputerName → Mac mini（局域网 SSH 核过）
+#   测试机上 scutil --get ComputerName → yednc的MacBook Pro（局域网 SSH 核过）
+# Jacky 两名执行者（Cortex Dev Setup / Mac Issue Dispatcher）ComputerName 未核，不写。
+
+agents:
+  - id: "011287ed-c569-4fd0-a3dd-73268206ea94"
+    name: "Pro Grok 执行者(Cursor)"
+    host: "MacBook Pro"
+
+  - id: "6bea1d7b-18e9-46fc-b784-02693149a547"
+    name: "mini Grok 执行者(Cursor)"
+    host: "Mac mini"
+
+  - id: "358c839d-8e04-4d9b-b818-6b59e0efc591"
+    name: "新用户测试机执行者(Codex)"
+    host: "yednc的MacBook Pro"
+
+  - id: "e25dc8c1-d4aa-4837-982d-8b2f3cde08b6"
+    name: "Cortex Executor"
+    host: "MacBook Pro"
+
+  - id: "f28c7938-58e0-473d-893c-6e1497113529"
+    name: "Mac mini 执行者"
+    host: "Mac mini"
+
+  - id: "58122f68-7d84-4c7c-9ebc-eceac0fd58ef"
+    name: "Pro体感执行者(临时Codex)"
+    host: "MacBook Pro"
+
+  - id: "e8bd8b54-3d67-40e8-a226-a7b4e7c4c36f"
+    name: "续航巡检哨兵(Codex)"
+    host: "Mac mini"
+
+  - id: "52229984-c985-4a0b-b3a2-d45746c00bb8"
+    name: "Harness 自审员(Codex)"
+    host: "MacBook Pro"

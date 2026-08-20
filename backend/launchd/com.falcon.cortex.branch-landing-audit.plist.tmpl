@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.falcon.cortex.branch-landing-audit</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PYTHON_BIN__</string>
+        <string>__RUNTIME_SCRIPT__</string>
+        <string>--trigger-socket</string>
+        <string>__BROKER_SOCKET__</string>
+        <string>--main-ref</string>
+        <string>origin/main</string>
+        <string>--threshold</string>
+        <string>20</string>
+        <string>--notify</string>
+        <string>--notification-state</string>
+        <string>__NOTIFICATION_STATE__</string>
+        <string>--notification-repeat-hours</string>
+        <string>24</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StartInterval</key>
+    <integer>21600</integer>
+
+    <key>StandardOutPath</key>
+    <string>__LOG_PATH__</string>
+
+    <key>StandardErrorPath</key>
+    <string>__LOG_PATH__</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>LANG</key>
+        <string>en_US.UTF-8</string>
+        <key>LC_ALL</key>
+        <string>en_US.UTF-8</string>
+        <key>PATH</key>
+        <string>/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>CORTEX_BRANCH_LANDING_NOTIFICATION_SCRIPT</key>
+        <string>__NOTIFICATION_SCRIPT__</string>
+    </dict>
+</dict>
+</plist>

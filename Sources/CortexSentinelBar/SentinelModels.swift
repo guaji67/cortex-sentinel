@@ -938,6 +938,29 @@ struct LineStatus: Identifiable, Equatable {
     }
 }
 
+/// 完成列表上四个终态必须出现的词。颜色不算数。一个字不许改。
+enum LineTerminalOutcomePresentation {
+    static let done = "做完了"
+    static let help = "要人管"
+    static let dead = "挂了"
+    static let killed = "被停了"
+
+    static func label(for state: LineState) -> String? {
+        switch state {
+        case .done:
+            return done
+        case .help:
+            return help
+        case .dead:
+            return dead
+        case .killed:
+            return killed
+        default:
+            return nil
+        }
+    }
+}
+
 struct LineDispositionPresentation: Equatable {
     let stateText: String
     let symbolName: String
@@ -949,7 +972,7 @@ struct LineDispositionPresentation: Equatable {
         note = line.note
         requiresAttention = line.requiresAttention
         if line.state == .dead, line.note != nil {
-            stateText = "已处置"
+            stateText = LineTerminalOutcomePresentation.dead
             symbolName = "checkmark.seal.fill"
             markerText = "已有处置记录"
         } else if let holdText = line.launchHold.badgeText {
@@ -957,6 +980,10 @@ struct LineDispositionPresentation: Equatable {
             // 这条线不是卡死，是守护按维护者的规矩主动停下了无谓重试。
             stateText = holdText
             symbolName = line.launchHold == .noExit ? "hourglass" : "gauge.with.needle"
+            markerText = line.note == nil ? nil : "有备注"
+        } else if let outcome = LineTerminalOutcomePresentation.label(for: line.state) {
+            stateText = outcome
+            symbolName = line.state.symbolName
             markerText = line.note == nil ? nil : "有备注"
         } else {
             stateText = line.state.displayName

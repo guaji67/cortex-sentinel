@@ -121,10 +121,36 @@ final class EmptyDiagnosticSectionTests: XCTestCase {
         )
     }
 
-    func testMissingAIOWithoutNumbersCollapsesBalance() {
+    func testMissingAIOWithoutNumbersCollapsesToQueryingNotUnread() {
         XCTAssertEqual(
             BalanceSectionPresentation.resolve(official: .empty, aio: .unconfigured),
-            .compact(statusText: "未找到 AIO 数据库")
+            .compact(statusText: "查询中")
+        )
+        XCTAssertNotEqual(
+            BalanceSectionPresentation.resolve(official: .empty, aio: .unconfigured),
+            .unread
+        )
+    }
+
+    func testInvalidAIOWithoutNumbersShowsUnreadCopy() {
+        let aio = AIOSnapshot(
+            sourceState: .invalid,
+            gatewayEnabled: false,
+            routeMode: .direct,
+            providers: [],
+            lastHitProviderID: nil,
+            lastHitProviderName: nil,
+            readAt: Date(),
+            errorMessage: "AIO 数据读取失败"
+        )
+        XCTAssertEqual(
+            BalanceSectionPresentation.resolve(official: .empty, aio: aio),
+            .unread
+        )
+        XCTAssertEqual(BalanceSectionPresentation.unreadTitle, "余额读不到")
+        XCTAssertEqual(
+            BalanceSectionPresentation.unreadDetail,
+            "只影响余额这一块，任务状态不受影响。"
         )
     }
 
@@ -170,12 +196,28 @@ final class EmptyDiagnosticSectionTests: XCTestCase {
         )
         XCTAssertEqual(session.store.aio.sourceState, .unconfigured)
         XCTAssertNil(session.store.officialUsage.weeklyRemainingPercentage)
-        XCTAssertEqual(
-            BalanceSectionPresentation.resolve(
-                official: session.store.officialUsage,
-                aio: session.store.aio
-            ),
-            .compact(statusText: "未找到 AIO 数据库")
+        let balance = BalanceSectionPresentation.resolve(
+            official: session.store.officialUsage,
+            aio: session.store.aio
         )
+        XCTAssertEqual(balance, .compact(statusText: "查询中"))
+        XCTAssertNotEqual(balance, .unread)
+    }
+
+    @MainActor
+    func testBusyFixtureDoesNotSurfaceUnreadBalanceCopy() async throws {
+        let session = try await PanelPreviewFactory.makeSession(fixture: .busy)
+        defer { session.tearDown() }
+
+        XCTAssertGreaterThanOrEqual(session.store.lineGroups.activeRegistered.count, 8)
+        let balance = BalanceSectionPresentation.resolve(
+            official: session.store.officialUsage,
+            aio: session.store.aio
+        )
+        XCTAssertNotEqual(balance, .unread)
+        if case let .compact(statusText) = balance {
+            XCTAssertNotEqual(statusText, BalanceSectionPresentation.unreadTitle)
+            XCTAssertFalse(statusText.contains("AIO"))
+        }
     }
 }

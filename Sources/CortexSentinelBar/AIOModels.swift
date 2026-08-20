@@ -414,6 +414,10 @@ struct AIOSnapshot: Equatable, Sendable {
 struct SentinelTopChannelPresentation: Equatable {
     let balanceCountText: String
     let routeSummary: String
+    /// 读到通道数据才给连接方式徽章；读不到时为 nil，不许用默认「直连」顶上。
+    let routeModeBadge: String?
+
+    static let unreadRouteSummary = "通道情况暂时读不到"
 
     init(aio: AIOSnapshot) {
         let relayBalanceCount = aio.providers.filter { !$0.isOfficialOAuthProvider }.count
@@ -422,7 +426,8 @@ struct SentinelTopChannelPresentation: Equatable {
             : "官方"
 
         guard aio.sourceState == .available else {
-            routeSummary = "路由数据未就绪"
+            routeSummary = Self.unreadRouteSummary
+            routeModeBadge = nil
             return
         }
 
@@ -438,16 +443,20 @@ struct SentinelTopChannelPresentation: Equatable {
             summary += " · 含官方 GPT（烧周额度）"
         }
         routeSummary = summary
+        routeModeBadge = aio.routeMode.displayName
     }
 }
 
 /// 面板余额块：没有任何账号余额数字时收成一行；有数字则原样展开。
+/// AIO 库损坏才是「余额读不到」。库不存在只是没配，不当成程序坏了。
 enum BalanceSectionPresentation: Equatable {
     case compact(statusText: String)
+    case unread
     case expanded
 
     static let queryingStatusText = "查询中"
-    static let missingAIOStatusText = "未找到 AIO 数据库"
+    static let unreadTitle = "余额读不到"
+    static let unreadDetail = "只影响余额这一块，任务状态不受影响。"
 
     static func resolve(
         official: OfficialUsageSnapshot,
@@ -457,7 +466,7 @@ enum BalanceSectionPresentation: Equatable {
             return .expanded
         }
         if aio.sourceState == .invalid {
-            return .expanded
+            return .unread
         }
         let relays = aio.providers.filter { !$0.isOfficialOAuthProvider }
         if relays.contains(where: { $0.usage.hasFailure }) {
@@ -465,9 +474,6 @@ enum BalanceSectionPresentation: Equatable {
         }
         if official.errorMessage != nil {
             return .expanded
-        }
-        if aio.sourceState == .unconfigured {
-            return .compact(statusText: missingAIOStatusText)
         }
         return .compact(statusText: queryingStatusText)
     }

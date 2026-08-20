@@ -8,6 +8,9 @@ enum PanelPreviewFixture: String, CaseIterable {
     case unclaimed
     case channelDown = "channel-down"
     case bgjobsProblems = "bgjobs-problems"
+    case fourOutcomes = "four-outcomes"
+    case balanceUnread = "balance-unread"
+    case routeUnread = "route-unread"
 }
 
 enum PanelPNGRenderError: Error {
@@ -55,15 +58,20 @@ enum PanelPreviewFactory {
         let defaults = UserDefaults(suiteName: suite) ?? .standard
         defaults.removePersistentDomain(forName: suite)
 
+        let aioDB = root.appendingPathComponent("aio-coding-hub.db")
         let store = SentinelStore(
             defaults: defaults,
             environment: [
                 "CORTEX_SENTINEL_WATCH_DIR": root.path,
                 "CORTEX_DATA_ROOT": root.path,
+                "CORTEX_AIO_DB_PATH": aioDB.path,
+                "CORTEX_CODEX_CONFIG_PATH": root.appendingPathComponent("config.toml").path,
+                "CORTEX_CODEX_AUTH_PATH": root.appendingPathComponent("auth.json").path,
             ],
             otherCodexProcessReader: { _ in [] }
         )
         await store.refreshStatuses()
+        await store.refreshAIO(force: true, includeUsage: false)
         return PanelPreviewSession(
             store: store,
             root: root,
@@ -196,6 +204,37 @@ private enum PanelPreviewLayout {
                 codex: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0)
             )
             try writeProblemBackgroundJobs(into: root, generatedAt: now)
+        case .fourOutcomes:
+            let lines = fourOutcomeLines()
+            try writeRegistry(lines, host: host, registeredAt: now, into: root)
+            try writeStatusFiles(lines, now: now, into: root)
+            try writeChannel(
+                into: root,
+                generatedAt: now,
+                grok: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0),
+                codex: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0)
+            )
+            try writeHealthyBackgroundJobs(into: root, generatedAt: now)
+        case .balanceUnread:
+            try writeChannel(
+                into: root,
+                generatedAt: now,
+                grok: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0),
+                codex: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0)
+            )
+            try writeHealthyBackgroundJobs(into: root, generatedAt: now)
+            try writeUnreadableAIODatabase(into: root)
+        case .routeUnread:
+            let lines = routeUnreadLines()
+            try writeRegistry(lines, host: host, registeredAt: now, into: root)
+            try writeStatusFiles(lines, now: now, into: root)
+            try writeChannel(
+                into: root,
+                generatedAt: now,
+                grok: ChannelJSON(status: "alive", evidence: "1 条在跑", running: 1),
+                codex: ChannelJSON(status: "alive", evidence: "1 条在跑", running: 1)
+            )
+            try writeHealthyBackgroundJobs(into: root, generatedAt: now)
         }
     }
 
@@ -324,6 +363,76 @@ private enum PanelPreviewLayout {
                 exitCode: 1
             ),
         ]
+    }
+
+    private static func fourOutcomeLines() -> [LineSpec] {
+        [
+            LineSpec(
+                slug: "morning-brief",
+                labelZH: "早报摘要",
+                dispatcherZH: "主控窗口派工",
+                engine: .codex,
+                state: "done",
+                model: "gpt-5.4",
+                exitCode: 0
+            ),
+            LineSpec(
+                slug: "quota-ask",
+                labelZH: "额度告急",
+                dispatcherZH: "主控窗口派工",
+                engine: .grok,
+                state: "help",
+                model: "cursor-grok-4.6-xhigh-fast",
+                exitCode: nil
+            ),
+            LineSpec(
+                slug: "stalled-writer",
+                labelZH: "卡住的写稿",
+                dispatcherZH: "Claude 对话：内容",
+                engine: .codex,
+                state: "dead",
+                model: "gpt-5.4",
+                exitCode: 1
+            ),
+            LineSpec(
+                slug: "stopped-probe",
+                labelZH: "被停的探针",
+                dispatcherZH: "主控窗口派工",
+                engine: .grok,
+                state: "killed",
+                model: "cursor-grok-4.6-xhigh-fast",
+                exitCode: 1
+            ),
+        ]
+    }
+
+    private static func routeUnreadLines() -> [LineSpec] {
+        [
+            LineSpec(
+                slug: "wake-panel",
+                labelZH: "叫醒面板",
+                dispatcherZH: "主控窗口派工",
+                engine: .grok,
+                state: "running",
+                model: "cursor-grok-4.6-xhigh-fast",
+                exitCode: nil
+            ),
+            LineSpec(
+                slug: "balance-refresh",
+                labelZH: "打开面板刷余额",
+                dispatcherZH: "主控窗口派工",
+                engine: .codex,
+                state: "running",
+                model: "gpt-5.4",
+                exitCode: nil
+            ),
+        ]
+    }
+
+    private static func writeUnreadableAIODatabase(into root: URL) throws {
+        try Data("this-is-not-a-sqlite-database".utf8).write(
+            to: root.appendingPathComponent("aio-coding-hub.db")
+        )
     }
 
     private static func writeRegistry(

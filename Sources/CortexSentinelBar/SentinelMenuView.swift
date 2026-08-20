@@ -347,6 +347,8 @@ struct SentinelMenuView: View {
         ) {
         case let .compact(statusText):
             compactDiagnosticRow(title: "余额", status: statusText)
+        case .unread:
+            unreadBalanceSection
         case .expanded:
             expandedBalancesSection
         }
@@ -359,13 +361,8 @@ struct SentinelMenuView: View {
             officialUsageRow
 
             switch store.aio.sourceState {
-            case .unconfigured:
-                emptyState("未找到 AIO 数据库")
-            case .invalid:
-                Text(store.aio.errorMessage ?? "AIO 数据读取失败")
-                    .font(SentinelTheme.Fonts.subtitle)
-                    .foregroundStyle(SentinelTheme.Colors.warning)
-                    .sentinelRow(tone: .warning)
+            case .unconfigured, .invalid:
+                EmptyView()
             case .available:
                 if relayBalanceProviders.isEmpty {
                     emptyState("没有可显示的中转余额")
@@ -725,19 +722,19 @@ struct SentinelMenuView: View {
                 Spacer()
 
                 VStack(alignment: .trailing, spacing: SentinelTheme.Spacing.xxs) {
-                    if line.state != .done {
-                        Text(line.state.displayName)
+                    if let outcome = LineTerminalOutcomePresentation.label(for: line.state) {
+                        Text(outcome)
                             .font(SentinelTheme.Fonts.badge)
-                            .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                            .foregroundStyle(
+                                line.state == .done
+                                    ? SentinelTheme.Colors.success
+                                    : SentinelTheme.Colors.secondaryForeground
+                            )
                     }
                     if let completedAt = line.sourceModifiedAt {
                         Text(SentinelTimeFormat.shortTime(completedAt))
                             .font(SentinelTheme.Fonts.rowTime)
                             .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
-                    } else if line.state == .done {
-                        Text("已完成")
-                            .font(SentinelTheme.Fonts.badge)
-                            .foregroundStyle(SentinelTheme.Colors.success)
                     }
                 }
 
@@ -968,7 +965,7 @@ struct SentinelMenuView: View {
 
             Spacer()
 
-            Text(line.state.displayName)
+            Text(LineTerminalOutcomePresentation.label(for: line.state) ?? line.state.displayName)
                 .font(SentinelTheme.Fonts.badge)
                 .foregroundStyle(
                     line.state == .done
@@ -1106,11 +1103,13 @@ struct SentinelMenuView: View {
 
                 Spacer()
 
-                Text(store.aio.routeMode.displayName)
-                    .sentinelBadge(
-                        foreground: SentinelTheme.Colors.info,
-                        background: SentinelTheme.Colors.infoSoft
-                    )
+                if let routeModeBadge {
+                    Text(routeModeBadge)
+                        .sentinelBadge(
+                            foreground: SentinelTheme.Colors.info,
+                            background: SentinelTheme.Colors.infoSoft
+                        )
+                }
             }
 
             HStack(spacing: SentinelTheme.Spacing.md) {
@@ -1213,6 +1212,19 @@ struct SentinelMenuView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private var unreadBalanceSection: some View {
+        VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xxs) {
+            Text(BalanceSectionPresentation.unreadTitle)
+                .font(SentinelTheme.Fonts.subtitle)
+                .foregroundStyle(SentinelTheme.Colors.foreground)
+            Text(BalanceSectionPresentation.unreadDetail)
+                .font(SentinelTheme.Fonts.subtitle)
+                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private func emptyState(_ text: String) -> some View {
         Text(text)
             .font(SentinelTheme.Fonts.subtitle)
@@ -1267,6 +1279,10 @@ struct SentinelMenuView: View {
 
     private var routeSummary: String {
         SentinelTopChannelPresentation(aio: store.aio).routeSummary
+    }
+
+    private var routeModeBadge: String? {
+        SentinelTopChannelPresentation(aio: store.aio).routeModeBadge
     }
 
     private func usagePresentation(_ status: AIOUsageStatus) -> (

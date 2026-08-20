@@ -208,9 +208,63 @@ final class SentinelBoardWindowTests: XCTestCase {
         XCTAssertEqual(board.recentShown.count, 8)
         let localHost = LocalHostIdentity(identifiers: ["Test Mac"])
         XCTAssertEqual(
-            "\(groups.localActivePresentations(localHost: localHost).count) 条本机活跃 · \(board.recentShown.count) 条最近完成",
-            "0 条本机活跃 · 8 条最近完成"
+            SentinelBoardCopy.headerSubtitle(
+                localActiveCount: groups.localActivePresentations(localHost: localHost).count,
+                recentCount: board.recentShown.count
+            ),
+            "这台机上在跑 0 条 · 8 条最近完成"
         )
+    }
+
+    func testLocalUnregisteredAndRemoteRegisteredCountDifferentThings() throws {
+        let localHost = LocalHostIdentity(identifiers: ["Test Mac"])
+        let registry = try makeRegistry(
+            [
+                ("remote-registered", "codex", "外机已登记", now.timeIntervalSince1970),
+            ],
+            host: "Other Mac"
+        )
+        let localUnregistered = makeLine(
+            slug: "local-unregistered",
+            engine: .cursorGrok,
+            state: .running,
+            age: 10
+        )
+        let remoteRegistered = makeLine(
+            slug: "remote-registered",
+            engine: .codex,
+            state: .running,
+            age: 10
+        )
+        let groups = SentinelAggregation.lineGroups(
+            lines: [localUnregistered, remoteRegistered],
+            registry: registry,
+            now: now
+        )
+        let board = SentinelBoardWindow.snapshot(groups: groups)
+        let localActive = groups.localActivePresentations(localHost: localHost).count
+        let registeredActive = groups.activeRegistered.count
+        let unregisteredActive = groups.activeUnregistered.count
+
+        XCTAssertEqual(localActive, 0)
+        XCTAssertEqual(registeredActive, 1)
+        XCTAssertEqual(unregisteredActive, 1)
+        XCTAssertNotEqual(localActive, registeredActive)
+        XCTAssertEqual(groups.activeRegistered.map(\.line.slug), ["remote-registered"])
+        XCTAssertEqual(groups.activeUnregistered.map(\.line.slug), ["local-unregistered"])
+        XCTAssertEqual(
+            groups.localActivePresentations(localHost: localHost).map(\.line.slug),
+            []
+        )
+        XCTAssertEqual(
+            SentinelBoardCopy.headerSubtitle(
+                localActiveCount: localActive,
+                recentCount: board.recentShown.count
+            ),
+            "这台机上在跑 0 条 · 0 条最近完成"
+        )
+        XCTAssertEqual(SentinelBoardCopy.registeredSectionTitle, "有登记的")
+        XCTAssertEqual(SentinelBoardCopy.unregisteredSectionTitle, "没登记的")
     }
 
     func testRecencyDateFallsBackFromMtimeToUpdatedAtToRegisteredAt() throws {

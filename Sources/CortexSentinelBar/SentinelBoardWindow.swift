@@ -158,7 +158,7 @@ extension SentinelLineGroups {
         EngineCounts(activePresentations)
     }
 
-    /// 通道行「N 条」和标题「本机活跃」只数本机。外机和「机器未知」仍出现在
+    /// 通道行「N 条」和标题「这台机上在跑」只数本机。外机和「机器未知」仍出现在
     /// 展开列表里，但不进这个数——缺 host 不许猜成本机。
     func localActivePresentations(localHost: LocalHostIdentity) -> [LinePresentation] {
         activePresentations.filter { $0.hostOrigin(localHost: localHost).isLocal }

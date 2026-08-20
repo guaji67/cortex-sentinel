@@ -11,6 +11,11 @@ enum PanelPreviewFixture: String, CaseIterable {
     case fourOutcomes = "four-outcomes"
     case balanceUnread = "balance-unread"
     case routeUnread = "route-unread"
+    case splitCounts = "split-counts"
+    case channelNoRecord = "channel-no-record"
+    case channelUnreadable = "channel-unreadable"
+    case channelUnrecognized = "channel-unrecognized"
+    case channelUndetermined = "channel-undetermined"
 }
 
 enum PanelPNGRenderError: Error {
@@ -235,7 +240,73 @@ private enum PanelPreviewLayout {
                 codex: ChannelJSON(status: "alive", evidence: "1 条在跑", running: 1)
             )
             try writeHealthyBackgroundJobs(into: root, generatedAt: now)
+        case .splitCounts:
+            let unregistered = LineSpec(
+                slug: "local-unregistered",
+                labelZH: "本机未登记",
+                dispatcherZH: "",
+                engine: .grok,
+                state: "running",
+                model: "cursor-grok-4.6-xhigh-fast",
+                exitCode: nil
+            )
+            let remoteRegistered = LineSpec(
+                slug: "remote-registered",
+                labelZH: "外机已登记",
+                dispatcherZH: "主控窗口派工",
+                engine: .codex,
+                state: "running",
+                model: "gpt-5.4",
+                exitCode: nil
+            )
+            try writeRegistry(
+                [remoteRegistered],
+                host: "Other Mac",
+                registeredAt: now,
+                into: root
+            )
+            try writeStatusFiles([unregistered, remoteRegistered], now: now, into: root)
+            try writeChannel(
+                into: root,
+                generatedAt: now,
+                grok: ChannelJSON(status: "alive", evidence: "1 条在跑", running: 1),
+                codex: ChannelJSON(status: "alive", evidence: "1 条在跑", running: 1)
+            )
+            try writeHealthyBackgroundJobs(into: root, generatedAt: now)
+        case .channelNoRecord:
+            try writeHealthyBackgroundJobs(into: root, generatedAt: now)
+        case .channelUnreadable:
+            try Data("this-is-not-channel-status".utf8).write(
+                to: root.appendingPathComponent("channel-status.json")
+            )
+            try writeHealthyBackgroundJobs(into: root, generatedAt: now)
+        case .channelUnrecognized:
+            try writeRawChannel(
+                into: root,
+                json: """
+                {
+                  "generated_at": "\(isoString(now))",
+                  "channels": {
+                    "grok": {"status": "weird-value", "evidence": "x"},
+                    "codex": {}
+                  }
+                }
+                """
+            )
+            try writeHealthyBackgroundJobs(into: root, generatedAt: now)
+        case .channelUndetermined:
+            try writeChannel(
+                into: root,
+                generatedAt: now,
+                grok: ChannelJSON(status: "unknown", evidence: "无数据", running: nil),
+                codex: ChannelJSON(status: "unknown", evidence: "无数据", running: nil)
+            )
+            try writeHealthyBackgroundJobs(into: root, generatedAt: now)
         }
+    }
+
+    private static func writeRawChannel(into root: URL, json: String) throws {
+        try Data(json.utf8).write(to: root.appendingPathComponent("channel-status.json"))
     }
 
     private static func busyLines() -> [LineSpec] {

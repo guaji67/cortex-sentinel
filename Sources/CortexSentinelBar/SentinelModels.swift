@@ -42,29 +42,117 @@ enum ChannelHealth: Equatable {
     }
 }
 
+enum ChannelUnknownKind: Equatable {
+    case noRecord
+    case unreadable
+    case unrecognized
+    case undetermined
+
+    static let aliveText = "通"
+    static let degradedText = "不通"
+
+    var statusText: String {
+        switch self {
+        case .noRecord:
+            return "还没有记录"
+        case .unreadable:
+            return "状态读不出"
+        case .unrecognized:
+            return "状态看不懂"
+        case .undetermined:
+            return "查不出来"
+        }
+    }
+}
+
 struct ChannelVerdict: Equatable {
     let status: ChannelHealth
     let evidence: String
     let running: Int?
+    let unknownKind: ChannelUnknownKind?
 
-    init(status: ChannelHealth, evidence: String, running: Int? = nil) {
+    init(
+        status: ChannelHealth,
+        evidence: String,
+        running: Int? = nil,
+        unknownKind: ChannelUnknownKind? = nil
+    ) {
         self.status = status
         self.evidence = evidence
         self.running = running
+        if status == .unknown {
+            self.unknownKind = unknownKind ?? .undetermined
+        } else {
+            self.unknownKind = nil
+        }
     }
 
     init(payload: ChannelVerdictPayload?) {
-        status = ChannelHealth(rawValue: payload?.status)
         let trimmed = payload?.evidence?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         evidence = trimmed.isEmpty ? "无数据" : trimmed
         running = payload?.running
+        guard let payload else {
+            status = .unknown
+            unknownKind = .unrecognized
+            return
+        }
+        let raw = payload.status?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        switch raw.lowercased() {
+        case "alive":
+            status = .alive
+            unknownKind = nil
+        case "degraded":
+            status = .degraded
+            unknownKind = nil
+        case "unknown":
+            status = .unknown
+            unknownKind = .undetermined
+        default:
+            status = .unknown
+            unknownKind = .unrecognized
+        }
     }
 
     var runningCount: Int {
         running ?? 0
     }
 
-    static let missing = ChannelVerdict(status: .unknown, evidence: "无数据")
+    var statusText: String {
+        switch status {
+        case .alive:
+            return ChannelUnknownKind.aliveText
+        case .degraded:
+            return ChannelUnknownKind.degradedText
+        case .unknown:
+            return (unknownKind ?? .undetermined).statusText
+        }
+    }
+
+    static let missing = ChannelVerdict(
+        status: .unknown,
+        evidence: "无数据",
+        unknownKind: .noRecord
+    )
+
+    static let unreadable = ChannelVerdict(
+        status: .unknown,
+        evidence: "文件读不出",
+        unknownKind: .unreadable
+    )
+}
+
+enum SentinelBoardCopy {
+    static let registeredSectionTitle = "有登记的"
+    static let unregisteredSectionTitle = "没登记的"
+    static let lineSettingsHelp = "这条线的重试设置（只有 Codex 有）"
+
+    static func headerSubtitle(localActiveCount: Int, recentCount: Int) -> String {
+        "这台机上在跑 \(localActiveCount) 条 · \(recentCount) 条最近完成"
+    }
+
+    static func showsLineSettings(for engine: LineEngine) -> Bool {
+        !engine.isCursorGrok
+    }
 }
 
 struct ChannelStatusSnapshot: Equatable {
@@ -80,8 +168,8 @@ struct ChannelStatusSnapshot: Equatable {
 
     static let invalid = ChannelStatusSnapshot(
         generatedAt: nil,
-        grok: ChannelVerdict(status: .unknown, evidence: "文件读不出"),
-        codex: ChannelVerdict(status: .unknown, evidence: "文件读不出")
+        grok: .unreadable,
+        codex: .unreadable
     )
 }
 
@@ -104,16 +192,16 @@ struct ChannelItemPresentation: Equatable {
 
     var itemText: String {
         if let countText {
-            return "\(name) \(verdict.status.displayName) \(countText)"
+            return "\(name) \(verdict.statusText) \(countText)"
         }
-        return "\(name) \(verdict.status.displayName)"
+        return "\(name) \(verdict.statusText)"
     }
 
     var problemLine: String? {
         guard verdict.status == .degraded else {
             return nil
         }
-        return "\(name) \(verdict.status.displayName)，\(verdict.evidence)"
+        return "\(name) \(verdict.statusText)，\(verdict.evidence)"
     }
 }
 

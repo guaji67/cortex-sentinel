@@ -189,10 +189,10 @@ enum CortexSentinelBarMain {
         print("本机身份：\(localHost.dumpText)")
         print("通道：\(paths.channelStatusURL.path)")
         print(
-            "  Grok \(channelStatus.grok.status.displayName) · 文件running=\(channelStatus.grok.running.map(String.init) ?? "无") · 面板条数(本机)=\(liveChannelCounts.grok) · \(channelStatus.grok.evidence)"
+            "  Grok \(channelStatus.grok.statusText) · 文件running=\(channelStatus.grok.running.map(String.init) ?? "无") · 面板条数(本机)=\(liveChannelCounts.grok) · \(channelStatus.grok.evidence)"
         )
         print(
-            "  Codex \(channelStatus.codex.status.displayName) · 文件running=\(channelStatus.codex.running.map(String.init) ?? "无") · 面板条数(本机)=\(liveChannelCounts.codex) · \(channelStatus.codex.evidence)"
+            "  Codex \(channelStatus.codex.statusText) · 文件running=\(channelStatus.codex.running.map(String.init) ?? "无") · 面板条数(本机)=\(liveChannelCounts.codex) · \(channelStatus.codex.evidence)"
         )
         print(
             "  活跃口径：本机 \(originCounts.local) · 外机 \(originCounts.remote) · 机器未知 \(originCounts.unknown)（通道行和标题只数本机）"

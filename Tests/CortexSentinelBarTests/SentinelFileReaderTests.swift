@@ -64,8 +64,8 @@ final class SentinelFileReaderTests: XCTestCase {
         XCTAssertEqual(snapshot.codex.runningCount, 0)
         XCTAssertEqual(snapshot.codex.status.displayName, "不通")
         XCTAssertEqual(
-            SentinelFileReader.parseChannelStatus(data: Data("{}".utf8)).grok.status.displayName,
-            "无数据"
+            SentinelFileReader.parseChannelStatus(data: Data("{}".utf8)).grok.statusText,
+            "状态看不懂"
         )
         XCTAssertNotNil(snapshot.generatedAt)
         XCTAssertEqual(
@@ -75,6 +75,84 @@ final class SentinelFileReaderTests: XCTestCase {
         XCTAssertEqual(
             SentinelFileReader.parseChannelStatus(data: Data("{}".utf8)).grok.runningCount,
             0
+        )
+    }
+
+    func testReadChannelStatusSplitsFourUnknownKinds() throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory.appendingPathComponent(
+            "channel-four-kinds-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: root) }
+
+        let missingURL = root.appendingPathComponent("missing.json")
+        let missing = SentinelFileReader.readChannelStatus(at: missingURL)
+        XCTAssertEqual(missing, .missing)
+        XCTAssertEqual(
+            ChannelSectionPresentation(grok: missing.grok, codex: missing.codex, liveCounts: EngineCounts())
+                .render.primaryRow,
+            ["Codex 还没有记录", "Grok 还没有记录"]
+        )
+
+        let unreadableURL = root.appendingPathComponent("unreadable.json")
+        try Data("not-json".utf8).write(to: unreadableURL)
+        let unreadable = SentinelFileReader.readChannelStatus(at: unreadableURL)
+        XCTAssertEqual(unreadable, .invalid)
+        XCTAssertEqual(
+            ChannelSectionPresentation(
+                grok: unreadable.grok,
+                codex: unreadable.codex,
+                liveCounts: EngineCounts()
+            ).render.primaryRow,
+            ["Codex 状态读不出", "Grok 状态读不出"]
+        )
+
+        let unrecognizedURL = root.appendingPathComponent("unrecognized.json")
+        try Data(
+            """
+            {
+              "channels": {
+                "grok": {"status": "???"},
+                "codex": {}
+              }
+            }
+            """.utf8
+        ).write(to: unrecognizedURL)
+        let unrecognized = SentinelFileReader.readChannelStatus(at: unrecognizedURL)
+        XCTAssertEqual(unrecognized.grok.unknownKind, .unrecognized)
+        XCTAssertEqual(unrecognized.codex.unknownKind, .unrecognized)
+        XCTAssertEqual(
+            ChannelSectionPresentation(
+                grok: unrecognized.grok,
+                codex: unrecognized.codex,
+                liveCounts: EngineCounts()
+            ).render.primaryRow,
+            ["Codex 状态看不懂", "Grok 状态看不懂"]
+        )
+
+        let undeterminedURL = root.appendingPathComponent("undetermined.json")
+        try Data(
+            """
+            {
+              "channels": {
+                "grok": {"status": "unknown", "evidence": "无数据"},
+                "codex": {"status": "unknown"}
+              }
+            }
+            """.utf8
+        ).write(to: undeterminedURL)
+        let undetermined = SentinelFileReader.readChannelStatus(at: undeterminedURL)
+        XCTAssertEqual(undetermined.grok.unknownKind, .undetermined)
+        XCTAssertEqual(undetermined.codex.unknownKind, .undetermined)
+        XCTAssertEqual(
+            ChannelSectionPresentation(
+                grok: undetermined.grok,
+                codex: undetermined.codex,
+                liveCounts: EngineCounts()
+            ).render.primaryRow,
+            ["Codex 查不出来", "Grok 查不出来"]
         )
     }
 

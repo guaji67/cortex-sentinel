@@ -169,9 +169,46 @@ final class SentinelFileReaderTests: XCTestCase {
         XCTAssertEqual(top.balanceCountText, "官方 + 1 把")
         XCTAssertEqual(aio.statusBarBalances.map(\.text), ["$88"])
         XCTAssertEqual(top.routeSummary, "最后命中：fixture-relay")
+        XCTAssertEqual(top.routeModeBadge, "聚合")
         XCTAssertFalse(top.balanceCountText.contains("异常"))
         XCTAssertFalse(top.routeSummary.contains("异常"))
         XCTAssertFalse(top.routeSummary.contains("未知"))
+    }
+
+    func testUnreadRouteDataHidesConnectionBadgeAndUsesFixedCopy() {
+        let unread = SentinelTopChannelPresentation(aio: .unconfigured)
+        XCTAssertEqual(unread.routeSummary, "通道情况暂时读不到")
+        XCTAssertNil(unread.routeModeBadge)
+
+        let invalid = SentinelTopChannelPresentation(
+            aio: AIOSnapshot(
+                sourceState: .invalid,
+                gatewayEnabled: false,
+                routeMode: .direct,
+                providers: [],
+                lastHitProviderID: nil,
+                lastHitProviderName: nil,
+                readAt: Date(),
+                errorMessage: "AIO 数据读取失败"
+            )
+        )
+        XCTAssertEqual(invalid.routeSummary, "通道情况暂时读不到")
+        XCTAssertNil(invalid.routeModeBadge)
+
+        let direct = SentinelTopChannelPresentation(
+            aio: AIOSnapshot(
+                sourceState: .available,
+                gatewayEnabled: false,
+                routeMode: .direct,
+                providers: [],
+                lastHitProviderID: nil,
+                lastHitProviderName: nil,
+                readAt: Date(),
+                errorMessage: nil
+            )
+        )
+        XCTAssertEqual(direct.routeSummary, "Codex 当前使用直连")
+        XCTAssertEqual(direct.routeModeBadge, "直连")
     }
 
     func testFixtureAggregationCoversAllFourStates() throws {
@@ -215,14 +252,14 @@ final class SentinelFileReaderTests: XCTestCase {
         let unhandledPresentation = LineDispositionPresentation(line: unhandled)
 
         XCTAssertEqual(handled.note, note)
-        XCTAssertEqual(handledPresentation.stateText, "已处置")
+        XCTAssertEqual(handledPresentation.stateText, "挂了")
         XCTAssertEqual(handledPresentation.symbolName, "checkmark.seal.fill")
         XCTAssertEqual(handledPresentation.markerText, "已有处置记录")
         XCTAssertEqual(handledPresentation.note, note)
         XCTAssertFalse(handledPresentation.requiresAttention)
 
         XCTAssertNil(unhandled.note)
-        XCTAssertEqual(unhandledPresentation.stateText, "已失联")
+        XCTAssertEqual(unhandledPresentation.stateText, "挂了")
         XCTAssertEqual(unhandledPresentation.symbolName, "xmark.circle.fill")
         XCTAssertNil(unhandledPresentation.markerText)
         XCTAssertNil(unhandledPresentation.note)
@@ -256,7 +293,7 @@ final class SentinelFileReaderTests: XCTestCase {
 
         XCTAssertNil(line.note)
         XCTAssertTrue(line.requiresAttention)
-        XCTAssertEqual(LineDispositionPresentation(line: line).stateText, "已失联")
+        XCTAssertEqual(LineDispositionPresentation(line: line).stateText, "挂了")
     }
 
     func testParsesPoolHealthActiveAndSwitchContract() throws {

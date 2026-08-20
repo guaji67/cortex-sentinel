@@ -28,7 +28,16 @@ final class PanelPNGRendererTests: XCTestCase {
         XCTAssertEqual(PanelPreviewFixture.channelDown.rawValue, "channel-down")
         XCTAssertEqual(
             PanelPreviewFixture.allCases.map(\.rawValue),
-            ["idle", "busy", "unclaimed", "channel-down", "bgjobs-problems"]
+            [
+                "idle",
+                "busy",
+                "unclaimed",
+                "channel-down",
+                "bgjobs-problems",
+                "four-outcomes",
+                "balance-unread",
+                "route-unread",
+            ]
         )
         XCTAssertNil(PanelPreviewFixture(rawValue: "unknown"))
     }
@@ -129,5 +138,81 @@ final class PanelPNGRendererTests: XCTestCase {
         XCTAssertNotEqual(hashes["idle"], hashes["channel-down"])
         XCTAssertNotEqual(hashes["busy"], hashes["unclaimed"])
         XCTAssertNotEqual(hashes["idle"], hashes["bgjobs-problems"])
+        XCTAssertNotEqual(hashes["idle"], hashes["four-outcomes"])
+        XCTAssertNotEqual(hashes["idle"], hashes["balance-unread"])
+        XCTAssertNotEqual(hashes["idle"], hashes["route-unread"])
+    }
+
+    func testFourOutcomesFixtureExposesAllFourTerminalStates() async throws {
+        let session = try await PanelPreviewFactory.makeSession(fixture: .fourOutcomes)
+        defer { session.tearDown() }
+
+        let states = session.store.lines.map(\.state)
+        XCTAssertEqual(states.count, 4)
+        XCTAssertTrue(states.contains(.done))
+        XCTAssertTrue(states.contains(.help))
+        XCTAssertTrue(states.contains(.dead))
+        XCTAssertTrue(states.contains(.killed))
+        for line in session.store.lines {
+            XCTAssertEqual(
+                LineTerminalOutcomePresentation.label(for: line.state),
+                expectedOutcome(for: line.state)
+            )
+            XCTAssertEqual(
+                LineDispositionPresentation(line: line).stateText,
+                expectedOutcome(for: line.state)
+            )
+        }
+    }
+
+    func testBalanceUnreadFixtureShowsFixedUnreadCopy() async throws {
+        let session = try await PanelPreviewFactory.makeSession(fixture: .balanceUnread)
+        defer { session.tearDown() }
+
+        XCTAssertEqual(session.store.aio.sourceState, .invalid)
+        XCTAssertEqual(
+            BalanceSectionPresentation.resolve(
+                official: session.store.officialUsage,
+                aio: session.store.aio
+            ),
+            .unread
+        )
+        let route = SentinelTopChannelPresentation(aio: session.store.aio)
+        XCTAssertEqual(route.routeSummary, "通道情况暂时读不到")
+        XCTAssertNil(route.routeModeBadge)
+    }
+
+    func testRouteUnreadFixtureHidesConnectionBadge() async throws {
+        let session = try await PanelPreviewFactory.makeSession(fixture: .routeUnread)
+        defer { session.tearDown() }
+
+        XCTAssertEqual(session.store.aio.sourceState, .unconfigured)
+        XCTAssertEqual(session.store.lines.count, 2)
+        XCTAssertTrue(session.store.lines.allSatisfy { $0.state == .running })
+        let route = SentinelTopChannelPresentation(aio: session.store.aio)
+        XCTAssertEqual(route.routeSummary, "通道情况暂时读不到")
+        XCTAssertNil(route.routeModeBadge)
+        XCTAssertNotEqual(
+            BalanceSectionPresentation.resolve(
+                official: session.store.officialUsage,
+                aio: session.store.aio
+            ),
+            .unread
+        )
+    }
+
+    private func expectedOutcome(for state: LineState) -> String {
+        switch state {
+        case .done:
+            return "做完了"
+        case .help:
+            return "要人管"
+        case .dead:
+            return "挂了"
+        case .killed:
+            return "被停了"
+        default:
+            return ""
+        }
     }
 }

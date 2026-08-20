@@ -16,6 +16,7 @@ enum PanelPreviewFixture: String, CaseIterable {
     case channelUnreadable = "channel-unreadable"
     case channelUnrecognized = "channel-unrecognized"
     case channelUndetermined = "channel-undetermined"
+    case offHostActive = "off-host-active"
 }
 
 enum PanelPNGRenderError: Error {
@@ -302,6 +303,39 @@ private enum PanelPreviewLayout {
                 codex: ChannelJSON(status: "unknown", evidence: "无数据", running: nil)
             )
             try writeHealthyBackgroundJobs(into: root, generatedAt: now)
+        case .offHostActive:
+            let remote = LineSpec(
+                slug: "remote-registered",
+                labelZH: "外机已登记",
+                dispatcherZH: "主控窗口派工",
+                engine: .codex,
+                state: "running",
+                model: "gpt-5.4",
+                exitCode: nil
+            )
+            let unknown = LineSpec(
+                slug: "unknown-host",
+                labelZH: "机器未知",
+                dispatcherZH: "主控窗口派工",
+                engine: .grok,
+                state: "running",
+                model: "cursor-grok-4.6-xhigh-fast",
+                exitCode: nil
+            )
+            try writeMixedHostRegistry(
+                remote: remote,
+                unknown: unknown,
+                registeredAt: now,
+                into: root
+            )
+            try writeStatusFiles([remote, unknown], now: now, into: root)
+            try writeChannel(
+                into: root,
+                generatedAt: now,
+                grok: ChannelJSON(status: "alive", evidence: "1 条在跑", running: 1),
+                codex: ChannelJSON(status: "alive", evidence: "1 条在跑", running: 1)
+            )
+            try writeHealthyBackgroundJobs(into: root, generatedAt: now)
         }
     }
 
@@ -527,6 +561,35 @@ private enum PanelPreviewLayout {
         }
         .joined(separator: ",\n")
         let json = "[\n\(entries)\n]\n"
+        try Data(json.utf8).write(to: root.appendingPathComponent("codex-line-registry.json"))
+    }
+
+    private static func writeMixedHostRegistry(
+        remote: LineSpec,
+        unknown: LineSpec,
+        registeredAt: Date,
+        into root: URL
+    ) throws {
+        let timestamp = Int(registeredAt.timeIntervalSince1970)
+        let json = """
+        [
+          {
+            "slug": "\(remote.slug)",
+            "engine": "\(remote.engine.registryValue)",
+            "label_zh": "\(remote.labelZH)",
+            "dispatcher_zh": "\(remote.dispatcherZH)",
+            "registered_at": \(timestamp),
+            "host": "COR-1704-Remote-Host"
+          },
+          {
+            "slug": "\(unknown.slug)",
+            "engine": "\(unknown.engine.registryValue)",
+            "label_zh": "\(unknown.labelZH)",
+            "dispatcher_zh": "\(unknown.dispatcherZH)",
+            "registered_at": \(timestamp)
+          }
+        ]
+        """
         try Data(json.utf8).write(to: root.appendingPathComponent("codex-line-registry.json"))
     }
 

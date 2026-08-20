@@ -134,7 +134,8 @@ struct SentinelMenuView: View {
         }
         return SentinelBoardCopy.headerSubtitle(
             localActiveCount: localActiveLineCount,
-            recentCount: recentRegisteredCount
+            recentCount: recentRegisteredCount,
+            offHostActiveCount: offHostActiveLineCount
         )
     }
 
@@ -1260,6 +1261,11 @@ struct SentinelMenuView: View {
 
     private var localActiveLineCount: Int {
         store.lineGroups.localActivePresentations(localHost: localHost).count
+    }
+
+    private var offHostActiveLineCount: Int {
+        let origins = store.lineGroups.activeHostOriginCounts(localHost: localHost)
+        return origins.remote + origins.unknown
     }
 
     private var boardWindow: SentinelBoardWindow {

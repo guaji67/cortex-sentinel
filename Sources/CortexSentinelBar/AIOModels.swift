@@ -417,7 +417,8 @@ struct SentinelTopChannelPresentation: Equatable {
     /// 读到通道数据才给连接方式徽章；读不到时为 nil，不许用默认「直连」顶上。
     let routeModeBadge: String?
 
-    static let unreadRouteSummary = "通道情况暂时读不到"
+    static let unconfiguredRouteSummary = "没在用本地网关"
+    static let invalidRouteSummary = "还不知道走的哪条路"
 
     init(aio: AIOSnapshot) {
         let relayBalanceCount = aio.providers.filter { !$0.isOfficialOAuthProvider }.count
@@ -425,25 +426,28 @@ struct SentinelTopChannelPresentation: Equatable {
             ? "官方 + \(relayBalanceCount) 把"
             : "官方"
 
-        guard aio.sourceState == .available else {
-            routeSummary = Self.unreadRouteSummary
+        switch aio.sourceState {
+        case .unconfigured:
+            routeSummary = Self.unconfiguredRouteSummary
             routeModeBadge = nil
-            return
+        case .invalid:
+            routeSummary = Self.invalidRouteSummary
+            routeModeBadge = nil
+        case .available:
+            var summary: String
+            if aio.routeMode == .aggregate {
+                summary = aio.lastHitProviderName.map {
+                    "最后命中：\($0)"
+                } ?? "暂时没有命中记录"
+            } else {
+                summary = "Codex 当前使用直连"
+            }
+            if aio.hasEnabledOfficialGPTExit {
+                summary += " · 含官方 GPT（烧周额度）"
+            }
+            routeSummary = summary
+            routeModeBadge = aio.routeMode.displayName
         }
-
-        var summary: String
-        if aio.routeMode == .aggregate {
-            summary = aio.lastHitProviderName.map {
-                "最后命中：\($0)"
-            } ?? "暂时没有命中记录"
-        } else {
-            summary = "Codex 当前使用直连"
-        }
-        if aio.hasEnabledOfficialGPTExit {
-            summary += " · 含官方 GPT（烧周额度）"
-        }
-        routeSummary = summary
-        routeModeBadge = aio.routeMode.displayName
     }
 }
 

@@ -105,7 +105,30 @@ final class ChannelSectionPresentationTests: XCTestCase {
         XCTAssertEqual(presentation.codex.verdict.statusText, ChannelUnknownKind.unreadable.statusText)
     }
 
-    func testMissingEngineEntryAndUnrecognizedValueUseUnintelligibleOnPrimaryRow() {
+    func testMissingEngineEntryUsesNoRecordOnPrimaryRow() {
+        let snapshot = SentinelFileReader.parseChannelStatus(
+            data: Data(
+                """
+                {
+                  "channels": {
+                    "grok": {"status": "alive", "evidence": "2 条在跑", "running": 2}
+                  }
+                }
+                """.utf8
+            )
+        )
+        let presentation = ChannelSectionPresentation(
+            grok: snapshot.grok,
+            codex: snapshot.codex,
+            liveCounts: EngineCounts()
+        )
+        XCTAssertEqual(presentation.render.primaryRow, ["Codex 还没有记录", "Grok 通 闲"])
+        XCTAssertEqual(presentation.render.problemLines, [])
+        XCTAssertNil(snapshot.grok.unknownKind)
+        XCTAssertEqual(snapshot.codex.unknownKind, .noRecord)
+    }
+
+    func testUnrecognizedStatusValueUsesUnintelligibleOnPrimaryRow() {
         let snapshot = SentinelFileReader.parseChannelStatus(
             data: Data(
                 """

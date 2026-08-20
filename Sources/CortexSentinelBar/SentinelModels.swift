@@ -93,7 +93,7 @@ struct ChannelVerdict: Equatable {
         running = payload?.running
         guard let payload else {
             status = .unknown
-            unknownKind = .unrecognized
+            unknownKind = .noRecord
             return
         }
         let raw = payload.status?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -144,10 +144,20 @@ struct ChannelVerdict: Equatable {
 enum SentinelBoardCopy {
     static let registeredSectionTitle = "有登记的"
     static let unregisteredSectionTitle = "没登记的"
-    static let lineSettingsHelp = "这条线的重试设置（只有 Codex 有）"
+    static let lineSettingsTitle = "这条线的重试和提醒"
+    static let lineSettingsHelp = "这条线的重试和提醒（只有 Codex 有）"
+    static let escalateAfterFailuresLabel = "失败几次提醒我"
+    static let lineSettingsCloseAccessibilityLabel = "关闭这条线的重试和提醒"
 
-    static func headerSubtitle(localActiveCount: Int, recentCount: Int) -> String {
-        "这台机上在跑 \(localActiveCount) 条 · \(recentCount) 条最近完成"
+    static func headerSubtitle(
+        localActiveCount: Int,
+        recentCount: Int,
+        offHostActiveCount: Int = 0
+    ) -> String {
+        if offHostActiveCount > 0 {
+            return "这台机上在跑 \(localActiveCount) 条 · 另外 \(offHostActiveCount) 条不在这台机上 · \(recentCount) 条最近完成"
+        }
+        return "这台机上在跑 \(localActiveCount) 条 · \(recentCount) 条最近完成"
     }
 
     static func showsLineSettings(for engine: LineEngine) -> Bool {

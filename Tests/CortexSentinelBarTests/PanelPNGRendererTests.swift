@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftUI
 import XCTest
 @testable import CortexSentinelBar
 
@@ -37,6 +38,11 @@ final class PanelPNGRendererTests: XCTestCase {
                 "four-outcomes",
                 "balance-unread",
                 "route-unread",
+                "split-counts",
+                "channel-no-record",
+                "channel-unreadable",
+                "channel-unrecognized",
+                "channel-undetermined",
             ]
         )
         XCTAssertNil(PanelPreviewFixture(rawValue: "unknown"))
@@ -100,7 +106,7 @@ final class PanelPNGRendererTests: XCTestCase {
         XCTAssertEqual(session.store.channelStatus.grok.status, .degraded)
         XCTAssertEqual(session.store.channelStatus.grok.status.displayName, "不通")
         XCTAssertEqual(session.store.channelStatus.codex.status, .unknown)
-        XCTAssertEqual(session.store.channelStatus.codex.status.displayName, "无数据")
+        XCTAssertEqual(session.store.channelStatus.codex.statusText, "查不出来")
         XCTAssertEqual(session.store.channelStatus.grok.evidence, "账单未付，进程秒退")
     }
 
@@ -141,6 +147,68 @@ final class PanelPNGRendererTests: XCTestCase {
         XCTAssertNotEqual(hashes["idle"], hashes["four-outcomes"])
         XCTAssertNotEqual(hashes["idle"], hashes["balance-unread"])
         XCTAssertNotEqual(hashes["idle"], hashes["route-unread"])
+        XCTAssertNotEqual(hashes["idle"], hashes["split-counts"])
+        XCTAssertNotEqual(hashes["idle"], hashes["channel-no-record"])
+        XCTAssertNotEqual(hashes["channel-no-record"], hashes["channel-unreadable"])
+        XCTAssertNotEqual(hashes["channel-unreadable"], hashes["channel-unrecognized"])
+        XCTAssertNotEqual(hashes["channel-unrecognized"], hashes["channel-undetermined"])
+    }
+
+    func testSplitCountsFixtureKeepsTheTwoNumbersOnDifferentSets() async throws {
+        let session = try await PanelPreviewFactory.makeSession(fixture: .splitCounts)
+        defer { session.tearDown() }
+
+        let localHost = LocalHostIdentity.current()
+        let groups = session.store.lineGroups
+        let localActive = groups.localActivePresentations(localHost: localHost).count
+        XCTAssertEqual(groups.activeUnregistered.map(\.line.slug), ["local-unregistered"])
+        XCTAssertEqual(groups.activeRegistered.map(\.line.slug), ["remote-registered"])
+        XCTAssertEqual(localActive, 0)
+        XCTAssertEqual(groups.activeRegistered.count, 1)
+        XCTAssertNotEqual(localActive, groups.activeRegistered.count)
+    }
+
+    func testFourChannelUnknownFixturesMatchPrimaryRowCopy() async throws {
+        let cases: [(PanelPreviewFixture, String, ChannelUnknownKind)] = [
+            (.channelNoRecord, "还没有记录", .noRecord),
+            (.channelUnreadable, "状态读不出", .unreadable),
+            (.channelUnrecognized, "状态看不懂", .unrecognized),
+            (.channelUndetermined, "查不出来", .undetermined),
+        ]
+        for (fixture, phrase, kind) in cases {
+            let session = try await PanelPreviewFactory.makeSession(fixture: fixture)
+            defer { session.tearDown() }
+            let presentation = ChannelSectionPresentation(
+                grok: session.store.channelStatus.grok,
+                codex: session.store.channelStatus.codex,
+                liveCounts: EngineCounts()
+            )
+            XCTAssertEqual(
+                presentation.render.primaryRow,
+                ["Codex \(phrase)", "Grok \(phrase)"],
+                fixture.rawValue
+            )
+            XCTAssertEqual(presentation.render.problemLines, [], fixture.rawValue)
+            XCTAssertEqual(session.store.channelStatus.codex.unknownKind, kind, fixture.rawValue)
+            XCTAssertEqual(session.store.channelStatus.grok.unknownKind, kind, fixture.rawValue)
+        }
+    }
+
+    func testIdlePanelFitsOneScreenAfterCopyChange() async throws {
+        let session = try await PanelPreviewFactory.makeSession(fixture: .idle)
+        defer { session.tearDown() }
+        let view = SentinelMenuView(store: session.store, rendersOffscreen: true)
+            .frame(width: SentinelTheme.Metrics.menuWidth)
+            .fixedSize(horizontal: true, vertical: true)
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 2
+        renderer.proposedSize = ProposedViewSize(
+            width: SentinelTheme.Metrics.menuWidth,
+            height: nil
+        )
+        let height = try XCTUnwrap(renderer.nsImage?.size.height)
+        XCTAssertLessThanOrEqual(height, SentinelTheme.Metrics.menuHeight)
+        XCTAssertGreaterThan(height, 300)
     }
 
     func testFourOutcomesFixtureExposesAllFourTerminalStates() async throws {

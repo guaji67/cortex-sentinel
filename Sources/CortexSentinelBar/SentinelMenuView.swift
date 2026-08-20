@@ -132,7 +132,10 @@ struct SentinelMenuView: View {
         if store.watchDirectoryMissing {
             return SentinelPaths.missingWatchDirectoryTitle
         }
-        return "\(localActiveLineCount) 条本机活跃 · \(recentRegisteredCount) 条最近完成"
+        return SentinelBoardCopy.headerSubtitle(
+            localActiveCount: localActiveLineCount,
+            recentCount: recentRegisteredCount
+        )
     }
 
     private var channelSection: some View {
@@ -175,7 +178,7 @@ struct SentinelMenuView: View {
                 .fixedSize(horizontal: true, vertical: false)
                 .layoutPriority(2)
 
-            Text(item.verdict.status.displayName)
+            Text(item.verdict.statusText)
                 .font(SentinelTheme.Fonts.balanceAmount)
                 .foregroundStyle(item.verdict.status.color)
                 .lineLimit(1)
@@ -590,7 +593,7 @@ struct SentinelMenuView: View {
     private var dispatchSection: some View {
         let groups = store.lineGroups
         return VStack(alignment: .leading, spacing: SentinelTheme.Spacing.sm) {
-            sectionTitle("已登记派工", trailing: "\(groups.activeRegistered.count)")
+            sectionTitle(SentinelBoardCopy.registeredSectionTitle, trailing: "\(groups.activeRegistered.count)")
 
             if store.watchDirectoryMissing {
                 missingWatchDirectoryEmptyState
@@ -808,7 +811,7 @@ struct SentinelMenuView: View {
             + recentUnregisteredLines.count
             + store.otherCodexProcesses.count
         return collapsibleSection(
-            title: "自动识别",
+            title: SentinelBoardCopy.unregisteredSectionTitle,
             count: count,
             isExpanded: $showsAutomaticLines
         ) {

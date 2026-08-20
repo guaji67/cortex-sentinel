@@ -28,7 +28,7 @@ struct SentinelLineControls: View {
 
     @ViewBuilder
     var body: some View {
-        if !engine.isCursorGrok {
+        if SentinelBoardCopy.showsLineSettings(for: engine) {
             HStack(spacing: SentinelTheme.Spacing.xs) {
                 if line.state == .waitingRelay {
                     Button(action: requestProbe) {
@@ -53,7 +53,7 @@ struct SentinelLineControls: View {
                         width: SentinelTheme.Metrics.lineControlIconWidth
                     )
                 )
-                .help("本线设置")
+                .help(SentinelBoardCopy.lineSettingsHelp)
                 .accessibilityLabel("设置 \(line.slug)")
             }
         }

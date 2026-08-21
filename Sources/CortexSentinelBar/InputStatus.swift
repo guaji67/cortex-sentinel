@@ -4,7 +4,8 @@ enum InputStatusConstants {
     static let monitoredModels = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5"]
     static let defaultEndpoint = URL(string: "https://status.input.im/api/status")!
     static let refreshInterval: TimeInterval = 60
-    static let backgroundRefreshInterval: TimeInterval = 5 * 60
+    static let backgroundRefreshInterval: TimeInterval = 2 * 60
+    static let panelRefreshThreshold: TimeInterval = 30
     static let requestTimeout: TimeInterval = 15
     static let staleInterval: TimeInterval = 10 * 60
     static let historyWindowSize = 60
@@ -17,6 +18,16 @@ enum InputStatusRefreshPolicy {
         panelPresented
             ? InputStatusConstants.refreshInterval
             : InputStatusConstants.backgroundRefreshInterval
+    }
+
+    static func shouldRefreshOnPanelPresentation(
+        lastRefreshAt: Date?,
+        now: Date = Date()
+    ) -> Bool {
+        guard let lastRefreshAt else {
+            return true
+        }
+        return now.timeIntervalSince(lastRefreshAt) >= InputStatusConstants.panelRefreshThreshold
     }
 }
 

@@ -1,7 +1,7 @@
 import Foundation
 
 enum RelayRecoveryConstants {
-    /// 后台 Input 状态刷新也是 5 分钟；冷却保持同一量级，避免面板打开后的 1 分钟轮询造成骚扰。
+    /// 后台 Input 状态刷新为 2 分钟；冷却保持同一量级，避免重复探测。
     static let probeCooldown: TimeInterval = InputStatusConstants.backgroundRefreshInterval
 }
 

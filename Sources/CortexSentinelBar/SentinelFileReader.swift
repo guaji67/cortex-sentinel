@@ -57,6 +57,25 @@ struct SentinelPaths {
         logsDirectory.appendingPathComponent("line-terminal-ack.json")
     }
 
+    var backgroundJobsHealthURL: URL {
+        logsDirectory.appendingPathComponent("background-jobs-health.json")
+    }
+
+    var disabledJobsURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Application Support", isDirectory: true)
+            .appendingPathComponent("CortexSentinel", isDirectory: true)
+            .appendingPathComponent("disabled-jobs.json")
+    }
+
+    func launchAgentURL(for label: String) -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("LaunchAgents", isDirectory: true)
+            .appendingPathComponent("\(label).plist")
+    }
+
     var relayFiles: RelayFileLocations {
         RelayFileLocations(
             pool: poolDirectory.appendingPathComponent("pool.json"),

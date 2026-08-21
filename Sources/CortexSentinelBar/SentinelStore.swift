@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 import UserNotifications
 
@@ -12,6 +13,9 @@ final class SentinelStore: ObservableObject {
     @Published private(set) var officialUsage: OfficialUsageSnapshot = .empty
     @Published private(set) var channelStatus: ChannelStatusSnapshot = .missing
     @Published private(set) var unclaimedTerminals: [UnclaimedTerminalEntry] = []
+    @Published private(set) var backgroundJobs: [BackgroundJobRow] = []
+    @Published private(set) var backgroundJobMessages: [String: String] = [:]
+    @Published private(set) var backgroundJobOperations: Set<String> = []
     @Published private(set) var isOfficialUsageRefreshing = false
     @Published private(set) var isOfficialUsageRefreshCoolingDown = false
 
@@ -34,9 +38,27 @@ final class SentinelStore: ObservableObject {
     private var isPanelPresented = false
     private var pendingAIOUsageRefresh = false
     private var relayRecoveryCoordinator = RelayRecoveryProbeCoordinator()
+    private let launchctlRunner: any LaunchctlRunning
+    private let disabledJobsStore: DisabledJobsStore
+    private let fileManager: FileManager
+    private let launchctlUID: Int32
+    private var processActivity: NSObjectProtocol?
 
-    init(paths: SentinelPaths = .discover()) {
+    init(
+        paths: SentinelPaths = .discover(),
+        launchctlRunner: any LaunchctlRunning = ProcessLaunchctlRunner(),
+        fileManager: FileManager = .default,
+        disabledJobsURL: URL? = nil,
+        launchctlUID: Int32 = Int32(getuid())
+    ) {
         self.paths = paths
+        self.launchctlRunner = launchctlRunner
+        self.fileManager = fileManager
+        self.launchctlUID = launchctlUID
+        self.disabledJobsStore = DisabledJobsStore(
+            url: disabledJobsURL ?? paths.disabledJobsURL,
+            fileManager: fileManager
+        )
     }
 
     deinit {
@@ -92,6 +114,10 @@ final class SentinelStore: ObservableObject {
             return
         }
         hasStarted = true
+        processActivity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiatedAllowingIdleSystemSleep],
+            reason: "保持哨兵状态与后台任务面板及时刷新"
+        )
         notifier.requestAuthorization()
         refreshAll()
 
@@ -164,6 +190,7 @@ final class SentinelStore: ObservableObject {
         refreshOfficialUsage(reason: .startup)
         refreshChannelStatus()
         refreshUnclaimed(lines: updatedLines, registry: CodexLineRegistryReader.read(at: paths.lineRegistryURL))
+        refreshBackgroundJobs()
     }
 
     func refreshStatuses() {
@@ -177,6 +204,7 @@ final class SentinelStore: ObservableObject {
         )
         refreshChannelStatus()
         refreshUnclaimed(lines: updatedLines, registry: CodexLineRegistryReader.read(at: paths.lineRegistryURL))
+        refreshBackgroundJobs()
     }
 
     private func refreshChannelStatus() {
@@ -206,6 +234,121 @@ final class SentinelStore: ObservableObject {
         }
         refreshAIO(force: true, includeUsage: true)
         refreshInputStatus(force: true)
+    }
+
+    func refreshBackgroundJobs() {
+        backgroundJobs = BackgroundJobsPresentation.merge(
+            jobs: BackgroundJobsReader.read(
+                at: paths.backgroundJobsHealthURL,
+                fileManager: fileManager
+            ),
+            disabledLabels: disabledJobsStore.read()
+        )
+    }
+
+    func disableBackgroundJob(_ label: String) {
+        runBackgroundJobOperation(label) { [launchctlRunner, launchctlUID] in
+            let bootout = await launchctlRunner.run(
+                arguments: LaunchctlCommandBuilder.bootout(uid: launchctlUID, label: label)
+            )
+            guard bootout.succeeded else {
+                throw BackgroundJobOperationFailure(
+                    message: BackgroundJobOperationFailure.message(
+                        action: "关闭",
+                        result: bootout
+                    )
+                )
+            }
+
+            let disable = await launchctlRunner.run(
+                arguments: LaunchctlCommandBuilder.disable(uid: launchctlUID, label: label)
+            )
+            guard disable.succeeded else {
+                throw BackgroundJobOperationFailure(
+                    message: BackgroundJobOperationFailure.message(
+                        action: "写入关闭设置",
+                        result: disable
+                    )
+                )
+            }
+        } onSuccess: { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try self.disabledJobsStore.adding(label)
+                self.backgroundJobMessages[label] = nil
+            } catch {
+                self.backgroundJobMessages[label] = "已关闭，但本地记录写入失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    func enableBackgroundJob(_ label: String) {
+        let plistURL = paths.launchAgentURL(for: label)
+        guard fileManager.fileExists(atPath: plistURL.path) else {
+            backgroundJobMessages[label] = "配置文件已删除，无法从这里重新开启"
+            refreshBackgroundJobs()
+            return
+        }
+
+        runBackgroundJobOperation(label) { [launchctlRunner, launchctlUID] in
+            let enable = await launchctlRunner.run(
+                arguments: LaunchctlCommandBuilder.enable(uid: launchctlUID, label: label)
+            )
+            guard enable.succeeded else {
+                throw BackgroundJobOperationFailure(
+                    message: BackgroundJobOperationFailure.message(
+                        action: "开启",
+                        result: enable
+                    )
+                )
+            }
+
+            let bootstrap = await launchctlRunner.run(
+                arguments: LaunchctlCommandBuilder.bootstrap(
+                    uid: launchctlUID,
+                    plistURL: plistURL
+                )
+            )
+            guard bootstrap.succeeded else {
+                throw BackgroundJobOperationFailure(
+                    message: BackgroundJobOperationFailure.message(
+                        action: "加载",
+                        result: bootstrap
+                    )
+                )
+            }
+        } onSuccess: { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try self.disabledJobsStore.removing(label)
+                self.backgroundJobMessages[label] = nil
+            } catch {
+                self.backgroundJobMessages[label] = "已开启，但本地记录更新失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func runBackgroundJobOperation(
+        _ label: String,
+        operation: @escaping () async throws -> Void,
+        onSuccess: @escaping () -> Void
+    ) {
+        guard !backgroundJobOperations.contains(label) else { return }
+        backgroundJobOperations.insert(label)
+        backgroundJobMessages[label] = nil
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await operation()
+                onSuccess()
+            } catch let failure as BackgroundJobOperationFailure {
+                self.backgroundJobMessages[label] = failure.message
+            } catch {
+                self.backgroundJobMessages[label] = "操作失败：\(error.localizedDescription)"
+            }
+            self.backgroundJobOperations.remove(label)
+            self.refreshBackgroundJobs()
+        }
     }
 
     func refreshOfficialUsageManually() {
@@ -362,11 +505,16 @@ final class SentinelStore: ObservableObject {
         }
         if let lastInputStatusRefreshAt {
             let elapsed = now.timeIntervalSince(lastInputStatusRefreshAt)
-            let minimumInterval = force
-                ? AIOConstants.manualRefreshThrottle
-                : InputStatusRefreshPolicy.automaticInterval(
-                    panelPresented: isPanelPresented
+            let minimumInterval: TimeInterval
+            if isPanelPresented {
+                minimumInterval = InputStatusConstants.panelRefreshThreshold
+            } else if force {
+                minimumInterval = 0
+            } else {
+                minimumInterval = InputStatusRefreshPolicy.automaticInterval(
+                    panelPresented: false
                 )
+            }
             if elapsed < minimumInterval {
                 return
             }

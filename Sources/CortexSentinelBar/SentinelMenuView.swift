@@ -16,6 +16,7 @@ struct SentinelMenuView: View {
     @State private var expandedCompletedLines: Set<String> = []
     @State private var expandedLineNotes: Set<String> = []
     @State private var settingsLine: LineStatus?
+    @State private var pendingBackgroundJobConfirmation: BackgroundJob?
 
     var body: some View {
         ZStack {
@@ -26,6 +27,7 @@ struct SentinelMenuView: View {
                         channelSection
                         serviceSection
                         balancesSection
+                        backgroundJobsSection
                         dispatchSection
                             .id(SentinelMenuInitialSection.dispatch)
                         automaticSection
@@ -59,6 +61,32 @@ struct SentinelMenuView: View {
         )
         .tint(SentinelTheme.Colors.primary)
         .preferredColorScheme(.dark)
+        .confirmationDialog(
+            "确认关闭后台任务？",
+            isPresented: Binding(
+                get: { pendingBackgroundJobConfirmation != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        pendingBackgroundJobConfirmation = nil
+                    }
+                }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let job = pendingBackgroundJobConfirmation {
+                Button("关闭 \(job.displayName)", role: .destructive) {
+                    store.disableBackgroundJob(job.label)
+                    pendingBackgroundJobConfirmation = nil
+                }
+            }
+            Button("取消", role: .cancel) {
+                pendingBackgroundJobConfirmation = nil
+            }
+        } message: {
+            if let job = pendingBackgroundJobConfirmation {
+                Text("这会停止并持久关闭 \(job.label)。")
+            }
+        }
     }
 
     private func settingsOverlay(for line: LineStatus) -> some View {
@@ -561,6 +589,141 @@ struct SentinelMenuView: View {
                     completedLineRow(presentation)
                 }
             }
+        }
+    }
+
+    private var backgroundJobsSection: some View {
+        VStack(alignment: .leading, spacing: SentinelTheme.Spacing.sm) {
+            sectionTitle("后台任务", trailing: "\(store.backgroundJobs.count)")
+
+            if store.backgroundJobs.isEmpty {
+                emptyState("暂无后台任务数据")
+            } else {
+                ForEach(store.backgroundJobs) { row in
+                    backgroundJobRow(row)
+                }
+            }
+        }
+    }
+
+    private func backgroundJobRow(_ row: BackgroundJobRow) -> some View {
+        let job = row.job
+        let isBusy = store.backgroundJobOperations.contains(job.label)
+        let statusText = row.isDisabled
+            ? "已关闭"
+            : (job.statusText ?? backgroundJobStatusText(job.status))
+        return HStack(alignment: .top, spacing: SentinelTheme.Spacing.md) {
+            Circle()
+                .fill(
+                    row.isDisabled
+                        ? SentinelTheme.Colors.secondaryForeground
+                        : backgroundJobStatusColor(job.status)
+                )
+                .frame(
+                    width: SentinelTheme.Metrics.statusDot,
+                    height: SentinelTheme.Metrics.statusDot
+                )
+                .padding(.top, SentinelTheme.Spacing.xs)
+
+            VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xxs) {
+                HStack(alignment: .firstTextBaseline, spacing: SentinelTheme.Spacing.xs) {
+                    Text(job.displayName)
+                        .font(SentinelTheme.Fonts.rowTitle)
+                        .foregroundStyle(SentinelTheme.Colors.foreground)
+                        .lineLimit(1)
+                    Text(statusText)
+                        .sentinelBadge(
+                            foreground: row.isDisabled
+                                ? SentinelTheme.Colors.secondaryForeground
+                                : backgroundJobStatusColor(job.status),
+                            background: row.isDisabled
+                                ? SentinelTheme.Colors.inset
+                                : backgroundJobStatusColor(job.status).opacity(0.14)
+                        )
+                }
+                Text(job.label)
+                    .font(SentinelTheme.Fonts.metadata)
+                    .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                    .lineLimit(1)
+                if let reason = job.reason, !reason.isEmpty, !row.isDisabled {
+                    Text(reason)
+                        .font(SentinelTheme.Fonts.subtitle)
+                        .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let message = store.backgroundJobMessages[job.label] {
+                    Text(message)
+                        .font(SentinelTheme.Fonts.subtitle)
+                        .foregroundStyle(SentinelTheme.Colors.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if isBusy {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: 62, height: SentinelTheme.Metrics.lineControlHeight)
+            } else {
+                Button {
+                    if row.isDisabled {
+                        store.enableBackgroundJob(job.label)
+                    } else if BackgroundJobsConstants.criticalLabels.contains(job.label) {
+                        pendingBackgroundJobConfirmation = job
+                    } else {
+                        store.disableBackgroundJob(job.label)
+                    }
+                } label: {
+                    Label(
+                        row.isDisabled ? "开启" : "关闭",
+                        systemImage: row.isDisabled ? "play.circle" : "stop.circle"
+                    )
+                }
+                .buttonStyle(SentinelLineControlButtonStyle(width: 62))
+                .help(row.isDisabled ? "开启后台任务" : "关闭后台任务")
+                .accessibilityLabel("\(row.isDisabled ? "开启" : "关闭") \(job.displayName)")
+            }
+        }
+        .sentinelRow(tone: row.isDisabled ? .normal : backgroundJobRowTone(job.status))
+        .accessibilityIdentifier("background-job-\(job.label)")
+    }
+
+    private func backgroundJobStatusText(_ status: String) -> String {
+        switch status.lowercased() {
+        case "ok", "healthy", "running":
+            return "正常"
+        case "stalled", "hung", "error", "failed":
+            return "出错"
+        case "disabled":
+            return "已关闭"
+        default:
+            return "未知"
+        }
+    }
+
+    private func backgroundJobStatusColor(_ status: String) -> Color {
+        switch status.lowercased() {
+        case "ok", "healthy", "running":
+            return SentinelTheme.Colors.success
+        case "stalled", "hung":
+            return SentinelTheme.Colors.warning
+        case "error", "failed":
+            return SentinelTheme.Colors.danger
+        default:
+            return SentinelTheme.Colors.secondaryForeground
+        }
+    }
+
+    private func backgroundJobRowTone(_ status: String) -> SentinelRowTone {
+        switch status.lowercased() {
+        case "ok", "healthy", "running":
+            return .success
+        case "stalled", "hung":
+            return .warning
+        case "error", "failed":
+            return .danger
+        default:
+            return .normal
         }
     }
 

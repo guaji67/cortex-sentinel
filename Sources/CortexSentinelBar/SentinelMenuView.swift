@@ -27,9 +27,9 @@ struct SentinelMenuView: View {
                         channelSection
                         serviceSection
                         balancesSection
-                        backgroundJobsSection
                         dispatchSection
                             .id(SentinelMenuInitialSection.dispatch)
+                        backgroundJobsSection
                         automaticSection
                         historySection
                         footer

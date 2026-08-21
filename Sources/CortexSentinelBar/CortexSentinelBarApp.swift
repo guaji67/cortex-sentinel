@@ -73,6 +73,13 @@ enum CortexSentinelBarMain {
         let board = SentinelBoardWindow.snapshot(groups: groups)
 
         print("监视目录：\(paths.logsDirectory.path)")
+        let resolvedLogsDirectory = paths.logsDirectory.resolvingSymlinksInPath().path
+        if resolvedLogsDirectory != paths.logsDirectory.path {
+            print("监视目录实际路径：\(resolvedLogsDirectory)")
+        }
+        if let reason = paths.selfHealingReason {
+            print("自愈原因：\(reason)")
+        }
         if !paths.logsDirectoryExists {
             print(paths.missingWatchDirectoryMessage)
         }

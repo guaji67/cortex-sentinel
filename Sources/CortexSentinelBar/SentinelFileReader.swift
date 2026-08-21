@@ -16,6 +16,35 @@ struct SentinelPaths {
     let codexAuthURL: URL
     let inputStatusURL: URL
     let logsDirectory: URL
+    let selfHealingReason: String?
+
+    init(
+        repositoryRoot: URL,
+        poolDirectory: URL,
+        aioDatabaseURL: URL,
+        aioManifestURL: URL,
+        codexConfigURL: URL,
+        codexAuthURL: URL,
+        inputStatusURL: URL,
+        logsDirectory: URL,
+        selfHealingReason: String? = nil
+    ) {
+        self.repositoryRoot = repositoryRoot
+        self.poolDirectory = poolDirectory
+        self.aioDatabaseURL = aioDatabaseURL
+        self.aioManifestURL = aioManifestURL
+        self.codexConfigURL = codexConfigURL
+        self.codexAuthURL = codexAuthURL
+        self.inputStatusURL = inputStatusURL
+        self.logsDirectory = logsDirectory
+        self.selfHealingReason = selfHealingReason
+    }
+
+    /// 安装在本机时用于目录自愈的 Cortex 仓库根目录。
+    static let selfHealingRepositoryRoot = URL(
+        fileURLWithPath: "/Users/falcon/Documents/Code/cortex",
+        isDirectory: true
+    )
 
     /// 未设置监视目录环境变量时的默认日志目录。
     static var defaultWatchDirectory: URL {
@@ -88,14 +117,17 @@ struct SentinelPaths {
     static func discover(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         currentDirectory _: URL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
-        executableURL _: URL? = Bundle.main.executableURL
+        executableURL _: URL? = Bundle.main.executableURL,
+        defaultWatchDirectory: URL = SentinelPaths.defaultWatchDirectory,
+        selfHealingRepositoryRoot: URL = SentinelPaths.selfHealingRepositoryRoot,
+        fileManager: FileManager = .default
     ) -> SentinelPaths {
         // 日志目录解析优先级：
         // 1. CORTEX_SENTINEL_WATCH_DIR  优先，直接就是日志目录
         // 2. CORTEX_REPO_ROOT           兼容旧装法，仍然解析成 <root>/logs
         // 3. ~/.cortex-sentinel/logs    都没给时的默认值
-        let repositoryRoot: URL
-        let logsDirectory: URL
+        var repositoryRoot: URL
+        var logsDirectory: URL
         if let watch = environment["CORTEX_SENTINEL_WATCH_DIR"], !watch.isEmpty {
             logsDirectory = URL(fileURLWithPath: watch, isDirectory: true)
             if let configured = environment["CORTEX_REPO_ROOT"], !configured.isEmpty {
@@ -109,6 +141,19 @@ struct SentinelPaths {
         } else {
             logsDirectory = defaultWatchDirectory
             repositoryRoot = logsDirectory.deletingLastPathComponent()
+        }
+
+        var selfHealingReason: String?
+        let fallbackLogsDirectory = selfHealingRepositoryRoot
+            .appendingPathComponent("logs", isDirectory: true)
+        if !hasSentinelFiles(in: logsDirectory, fileManager: fileManager),
+           hasSentinelFiles(in: fallbackLogsDirectory, fileManager: fileManager),
+           logsDirectory.standardizedFileURL.path != fallbackLogsDirectory.standardizedFileURL.path {
+            let originalLogsDirectory = logsDirectory
+            logsDirectory = fallbackLogsDirectory
+            repositoryRoot = selfHealingRepositoryRoot
+            selfHealingReason =
+                "解析出的监视目录 \(originalLogsDirectory.path) 没有登记表或状态文件，已切换到仓库日志目录 \(fallbackLogsDirectory.path)"
         }
 
         let poolDirectory: URL
@@ -152,8 +197,33 @@ struct SentinelPaths {
             codexConfigURL: codexConfigURL,
             codexAuthURL: codexAuthURL,
             inputStatusURL: inputStatusURL,
-            logsDirectory: logsDirectory
+            logsDirectory: logsDirectory,
+            selfHealingReason: selfHealingReason
         )
+    }
+
+    private static func hasSentinelFiles(
+        in directory: URL,
+        fileManager: FileManager
+    ) -> Bool {
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: directory.path, isDirectory: &isDirectory),
+              isDirectory.boolValue
+        else {
+            return false
+        }
+
+        if fileManager.fileExists(
+            atPath: directory.appendingPathComponent("codex-line-registry.json").path
+        ) {
+            return true
+        }
+
+        return (try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: []
+        ))?.contains { $0.lastPathComponent.hasSuffix(".status.json") } == true
     }
 }
 

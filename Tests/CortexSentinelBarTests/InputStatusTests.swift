@@ -85,15 +85,32 @@ final class InputStatusTests: XCTestCase {
         )
     }
 
-    func testClosedPanelUsesFiveMinuteInputStatusRefresh() {
+    func testClosedPanelUsesTwoMinuteInputStatusRefresh() {
         XCTAssertEqual(
             InputStatusRefreshPolicy.automaticInterval(panelPresented: true),
             60
         )
         XCTAssertEqual(
             InputStatusRefreshPolicy.automaticInterval(panelPresented: false),
-            300
+            120
         )
+    }
+
+    func testOpeningPanelRefreshesOnlyAfterThirtySeconds() {
+        XCTAssertTrue(InputStatusRefreshPolicy.shouldRefreshOnPanelPresentation(lastRefreshAt: nil, now: now))
+        XCTAssertFalse(
+            InputStatusRefreshPolicy.shouldRefreshOnPanelPresentation(
+                lastRefreshAt: now.addingTimeInterval(-29),
+                now: now
+            )
+        )
+        XCTAssertTrue(
+            InputStatusRefreshPolicy.shouldRefreshOnPanelPresentation(
+                lastRefreshAt: now.addingTimeInterval(-30),
+                now: now
+            )
+        )
+        XCTAssertEqual(InputStatusConstants.panelRefreshThreshold, 30)
     }
 
     func testStatusBarDotSharesSlowToneWithPanel() {

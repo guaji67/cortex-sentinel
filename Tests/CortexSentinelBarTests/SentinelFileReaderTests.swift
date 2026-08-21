@@ -660,6 +660,8 @@ final class SentinelFileReaderTests: XCTestCase {
     }
 
     func testPathEnvironmentOverridesRepositoryAndPoolRoots() {
+        let missingSelfHealingRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CortexSentinelNoFallback-\(UUID().uuidString)")
         let paths = SentinelPaths.discover(
             environment: [
                 "CORTEX_REPO_ROOT": "/tmp/cortex-fixture-repo",
@@ -667,7 +669,8 @@ final class SentinelFileReaderTests: XCTestCase {
                 "CORTEX_CODEX_AUTH_PATH": "/tmp/cortex-fixture-auth.json",
             ],
             currentDirectory: URL(fileURLWithPath: "/tmp"),
-            executableURL: nil
+            executableURL: nil,
+            selfHealingRepositoryRoot: missingSelfHealingRoot
         )
 
         XCTAssertEqual(paths.repositoryRoot.path, "/tmp/cortex-fixture-repo")
@@ -677,13 +680,16 @@ final class SentinelFileReaderTests: XCTestCase {
     }
 
     func testWatchDirEnvironmentSelectsLogsDirectoryDirectly() {
+        let missingSelfHealingRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CortexSentinelNoFallback-\(UUID().uuidString)")
         let paths = SentinelPaths.discover(
             environment: [
                 "CORTEX_SENTINEL_WATCH_DIR": "/tmp/sentinel-watch-dir",
                 "CORTEX_REPO_ROOT": "/tmp/cortex-fixture-repo",
             ],
             currentDirectory: URL(fileURLWithPath: "/tmp"),
-            executableURL: nil
+            executableURL: nil,
+            selfHealingRepositoryRoot: missingSelfHealingRoot
         )
 
         XCTAssertEqual(paths.logsDirectory.path, "/tmp/sentinel-watch-dir")
@@ -691,10 +697,13 @@ final class SentinelFileReaderTests: XCTestCase {
     }
 
     func testDefaultWatchDirectoryIsHomeCortexSentinelLogs() {
+        let missingSelfHealingRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CortexSentinelNoFallback-\(UUID().uuidString)")
         let paths = SentinelPaths.discover(
             environment: [:],
             currentDirectory: URL(fileURLWithPath: "/tmp"),
-            executableURL: nil
+            executableURL: nil,
+            selfHealingRepositoryRoot: missingSelfHealingRoot
         )
         let expected = SentinelPaths.defaultWatchDirectory
         XCTAssertEqual(paths.logsDirectory.path, expected.path)
@@ -715,6 +724,106 @@ final class SentinelFileReaderTests: XCTestCase {
         XCTAssertFalse(SentinelPaths.missingWatchDirectoryTitle.contains("CORTEX_REPO_ROOT"))
         XCTAssertFalse(SentinelPaths.missingWatchDirectoryBody.contains("CORTEX_REPO_ROOT"))
         XCTAssertFalse(SentinelPaths.missingWatchDirectoryHint.contains("CORTEX_REPO_ROOT"))
+    }
+
+    func testSelfHealingRespectsExplicitDirectoryWithContent() throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory
+            .appendingPathComponent("CortexSentinelSelfHealing-\(UUID().uuidString)")
+        let explicitLogs = root.appendingPathComponent("explicit-logs", isDirectory: true)
+        let fallbackRoot = root.appendingPathComponent("cortex", isDirectory: true)
+        let fallbackLogs = fallbackRoot.appendingPathComponent("logs", isDirectory: true)
+        try fileManager.createDirectory(at: explicitLogs, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: fallbackLogs, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: root) }
+
+        try Data("{}".utf8).write(
+            to: explicitLogs.appendingPathComponent("codex-babysitter-explicit.status.json")
+        )
+        try Data("{}".utf8).write(
+            to: fallbackLogs.appendingPathComponent("codex-babysitter-fallback.status.json")
+        )
+
+        let paths = SentinelPaths.discover(
+            environment: ["CORTEX_SENTINEL_WATCH_DIR": explicitLogs.path],
+            selfHealingRepositoryRoot: fallbackRoot
+        )
+
+        XCTAssertEqual(paths.logsDirectory.path, explicitLogs.path)
+        XCTAssertEqual(paths.repositoryRoot.path, explicitLogs.deletingLastPathComponent().path)
+        XCTAssertNil(paths.selfHealingReason)
+    }
+
+    func testSelfHealingSwitchesExplicitEmptyDirectoryToRepositoryLogs() throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory
+            .appendingPathComponent("CortexSentinelSelfHealing-\(UUID().uuidString)")
+        let explicitLogs = root.appendingPathComponent("explicit-logs", isDirectory: true)
+        let fallbackRoot = root.appendingPathComponent("cortex", isDirectory: true)
+        let fallbackLogs = fallbackRoot.appendingPathComponent("logs", isDirectory: true)
+        try fileManager.createDirectory(at: explicitLogs, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: fallbackLogs, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: root) }
+
+        try Data("{}".utf8).write(
+            to: fallbackLogs.appendingPathComponent("codex-babysitter-fallback.status.json")
+        )
+
+        let paths = SentinelPaths.discover(
+            environment: ["CORTEX_SENTINEL_WATCH_DIR": explicitLogs.path],
+            selfHealingRepositoryRoot: fallbackRoot
+        )
+
+        XCTAssertEqual(paths.logsDirectory.path, fallbackLogs.path)
+        XCTAssertEqual(paths.repositoryRoot.path, fallbackRoot.path)
+        XCTAssertTrue(paths.selfHealingReason?.contains(explicitLogs.path) == true)
+        XCTAssertTrue(paths.selfHealingReason?.contains(fallbackLogs.path) == true)
+    }
+
+    func testSelfHealingUsesRepositoryLogsWhenDefaultDirectoryIsEmpty() throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory
+            .appendingPathComponent("CortexSentinelSelfHealing-\(UUID().uuidString)")
+        let defaultLogs = root.appendingPathComponent("default-logs", isDirectory: true)
+        let fallbackRoot = root.appendingPathComponent("cortex", isDirectory: true)
+        let fallbackLogs = fallbackRoot.appendingPathComponent("logs", isDirectory: true)
+        try fileManager.createDirectory(at: defaultLogs, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: fallbackLogs, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: root) }
+
+        try Data("[]".utf8).write(
+            to: fallbackLogs.appendingPathComponent("codex-line-registry.json")
+        )
+
+        let paths = SentinelPaths.discover(
+            environment: [:],
+            defaultWatchDirectory: defaultLogs,
+            selfHealingRepositoryRoot: fallbackRoot
+        )
+
+        XCTAssertEqual(paths.logsDirectory.path, fallbackLogs.path)
+        XCTAssertEqual(paths.repositoryRoot.path, fallbackRoot.path)
+        XCTAssertTrue(paths.selfHealingReason?.contains(defaultLogs.path) == true)
+    }
+
+    func testSelfHealingKeepsDefaultDirectoryWhenRepositoryLogsAreMissing() throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory
+            .appendingPathComponent("CortexSentinelSelfHealing-\(UUID().uuidString)")
+        let defaultLogs = root.appendingPathComponent("default-logs", isDirectory: true)
+        let missingFallbackRoot = root.appendingPathComponent("missing-cortex", isDirectory: true)
+        try fileManager.createDirectory(at: defaultLogs, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: root) }
+
+        let paths = SentinelPaths.discover(
+            environment: [:],
+            defaultWatchDirectory: defaultLogs,
+            selfHealingRepositoryRoot: missingFallbackRoot
+        )
+
+        XCTAssertEqual(paths.logsDirectory.path, defaultLogs.path)
+        XCTAssertEqual(paths.repositoryRoot.path, defaultLogs.deletingLastPathComponent().path)
+        XCTAssertNil(paths.selfHealingReason)
     }
 
     func testStatusRewriteDoesNotChangeEstablishedOrder() {

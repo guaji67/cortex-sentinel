@@ -10,7 +10,8 @@ dist_dir="$package_dir/dist"
 version="${RELEASE_VERSION:-1.1.0}"
 build_number="${RELEASE_BUILD_NUMBER:-$(TZ=Asia/Shanghai date +%Y%m%d)}"
 identity="Developer ID Application: Xiang Yu (M3JSCZ5X23)"
-signing_keychain="$HOME/Library/Keychains/login.keychain-db"
+signing_keychain="$HOME/.cortex-build/devid.keychain-db"
+signing_password_file="$HOME/.cortex-build/devid.keychain-password"
 notary_profile="cortex-notary"
 notary_keychain="$HOME/.cortex-build/notary.keychain-db"
 notary_password_file="$HOME/.cortex-build/notary.keychain-password"
@@ -53,9 +54,17 @@ done
   exit 1
 }
 [ -f "$signing_keychain" ] || {
-  echo "失败：签名登录钥匙串不存在：$signing_keychain" >&2
+  echo "失败：签名钥匙串不存在：$signing_keychain" >&2
   exit 1
 }
+[ -f "$signing_password_file" ] || {
+  echo "失败：签名钥匙串密码文件不存在：$signing_password_file" >&2
+  exit 1
+}
+
+echo "== 解锁签名钥匙串 =="
+# 密码只从 stdin 读取，不出现在命令行、日志或环境变量中。
+security unlock-keychain "$signing_keychain" < "$signing_password_file"
 
 echo "== 解锁公证钥匙串 =="
 # 密码只从 stdin 读取，不出现在命令行、日志或环境变量中。

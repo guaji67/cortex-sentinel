@@ -1,6 +1,25 @@
 import Foundation
 import SwiftUI
 
+/// 掉了必须红的常驻服务。快照按 launchctl list 枚举，缺席 = launchd 里没有这个
+/// 任务 = 没在跑（COR-1862 验收判据 2 的「真坏」判据）。
+enum BackgroundJobsConstants {
+    static let criticalLabels: Set<String> = [
+        "com.falcon.cortex.web",
+        "com.falcon.cortex.web-guard",
+        "com.falcon.cortex.memory-monitor",
+        "com.falcon.cortex.mini-mirror-sync",
+    ]
+
+    /// 缺席时的展示名，对齐主仓 scripts/health/background_jobs_health.py 的 NAME_HINTS。
+    static let criticalDisplayNames: [String: String] = [
+        "com.falcon.cortex.web": "界面常驻服务",
+        "com.falcon.cortex.web-guard": "界面守护",
+        "com.falcon.cortex.memory-monitor": "内存与回收巡检",
+        "com.falcon.cortex.mini-mirror-sync": "数据镜像同步",
+    ]
+}
+
 enum BackgroundJobStatus: String, Equatable {
     case ok
     case error
@@ -106,31 +125,40 @@ struct BackgroundJob: Identifiable, Equatable {
 
     var id: String { label }
 
-    var isProblem: Bool { status.isProblem || plistStatus.isProblem }
+    /// 服务死活只认 launchd 实际状态（快照的 status/pid/退出码）。
+    /// 配置文件在不在不推翻运行事实（COR-1862）：plist 缺失/读不了只做备注。
+    var isProblem: Bool { status.isProblem }
 
-    var problemDetail: String {
+    /// plist 异常的备注文案；loaded 返回 nil。异常细节超长时截断展示。
+    var plistNote: String? {
         switch plistStatus {
+        case .loaded:
+            return nil
         case .missing:
             return BackgroundJobPlistStatus.missingDisplayText
         case .unreadable:
             if plistErrorDetail.isEmpty {
                 return BackgroundJobPlistStatus.unreadableDisplayText
             }
-            return [
-                BackgroundJobPlistStatus.unreadableDisplayText,
-                BackgroundJobPlistStatus.truncatedDetail(plistErrorDetail),
-            ].joined(separator: " · ")
+            return "\(BackgroundJobPlistStatus.unreadableDisplayText)（\(BackgroundJobPlistStatus.truncatedDetail(plistErrorDetail))）"
         case .unrecognized:
             return BackgroundJobPlistStatus.unrecognizedDisplayText
-        case .loaded:
-            break
         }
+    }
+
+    var problemDetail: String {
         var parts: [String] = []
         if !lastRunText.isEmpty {
             parts.append("上次跑：\(lastRunText)")
         }
         if !reason.isEmpty {
             parts.append(reason)
+        }
+        if let note = plistNote {
+            parts.append(note)
+        }
+        if parts.isEmpty {
+            parts.append(statusText)
         }
         return parts.joined(separator: " · ")
     }
@@ -141,6 +169,10 @@ struct BackgroundJob: Identifiable, Equatable {
             parts.append("上次跑：\(lastRunText)")
         }
         parts.append(statusText)
+        if let note = plistNote {
+            let suffix = plistStatus == .unrecognized ? "按运行状态显示" : "服务正常运行"
+            parts.append("\(note)，\(suffix)")
+        }
         return parts.filter { !$0.isEmpty }.joined(separator: " · ")
     }
 }
@@ -239,6 +271,22 @@ struct BackgroundJobsPresentation: Equatable {
                 detail: job.problemDetail,
                 isProblem: true
             )
+        }
+        // 快照新鲜时，关键常驻服务缺席 = launchd 里没有 = 真没在跑，必须红。
+        // 快照过期时不加这条：过期本身已经报了「快照未更新」，别叠双份噪音。
+        if !stale {
+            let presentLabels = Set(snapshot.jobs.map(\.label))
+            for label in BackgroundJobsConstants.criticalLabels.sorted()
+            where !presentLabels.contains(label) {
+                problems.append(
+                    BackgroundJobRow(
+                        id: label,
+                        name: BackgroundJobsConstants.criticalDisplayNames[label] ?? label,
+                        detail: "不在系统服务里，launchctl 里没有这个任务",
+                        isProblem: true
+                    )
+                )
+            }
         }
         if stale {
             let ageText: String

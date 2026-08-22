@@ -167,10 +167,12 @@ final class SentinelBoardWindowTests: XCTestCase {
 
     func testActiveEngineCountsMatchFourRegisteredRunningGrokLines() throws {
         let slugs = ["diskclean", "casediga", "casedigb", "casedigc"]
+        let localHost = LocalHostIdentity(identifiers: ["Test Mac"])
         let registry = try makeRegistry(
             slugs.map { slug in
                 (slug, "cursor-grok", slug, now.timeIntervalSince1970)
-            }
+            },
+            host: "Test Mac"
         )
         let lines = slugs.map { slug in
             makeLine(slug: slug, engine: .cursorGrok, state: .running, age: 5)
@@ -179,13 +181,13 @@ final class SentinelBoardWindowTests: XCTestCase {
 
         XCTAssertEqual(groups.activeRegistered.count, 4)
         XCTAssertEqual(groups.activeUnregistered.count, 0)
-        XCTAssertEqual(groups.activeEngineCounts.grok, 4)
-        XCTAssertEqual(groups.activeEngineCounts.codex, 0)
+        XCTAssertEqual(groups.localActiveEngineCounts(localHost: localHost).grok, 4)
+        XCTAssertEqual(groups.localActiveEngineCounts(localHost: localHost).codex, 0)
         XCTAssertEqual(
             ChannelSectionPresentation(
                 grok: ChannelVerdict(status: .alive, evidence: "1 条在跑", running: 1),
                 codex: ChannelVerdict(status: .alive, evidence: "闲", running: 0),
-                liveCounts: groups.activeEngineCounts
+                liveCounts: groups.localActiveEngineCounts(localHost: localHost)
             ).render.primaryRow,
             ["Codex 通 闲", "Grok 通 4 条"]
         )
@@ -204,23 +206,210 @@ final class SentinelBoardWindowTests: XCTestCase {
 
         XCTAssertEqual(groups.recentlyCompleted.count, 12)
         XCTAssertEqual(board.recentShown.count, 8)
+        let localHost = LocalHostIdentity(identifiers: ["Test Mac"])
         XCTAssertEqual(
-            "\(groups.activeRegistered.count + groups.activeUnregistered.count) 条活跃派工 · \(board.recentShown.count) 条最近完成",
-            "0 条活跃派工 · 8 条最近完成"
+            SentinelBoardCopy.headerSubtitle(
+                localActiveCount: groups.localActivePresentations(localHost: localHost).count,
+                recentCount: board.recentShown.count
+            ),
+            "这台机上在跑 0 条 · 8 条最近完成"
         )
     }
 
+    func testLocalUnregisteredAndRemoteRegisteredCountDifferentThings() throws {
+        let localHost = LocalHostIdentity(identifiers: ["Test Mac"])
+        let registry = try makeRegistry(
+            [
+                ("remote-registered", "codex", "外机已登记", now.timeIntervalSince1970),
+            ],
+            host: "Other Mac"
+        )
+        let localUnregistered = makeLine(
+            slug: "local-unregistered",
+            engine: .cursorGrok,
+            state: .running,
+            age: 10
+        )
+        let remoteRegistered = makeLine(
+            slug: "remote-registered",
+            engine: .codex,
+            state: .running,
+            age: 10
+        )
+        let groups = SentinelAggregation.lineGroups(
+            lines: [localUnregistered, remoteRegistered],
+            registry: registry,
+            now: now
+        )
+        let board = SentinelBoardWindow.snapshot(groups: groups)
+        let localActive = groups.localActivePresentations(localHost: localHost).count
+        let registeredActive = groups.activeRegistered.count
+        let unregisteredActive = groups.activeUnregistered.count
+
+        XCTAssertEqual(localActive, 0)
+        XCTAssertEqual(registeredActive, 1)
+        XCTAssertEqual(unregisteredActive, 1)
+        XCTAssertNotEqual(localActive, registeredActive)
+        XCTAssertEqual(groups.activeRegistered.map(\.line.slug), ["remote-registered"])
+        XCTAssertEqual(groups.activeUnregistered.map(\.line.slug), ["local-unregistered"])
+        XCTAssertEqual(
+            groups.localActivePresentations(localHost: localHost).map(\.line.slug),
+            []
+        )
+        XCTAssertEqual(
+            SentinelBoardCopy.headerSubtitle(
+                localActiveCount: localActive,
+                recentCount: board.recentShown.count,
+                offHostActiveCount: groups.activeHostOriginCounts(localHost: localHost).remote
+                    + groups.activeHostOriginCounts(localHost: localHost).unknown
+            ),
+            "这台机上在跑 0 条 · 另外 2 条不在这台机上 · 0 条最近完成"
+        )
+        XCTAssertEqual(SentinelBoardCopy.registeredSectionTitle, "有登记的")
+        XCTAssertEqual(SentinelBoardCopy.unregisteredSectionTitle, "没登记的")
+    }
+
+    func testHeaderMentionsOffHostActiveLinesAndKeepsPureLocalUnchanged() throws {
+        let localHost = LocalHostIdentity(identifiers: ["Test Mac"])
+        let mixedData = try JSONSerialization.data(
+            withJSONObject: [
+                [
+                    "slug": "remote-line",
+                    "engine": "codex",
+                    "label_zh": "外机",
+                    "dispatcher_zh": "来源对话",
+                    "registered_at": now.timeIntervalSince1970,
+                    "host": "Other Mac",
+                ],
+                [
+                    "slug": "unknown-line",
+                    "engine": "cursor-grok",
+                    "label_zh": "未知",
+                    "dispatcher_zh": "来源对话",
+                    "registered_at": now.timeIntervalSince1970,
+                ],
+            ]
+        )
+        let mixedRegistry = try XCTUnwrap(CodexLineRegistryReader.decode(mixedData))
+        let mixedGroups = SentinelAggregation.lineGroups(
+            lines: [
+                makeLine(slug: "remote-line", engine: .codex, state: .running, age: 10),
+                makeLine(slug: "unknown-line", engine: .cursorGrok, state: .running, age: 10),
+            ],
+            registry: mixedRegistry,
+            now: now
+        )
+        let mixedOrigins = mixedGroups.activeHostOriginCounts(localHost: localHost)
+        XCTAssertEqual(mixedOrigins.local, 0)
+        XCTAssertEqual(mixedOrigins.remote, 1)
+        XCTAssertEqual(mixedOrigins.unknown, 1)
+        XCTAssertEqual(
+            SentinelBoardCopy.headerSubtitle(
+                localActiveCount: mixedGroups.localActivePresentations(localHost: localHost).count,
+                recentCount: SentinelBoardWindow.snapshot(groups: mixedGroups).recentShown.count,
+                offHostActiveCount: mixedOrigins.remote + mixedOrigins.unknown
+            ),
+            "这台机上在跑 0 条 · 另外 2 条不在这台机上 · 0 条最近完成"
+        )
+
+        let localRegistry = try makeRegistry(
+            [("local-line", "codex", "本机", now.timeIntervalSince1970)],
+            host: "Test Mac"
+        )
+        let localGroups = SentinelAggregation.lineGroups(
+            lines: [makeLine(slug: "local-line", engine: .codex, state: .running, age: 10)],
+            registry: localRegistry,
+            now: now
+        )
+        let localOrigins = localGroups.activeHostOriginCounts(localHost: localHost)
+        XCTAssertEqual(localOrigins.local, 1)
+        XCTAssertEqual(localOrigins.remote, 0)
+        XCTAssertEqual(localOrigins.unknown, 0)
+        let localHeader = SentinelBoardCopy.headerSubtitle(
+            localActiveCount: localGroups.localActivePresentations(localHost: localHost).count,
+            recentCount: 0,
+            offHostActiveCount: localOrigins.remote + localOrigins.unknown
+        )
+        XCTAssertEqual(localHeader, "这台机上在跑 1 条 · 0 条最近完成")
+        XCTAssertFalse(localHeader.contains("不在这台机上"))
+    }
+
+    func testRecencyDateFallsBackFromMtimeToUpdatedAtToRegisteredAt() throws {
+        let updatedAt = now.addingTimeInterval(-100)
+        let registeredAt = now.timeIntervalSince1970 - 200
+        let registry = try makeRegistry([
+            ("fallback-line", "codex", "回退", registeredAt),
+        ])
+        let registration = registry.registration(for: "fallback-line")
+
+        let withMtime = makeLine(
+            slug: "fallback-line",
+            engine: .codex,
+            state: .done,
+            age: 10
+        )
+        XCTAssertEqual(
+            SentinelBoardWindow.recencyDate(for: withMtime, registration: registration),
+            withMtime.sourceModifiedAt
+        )
+
+        let noMtime = LineStatus(
+            sourceFile: URL(fileURLWithPath: "/tmp/codex-babysitter-fallback-line.status.json"),
+            slug: "fallback-line",
+            engine: .codex,
+            workdir: nil,
+            branch: nil,
+            state: .done,
+            restarts: 0,
+            reportsRestarts: true,
+            rolloutAgeSeconds: nil,
+            updatedAt: updatedAt,
+            sourceModifiedAt: nil,
+            relay: nil
+        )
+        XCTAssertEqual(
+            SentinelBoardWindow.recencyDate(for: noMtime, registration: registration),
+            updatedAt
+        )
+
+        let onlyRegistered = LineStatus(
+            sourceFile: URL(fileURLWithPath: "/tmp/codex-babysitter-fallback-line.status.json"),
+            slug: "fallback-line",
+            engine: .codex,
+            workdir: nil,
+            branch: nil,
+            state: .done,
+            restarts: 0,
+            reportsRestarts: true,
+            rolloutAgeSeconds: nil,
+            updatedAt: nil,
+            sourceModifiedAt: nil,
+            relay: nil
+        )
+        XCTAssertEqual(
+            SentinelBoardWindow.recencyDate(for: onlyRegistered, registration: registration),
+            Date(timeIntervalSince1970: registeredAt)
+        )
+        XCTAssertEqual(SentinelBoardWindow.historyDisplayCap, 500)
+        XCTAssertEqual(StatusFileRetention.defaultCap, 500)
+    }
+
     private func makeRegistry(
-        _ entries: [(slug: String, engine: String, label: String, registeredAt: TimeInterval)]
+        _ entries: [(slug: String, engine: String, label: String, registeredAt: TimeInterval)],
+        host: String? = nil
     ) throws -> CodexLineRegistry {
         let objects = entries.map { entry -> [String: Any] in
-            [
+            var object: [String: Any] = [
                 "slug": entry.slug,
                 "engine": entry.engine,
                 "label_zh": entry.label,
                 "dispatcher_zh": "来源对话",
                 "registered_at": entry.registeredAt,
             ]
+            if let host {
+                object["host"] = host
+            }
+            return object
         }
         let data = try JSONSerialization.data(withJSONObject: objects)
         return try XCTUnwrap(CodexLineRegistryReader.decode(data))

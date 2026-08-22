@@ -42,29 +42,127 @@ enum ChannelHealth: Equatable {
     }
 }
 
+enum ChannelUnknownKind: Equatable {
+    case noRecord
+    case unreadable
+    case unrecognized
+    case undetermined
+
+    static let aliveText = "通"
+    static let degradedText = "不通"
+
+    var statusText: String {
+        switch self {
+        case .noRecord:
+            return "还没有记录"
+        case .unreadable:
+            return "状态读不出"
+        case .unrecognized:
+            return "状态看不懂"
+        case .undetermined:
+            return "查不出来"
+        }
+    }
+}
+
 struct ChannelVerdict: Equatable {
     let status: ChannelHealth
     let evidence: String
     let running: Int?
+    let unknownKind: ChannelUnknownKind?
 
-    init(status: ChannelHealth, evidence: String, running: Int? = nil) {
+    init(
+        status: ChannelHealth,
+        evidence: String,
+        running: Int? = nil,
+        unknownKind: ChannelUnknownKind? = nil
+    ) {
         self.status = status
         self.evidence = evidence
         self.running = running
+        if status == .unknown {
+            self.unknownKind = unknownKind ?? .undetermined
+        } else {
+            self.unknownKind = nil
+        }
     }
 
     init(payload: ChannelVerdictPayload?) {
-        status = ChannelHealth(rawValue: payload?.status)
         let trimmed = payload?.evidence?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         evidence = trimmed.isEmpty ? "无数据" : trimmed
         running = payload?.running
+        guard let payload else {
+            status = .unknown
+            unknownKind = .noRecord
+            return
+        }
+        let raw = payload.status?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        switch raw.lowercased() {
+        case "alive":
+            status = .alive
+            unknownKind = nil
+        case "degraded":
+            status = .degraded
+            unknownKind = nil
+        case "unknown":
+            status = .unknown
+            unknownKind = .undetermined
+        default:
+            status = .unknown
+            unknownKind = .unrecognized
+        }
     }
 
     var runningCount: Int {
         running ?? 0
     }
 
-    static let missing = ChannelVerdict(status: .unknown, evidence: "无数据")
+    var statusText: String {
+        switch status {
+        case .alive:
+            return ChannelUnknownKind.aliveText
+        case .degraded:
+            return ChannelUnknownKind.degradedText
+        case .unknown:
+            return (unknownKind ?? .undetermined).statusText
+        }
+    }
+
+    static let missing = ChannelVerdict(
+        status: .unknown,
+        evidence: "无数据",
+        unknownKind: .noRecord
+    )
+
+    static let unreadable = ChannelVerdict(
+        status: .unknown,
+        evidence: "文件读不出",
+        unknownKind: .unreadable
+    )
+}
+
+enum SentinelBoardCopy {
+    static let registeredSectionTitle = "有登记的"
+    static let unregisteredSectionTitle = "没登记的"
+    static let lineSettingsTitle = "这条线的重试和提醒"
+    static let lineSettingsHelp = "这条线的重试和提醒（只有 Codex 有）"
+    static let escalateAfterFailuresLabel = "失败几次提醒我"
+    static let lineSettingsCloseAccessibilityLabel = "关闭这条线的重试和提醒"
+
+    static func headerSubtitle(
+        localActiveCount: Int,
+        recentCount: Int,
+        offHostActiveCount: Int = 0
+    ) -> String {
+        if offHostActiveCount > 0 {
+            return "这台机上在跑 \(localActiveCount) 条 · 另外 \(offHostActiveCount) 条不在这台机上 · \(recentCount) 条最近完成"
+        }
+        return "这台机上在跑 \(localActiveCount) 条 · \(recentCount) 条最近完成"
+    }
+
+    static func showsLineSettings(for engine: LineEngine) -> Bool {
+        !engine.isCursorGrok
+    }
 }
 
 struct ChannelStatusSnapshot: Equatable {
@@ -80,8 +178,8 @@ struct ChannelStatusSnapshot: Equatable {
 
     static let invalid = ChannelStatusSnapshot(
         generatedAt: nil,
-        grok: ChannelVerdict(status: .unknown, evidence: "文件读不出"),
-        codex: ChannelVerdict(status: .unknown, evidence: "文件读不出")
+        grok: .unreadable,
+        codex: .unreadable
     )
 }
 
@@ -104,16 +202,16 @@ struct ChannelItemPresentation: Equatable {
 
     var itemText: String {
         if let countText {
-            return "\(name) \(verdict.status.displayName) \(countText)"
+            return "\(name) \(verdict.statusText) \(countText)"
         }
-        return "\(name) \(verdict.status.displayName)"
+        return "\(name) \(verdict.statusText)"
     }
 
     var problemLine: String? {
         guard verdict.status == .degraded else {
             return nil
         }
-        return "\(name) \(verdict.status.displayName)，\(verdict.evidence)"
+        return "\(name) \(verdict.statusText)，\(verdict.evidence)"
     }
 }
 
@@ -355,6 +453,17 @@ enum LineState: Equatable {
 
     var isRetrying: Bool {
         self == .retrying || self == .backoff
+    }
+
+    /// 清理时当作活线：派工日志和状态文件都不许删。
+    /// 口径跟 `LogCleaner` 原来的 running / waitingRelay 保护一致。
+    var isCleanupProtectedLive: Bool {
+        switch self {
+        case .running, .waitingRelay:
+            return true
+        default:
+            return false
+        }
     }
 }
 
@@ -927,6 +1036,29 @@ struct LineStatus: Identifiable, Equatable {
     }
 }
 
+/// 完成列表上四个终态必须出现的词。颜色不算数。一个字不许改。
+enum LineTerminalOutcomePresentation {
+    static let done = "做完了"
+    static let help = "要人管"
+    static let dead = "挂了"
+    static let killed = "被停了"
+
+    static func label(for state: LineState) -> String? {
+        switch state {
+        case .done:
+            return done
+        case .help:
+            return help
+        case .dead:
+            return dead
+        case .killed:
+            return killed
+        default:
+            return nil
+        }
+    }
+}
+
 struct LineDispositionPresentation: Equatable {
     let stateText: String
     let symbolName: String
@@ -938,7 +1070,7 @@ struct LineDispositionPresentation: Equatable {
         note = line.note
         requiresAttention = line.requiresAttention
         if line.state == .dead, line.note != nil {
-            stateText = "已处置"
+            stateText = LineTerminalOutcomePresentation.dead
             symbolName = "checkmark.seal.fill"
             markerText = "已有处置记录"
         } else if let holdText = line.launchHold.badgeText {
@@ -946,6 +1078,10 @@ struct LineDispositionPresentation: Equatable {
             // 这条线不是卡死，是守护按维护者的规矩主动停下了无谓重试。
             stateText = holdText
             symbolName = line.launchHold == .noExit ? "hourglass" : "gauge.with.needle"
+            markerText = line.note == nil ? nil : "有备注"
+        } else if let outcome = LineTerminalOutcomePresentation.label(for: line.state) {
+            stateText = outcome
+            symbolName = line.state.symbolName
             markerText = line.note == nil ? nil : "有备注"
         } else {
             stateText = line.state.displayName

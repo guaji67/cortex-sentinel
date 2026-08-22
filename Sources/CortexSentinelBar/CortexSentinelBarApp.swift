@@ -1,6 +1,10 @@
 import AppKit
 import SwiftUI
 
+enum SentinelRuntimeNotification {
+    static let openSettings = Notification.Name("com.falcon.cortex.sentinelbar.openSettings")
+}
+
 @main
 enum CortexSentinelBarMain {
     static let smokeWindowArgument = "--smoke-window"
@@ -10,13 +14,28 @@ enum CortexSentinelBarMain {
     static let cleanupDryRunArgument = "--cleanup-dry-run"
     static let cleanupRunArgument = "--cleanup-run"
     static let renderStatusBarArgument = "--render-statusbar"
+    static let renderSettingsPNGArgument = "--render-settings-png"
+    static let settingsFixtureArgument = "--settings-fixture"
+    static let renderPanelPNGArgument = "--render-panel-png"
+    static let panelFixtureArgument = "--panel-fixture"
     static let dumpStateArgument = "--dump-state"
+    static let idleRefreshArgument = "--idle-refresh"
+    static let smokeSettingsArgument = "--smoke-settings"
+    static let openSettingsArgument = "--open-settings"
 
     @MainActor
-    static func main() {
+    static func main() async {
         let arguments = ProcessInfo.processInfo.arguments
         if arguments.contains(dumpStateArgument) {
             runDumpStateCLI()
+            return
+        }
+        if arguments.contains(idleRefreshArgument) {
+            await runIdleRefreshCLI()
+            return
+        }
+        if arguments.contains(openSettingsArgument) {
+            runOpenSettingsCLI()
             return
         }
         if arguments.contains(cleanupDryRunArgument) || arguments.contains(cleanupRunArgument) {
@@ -26,6 +45,22 @@ enum CortexSentinelBarMain {
         if let index = arguments.firstIndex(of: renderStatusBarArgument),
            index + 1 < arguments.count {
             StatusBarSnapshotter.render(to: arguments[index + 1])
+            return
+        }
+        if let index = arguments.firstIndex(of: renderSettingsPNGArgument),
+           index + 1 < arguments.count {
+            runRenderSettingsPNGCLI(
+                outputPath: arguments[index + 1],
+                arguments: arguments
+            )
+            return
+        }
+        if let index = arguments.firstIndex(of: renderPanelPNGArgument),
+           index + 1 < arguments.count {
+            await runRenderPanelPNGCLI(
+                outputPath: arguments[index + 1],
+                arguments: arguments
+            )
             return
         }
         if arguments.contains(smokePopoverArgument) {
@@ -58,6 +93,76 @@ enum CortexSentinelBarMain {
         withExtendedLifetime(controller) {}
     }
 
+    /// 通知已经在跑的那一份打开设置窗，自己马上退出，避免再拉起第二个实例。
+    private static func runOpenSettingsCLI() {
+        DistributedNotificationCenter.default().postNotificationName(
+            SentinelRuntimeNotification.openSettings,
+            object: nil,
+            userInfo: nil,
+            deliverImmediately: true
+        )
+    }
+
+    @MainActor
+    private static func runRenderSettingsPNGCLI(outputPath: String, arguments: [String]) {
+        let fixture: SettingsPreviewFixture
+        if let index = arguments.firstIndex(of: settingsFixtureArgument),
+           index + 1 < arguments.count,
+           let parsed = SettingsPreviewFixture(rawValue: arguments[index + 1]) {
+            fixture = parsed
+        } else {
+            fixture = .default
+        }
+        do {
+            try SettingsPNGRenderer.render(fixture: fixture, to: outputPath)
+            print("written \(outputPath)")
+        } catch {
+            FileHandle.standardError.write(Data("设置窗离屏渲染失败：\(error.localizedDescription)\n".utf8))
+            exit(1)
+        }
+    }
+
+    /// 无界面空转：连续刷 refreshStatuses，给 `sample` 采热栈。
+    /// 不启 NSApplication、不申请通知权限、不碰登录项。
+    /// 产品定时器仍按设置走；这里只把「每一轮」压到前台，方便对着数栈帧。
+    @MainActor
+    private static func runIdleRefreshCLI() async {
+        let store = SentinelStore()
+        FileHandle.standardOutput.write(
+            Data("idle-refresh pid=\(ProcessInfo.processInfo.processIdentifier)\n".utf8)
+        )
+        await store.refreshStatuses()
+        while true {
+            await store.refreshStatuses()
+        }
+    }
+
+    @MainActor
+    private static func runRenderPanelPNGCLI(outputPath: String, arguments: [String]) async {
+        let fixture: PanelPreviewFixture
+        if let index = arguments.firstIndex(of: panelFixtureArgument),
+           index + 1 < arguments.count {
+            let name = arguments[index + 1]
+            guard let parsed = PanelPreviewFixture(rawValue: name) else {
+                let allowed = PanelPreviewFixture.allCases.map(\.rawValue).joined(separator: ", ")
+                FileHandle.standardError.write(
+                    Data("未知 --panel-fixture：\(name)。可选：\(allowed)\n".utf8)
+                )
+                exit(1)
+            }
+            fixture = parsed
+        } else {
+            fixture = .idle
+        }
+        do {
+            try await PanelPNGRenderer.render(fixture: fixture, to: outputPath)
+            print("written \(outputPath)")
+        } catch {
+            FileHandle.standardError.write(Data("面板离屏渲染失败：\(error.localizedDescription)\n".utf8))
+            exit(1)
+        }
+    }
+
     /// 自检 CLI：把哨兵此刻从磁盘读到的东西原样打印出来。
     /// 「面板显示的跟实际不一样」不用再靠猜或截图——跑一次就知道是读不到文件、
     /// 解不出内容，还是读到了但分组/显示写错了。
@@ -85,14 +190,30 @@ enum CortexSentinelBarMain {
         }
         print("仓库根：\(paths.repositoryRoot.path)")
         let channelStatus = SentinelFileReader.readChannelStatus(at: paths.channelStatusURL)
-        let liveChannelCounts = groups.activeEngineCounts
+        let localHost = LocalHostIdentity.current()
+        let liveChannelCounts = groups.localActiveEngineCounts(localHost: localHost)
+        let originCounts = groups.activeHostOriginCounts(localHost: localHost)
+        print("本机身份：\(localHost.dumpText)")
         print("通道：\(paths.channelStatusURL.path)")
         print(
-            "  Grok \(channelStatus.grok.status.displayName) · 文件running=\(channelStatus.grok.running.map(String.init) ?? "无") · 面板条数=\(liveChannelCounts.grok) · \(channelStatus.grok.evidence)"
+            "  Grok \(channelStatus.grok.statusText) · 文件running=\(channelStatus.grok.running.map(String.init) ?? "无") · 面板条数(本机)=\(liveChannelCounts.grok) · \(channelStatus.grok.evidence)"
         )
         print(
-            "  Codex \(channelStatus.codex.status.displayName) · 文件running=\(channelStatus.codex.running.map(String.init) ?? "无") · 面板条数=\(liveChannelCounts.codex) · \(channelStatus.codex.evidence)"
+            "  Codex \(channelStatus.codex.statusText) · 文件running=\(channelStatus.codex.running.map(String.init) ?? "无") · 面板条数(本机)=\(liveChannelCounts.codex) · \(channelStatus.codex.evidence)"
         )
+        print(
+            "  活跃口径：本机 \(originCounts.local) · 外机 \(originCounts.remote) · 机器未知 \(originCounts.unknown)（通道行和标题只数本机）"
+        )
+        let backgroundJobs = BackgroundJobsReader.read(at: paths.backgroundJobsHealthURL)
+        let backgroundPresentation = BackgroundJobsPresentation(snapshot: backgroundJobs)
+        print("后台任务：\(paths.backgroundJobsHealthURL.path)")
+        print("  \(backgroundPresentation.summaryText)")
+        for row in backgroundPresentation.problemRows {
+            print("    - \(row.name) · \(row.detail)")
+        }
+        for job in backgroundJobs.jobs {
+            print("    · \(job.name) [\(job.statusText)] \(job.intervalText) 上次跑：\(job.lastRunText)")
+        }
         let ack = SentinelFileReader.readTerminalAck(at: paths.lineTerminalAckURL)
         let unclaimed = UnclaimedTerminalAggregation.entries(lines: lines, registry: registry, ack: ack)
         print("未认领终态：\(unclaimed.count) 条")
@@ -111,21 +232,21 @@ enum CortexSentinelBarMain {
         print("分组结果：")
         print("  已登记派工（活跃）：\(groups.activeRegistered.count)")
         for item in groups.activeRegistered {
-            print("    - \(item.line.slug) → \(item.registration?.labelZH ?? "（无中文名）") [\(item.engine.displayName) · \(item.line.state.displayName)]")
+            print("    - \(item.line.slug) → \(item.registration?.labelZH ?? "（无中文名）") [\(item.engine.displayName) · \(item.line.state.displayName) · \(item.hostOrigin(localHost: localHost).badgeText)]")
         }
         print("  自动识别（未登记且活跃）：\(groups.activeUnregistered.count)")
         for item in groups.activeUnregistered {
-            print("    - \(item.line.slug) [\(item.engine.displayName) · \(item.line.state.displayName)]")
+            print("    - \(item.line.slug) [\(item.engine.displayName) · \(item.line.state.displayName) · \(item.hostOrigin(localHost: localHost).badgeText)]")
         }
         print("  刚完成（分组全量）：\(groups.recentlyCompleted.count)")
         for item in groups.recentlyCompleted {
-            print("    - \(item.line.slug) → \(item.registration?.labelZH ?? "（无中文名）") [\(item.engine.displayName)]")
+            print("    - \(item.line.slug) → \(item.registration?.labelZH ?? "（无中文名）") [\(item.engine.displayName) · \(item.hostOrigin(localHost: localHost).badgeText)]")
         }
         print("  历史（分组全量）：\(groups.history.count)")
         print("看板窗口（使用者面板实际露出，不是分组全量）：")
         print("  最近完成露出：\(board.recentShown.count)  Grok=\(board.recentCounts.grok) Codex=\(board.recentCounts.codex)")
         for item in board.recentShown {
-            print("    - \(item.line.slug) → \(item.registration?.labelZH ?? "（无中文名）") [\(item.engine.displayName) · \(item.line.state.displayName)]")
+            print("    - \(item.line.slug) → \(item.registration?.labelZH ?? "（无中文名）") [\(item.engine.displayName) · \(item.line.state.displayName) · \(item.hostOrigin(localHost: localHost).badgeText)]")
         }
         print("  历史露出：\(board.historyShown.count)  Grok=\(board.historyCounts.grok) Codex=\(board.historyCounts.codex)")
         print("  历史隐藏：\(board.hiddenCount)  Grok=\(board.hiddenCounts.grok) Codex=\(board.hiddenCounts.codex)")
@@ -133,6 +254,7 @@ enum CortexSentinelBarMain {
         if let footerText = board.footerText {
             print("  脚注：\(footerText)")
         }
+        printLoginItemDiagnostics()
         let archiveURL = paths.logsDirectory.appendingPathComponent("sentinel-history-hidden.json")
         do {
             try board.writeArchive(to: archiveURL)
@@ -140,15 +262,53 @@ enum CortexSentinelBarMain {
         } catch {
             print("  隐藏归档写入失败：\(error.localizedDescription)")
         }
+        let defaults = SentinelSettings.resolvedDefaults()
+        let details = LaunchdSupervisionProbe.collectFromCurrentProcess()
+        for line in SentinelSettings.dumpLines(
+            defaults: defaults,
+            signals: details.signals
+        ) {
+            print(line)
+        }
     }
 
-    /// 日志清理 CLI（第 5 点 dry-run 证据用）：打印计划；--cleanup-dry-run 绝不删，
-    /// --cleanup-run 才真删。目录由 SentinelPaths.discover() 决定（尊重 CORTEX_SENTINEL_WATCH_DIR / CORTEX_REPO_ROOT）。
+    /// 只诊断，绝不调用 `SMAppService.register()`。
+    private static func printLoginItemDiagnostics() {
+        let details = LaunchdSupervisionProbe.collectFromCurrentProcess()
+        let status = SMAppServiceLoginItemRegistrar().status
+        let defaults = SentinelSettings.resolvedDefaults()
+        let plan = LoginItemReconciler.plan(
+            signals: details.signals,
+            status: status,
+            wantsEnabled: SentinelSettings.loginItemEnabled(defaults: defaults)
+        )
+        for line in LoginItemDiagnostics.dumpLines(
+            details: details,
+            loginItemStatus: status,
+            menuBarWouldRegister: plan.action == .register
+        ) {
+            print(line)
+        }
+    }
+
+    /// 清理 CLI：打印计划；--cleanup-dry-run 绝不删，--cleanup-run 才真删。
+    /// 目录由 SentinelPaths.discover() 决定（尊重 CORTEX_SENTINEL_WATCH_DIR / CORTEX_REPO_ROOT）。
+    /// 条数规则和体积规则各打一份报告，互不覆盖。条数上限读设置，默认 `StatusFileRetention.defaultCap`。
     private static func runCleanupCLI(dryRun: Bool) {
-        let paths = SentinelPaths.discover()
-        let plan = LogCleaner.run(logsDirectory: paths.logsDirectory, dryRun: dryRun)
+        let defaults = SentinelSettings.resolvedDefaults()
+        let paths = SentinelPaths.discover(defaults: defaults)
+        let registry = CodexLineRegistryReader.read(at: paths.lineRegistryURL)
+        let cap = SentinelSettings.historyRetainCount(defaults: defaults)
+        let statusPlan = StatusFileCleaner.run(
+            logsDirectory: paths.logsDirectory,
+            registry: registry,
+            dryRun: dryRun,
+            cap: cap
+        )
+        let logPlan = LogCleaner.run(logsDirectory: paths.logsDirectory, dryRun: dryRun)
         print("logs 目录：\(paths.logsDirectory.path)")
-        print(plan.reportText(dryRun: dryRun))
+        print(statusPlan.reportText(dryRun: dryRun))
+        print(logPlan.reportText(dryRun: dryRun))
     }
 }
 
@@ -212,11 +372,11 @@ private final class SentinelSmokePopoverController: NSObject, NSPopoverDelegate 
     }
 
     func popoverWillShow(_ notification: Notification) {
-        store.setPanelPresented(true)
+        Task { await store.setPanelPresented(true) }
     }
 
     func popoverDidClose(_ notification: Notification) {
-        store.setPanelPresented(false)
+        Task { await store.setPanelPresented(false) }
     }
 }
 
@@ -250,6 +410,14 @@ private struct CortexSentinelSmokeApp: App {
                 // 让 shell 精确 screencapture -R（AX/osascript 无权限时的确定性替代）。
                 DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
                     SmokeWindowPlacer.pinAndReport()
+                    if ProcessInfo.processInfo.arguments.contains(
+                        CortexSentinelBarMain.smokeSettingsArgument
+                    ) {
+                        store.openSettings()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                            SmokeWindowPlacer.pinAndReport(title: SentinelSettingsCopy.windowTitle)
+                        }
+                    }
                 }
             }
         }
@@ -320,8 +488,14 @@ enum StatusBarSnapshotter {
 
 /// 仅 smoke 截图用：把窗口钉到已知位置并把截图矩形（screencapture 左上原点坐标）报出来。
 enum SmokeWindowPlacer {
-    static func pinAndReport() {
-        guard let window = NSApplication.shared.windows.first(where: { $0.isVisible }),
+    static func pinAndReport(title: String? = nil) {
+        let window: NSWindow?
+        if let title {
+            window = NSApplication.shared.windows.first(where: { $0.title == title && $0.isVisible })
+        } else {
+            window = NSApplication.shared.windows.first(where: { $0.isVisible })
+        }
+        guard let window,
               let screen = window.screen ?? NSScreen.main
         else {
             return

@@ -3,7 +3,8 @@ import Foundation
 /// 使用者面板实际能看见的那一窗：最近完成 8 条、历史最多 500 条。
 ///
 /// 分组仍按 mtime 切活跃 / 24h 终态 / 更早历史；这一层只决定**露出顺序和条数**。
-/// 不写 `codex-line-registry.json`，也不删 status 文件。被裁的线源文件仍在 logs/。
+/// 不写 `codex-line-registry.json`。磁盘上状态文件条数由 `StatusFileRetention` /
+/// `StatusFileCleaner` 另管，不在这里删。
 struct SentinelBoardWindow: Equatable {
     static let historyDisplayCap = 500
     static let recencyCriterion = "按状态文件 mtime 倒序（无 mtime 则 updated_at，再无则登记时间）；最近完成最多 8 条，历史最多 500 条"
@@ -65,8 +66,12 @@ struct SentinelBoardWindow: Equatable {
     }
 
     static func recencyDate(for presentation: LinePresentation) -> Date? {
-        presentation.line.effectiveUpdatedAt
-            ?? presentation.registration.map { Date(timeIntervalSince1970: $0.registeredAt) }
+        recencyDate(for: presentation.line, registration: presentation.registration)
+    }
+
+    static func recencyDate(for line: LineStatus, registration: CodexLineRegistration?) -> Date? {
+        line.effectiveUpdatedAt
+            ?? registration.map { Date(timeIntervalSince1970: $0.registeredAt) }
     }
 
     func archive() -> HistoryTrimArchive {
@@ -92,7 +97,7 @@ struct SentinelBoardWindow: Equatable {
         try data.write(to: url, options: .atomic)
     }
 
-    private static func recencyPrecedes(lhs: LinePresentation, rhs: LinePresentation) -> Bool {
+    static func recencyPrecedes(lhs: LinePresentation, rhs: LinePresentation) -> Bool {
         switch (recencyDate(for: lhs), recencyDate(for: rhs)) {
         case let (lhsDate?, rhsDate?) where lhsDate != rhsDate:
             return lhsDate > rhsDate
@@ -144,10 +149,40 @@ struct EngineCounts: Equatable {
 }
 
 extension SentinelLineGroups {
-    /// 通道行「N 条」与派工列表共用：非终态且 status 文件 10 分钟内，按引擎拆开。
-    /// 不读 `channel-status.json` 的 `running`，那份摘要会和下面卡片打架。
+    var activePresentations: [LinePresentation] {
+        activeRegistered + activeUnregistered
+    }
+
+    /// 全机活跃条数，给 --dump-state 对照用。面板通道行不用这个。
     var activeEngineCounts: EngineCounts {
-        EngineCounts(activeRegistered + activeUnregistered)
+        EngineCounts(activePresentations)
+    }
+
+    /// 通道行「N 条」和标题「这台机上在跑」只数本机。外机和「机器未知」仍出现在
+    /// 展开列表里，但不进这个数——缺 host 不许猜成本机。
+    func localActivePresentations(localHost: LocalHostIdentity) -> [LinePresentation] {
+        activePresentations.filter { $0.hostOrigin(localHost: localHost).isLocal }
+    }
+
+    func localActiveEngineCounts(localHost: LocalHostIdentity) -> EngineCounts {
+        EngineCounts(localActivePresentations(localHost: localHost))
+    }
+
+    func activeHostOriginCounts(localHost: LocalHostIdentity) -> (local: Int, remote: Int, unknown: Int) {
+        var local = 0
+        var remote = 0
+        var unknown = 0
+        for item in activePresentations {
+            switch item.hostOrigin(localHost: localHost) {
+            case .local:
+                local += 1
+            case .remote:
+                remote += 1
+            case .unknown:
+                unknown += 1
+            }
+        }
+        return (local, remote, unknown)
     }
 }
 

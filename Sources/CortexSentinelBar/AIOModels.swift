@@ -201,6 +201,13 @@ enum AIOUsageStatus: Equatable, Sendable {
         return usage
     }
 
+    var hasDisplayableBalanceNumber: Bool {
+        guard let usage else {
+            return false
+        }
+        return usage.remaining != nil || usage.weeklyUsedPercentage != nil
+    }
+
     var hasFailure: Bool {
         switch self {
         case .failed, .timedOut, .invalid:
@@ -407,6 +414,11 @@ struct AIOSnapshot: Equatable, Sendable {
 struct SentinelTopChannelPresentation: Equatable {
     let balanceCountText: String
     let routeSummary: String
+    /// 读到通道数据才给连接方式徽章；读不到时为 nil，不许用默认「直连」顶上。
+    let routeModeBadge: String?
+
+    static let unconfiguredRouteSummary = "没在用本地网关"
+    static let invalidRouteSummary = "还不知道走的哪条路"
 
     init(aio: AIOSnapshot) {
         let relayBalanceCount = aio.providers.filter { !$0.isOfficialOAuthProvider }.count
@@ -414,23 +426,72 @@ struct SentinelTopChannelPresentation: Equatable {
             ? "官方 + \(relayBalanceCount) 把"
             : "官方"
 
-        guard aio.sourceState == .available else {
-            routeSummary = "路由数据未就绪"
-            return
+        switch aio.sourceState {
+        case .unconfigured:
+            routeSummary = Self.unconfiguredRouteSummary
+            routeModeBadge = nil
+        case .invalid:
+            routeSummary = Self.invalidRouteSummary
+            routeModeBadge = nil
+        case .available:
+            var summary: String
+            if aio.routeMode == .aggregate {
+                summary = aio.lastHitProviderName.map {
+                    "最后命中：\($0)"
+                } ?? "暂时没有命中记录"
+            } else {
+                summary = "Codex 当前使用直连"
+            }
+            if aio.hasEnabledOfficialGPTExit {
+                summary += " · 含官方 GPT（烧周额度）"
+            }
+            routeSummary = summary
+            routeModeBadge = aio.routeMode.displayName
         }
+    }
+}
 
-        var summary: String
-        if aio.routeMode == .aggregate {
-            summary = aio.lastHitProviderName.map {
-                "最后命中：\($0)"
-            } ?? "暂时没有命中记录"
-        } else {
-            summary = "Codex 当前使用直连"
+/// 面板余额块：没有任何账号余额数字时收成一行；有数字则原样展开。
+/// AIO 库损坏才是「余额读不到」。库不存在只是没配，不当成程序坏了。
+enum BalanceSectionPresentation: Equatable {
+    case compact(statusText: String)
+    case unread
+    case expanded
+
+    static let queryingStatusText = "查询中"
+    static let unreadTitle = "余额读不到"
+    static let unreadDetail = "只影响余额这一块，任务状态不受影响。"
+
+    static func resolve(
+        official: OfficialUsageSnapshot,
+        aio: AIOSnapshot
+    ) -> Self {
+        if hasDisplayableAccount(official: official, aio: aio) {
+            return .expanded
         }
-        if aio.hasEnabledOfficialGPTExit {
-            summary += " · 含官方 GPT（烧周额度）"
+        if aio.sourceState == .invalid {
+            return .unread
         }
-        routeSummary = summary
+        let relays = aio.providers.filter { !$0.isOfficialOAuthProvider }
+        if relays.contains(where: { $0.usage.hasFailure }) {
+            return .expanded
+        }
+        if official.errorMessage != nil {
+            return .expanded
+        }
+        return .compact(statusText: queryingStatusText)
+    }
+
+    private static func hasDisplayableAccount(
+        official: OfficialUsageSnapshot,
+        aio: AIOSnapshot
+    ) -> Bool {
+        if official.weeklyRemainingPercentage != nil {
+            return true
+        }
+        return aio.providers.contains { provider in
+            !provider.isOfficialOAuthProvider && provider.usage.hasDisplayableBalanceNumber
+        }
     }
 }
 
@@ -438,13 +499,52 @@ enum AIOConstants {
     static let lowBalanceThreshold = 10.0
     static let quotaWarningThreshold = 80.0
     static let statusRefreshInterval: TimeInterval = 5
+    /// 面板关着时的默认状态轮询。设置里可改。
+    static let statusRefreshIntervalWhenClosed: TimeInterval = 120
     static let aioRefreshInterval: TimeInterval = 60
     static let disabledUsageRefreshInterval: TimeInterval = 10 * 60
     static let manualRefreshThrottle: TimeInterval = 10
+    /// 打开面板触发的余额刷新：距上次刷新不到 30 秒就用现成的数。
+    static let panelOpenFreshnessInterval: TimeInterval = 30
     static let usageTimeout: TimeInterval = 15
     static let databaseBusyRetryCount = 3
     static let databaseBusyRetryDelay: TimeInterval = 0.15
     static let databaseBusyTimeoutMilliseconds: Int32 = 750
+}
+
+enum PanelBalanceRefreshPolicy {
+    static func shouldRefresh(
+        lastRefreshAt: Date?,
+        now: Date,
+        interval: TimeInterval = AIOConstants.panelOpenFreshnessInterval
+    ) -> Bool {
+        guard let lastRefreshAt else {
+            return true
+        }
+        return now.timeIntervalSince(lastRefreshAt) >= interval
+    }
+
+    /// 按面板从上到下的显示顺序排出要刷的中转余额，不按内部 id。
+    /// 官方 OAuth 那行走独立的官方额度接口，不进这个队列。
+    static func sequentialTargets(
+        providers: [AIOProvider],
+        targets: [AIOUsageTarget],
+        includeDisabled: Bool
+    ) -> [AIOUsageTarget] {
+        let targetsByID = Dictionary(uniqueKeysWithValues: targets.map { ($0.id, $0) })
+        return providers.compactMap { provider in
+            guard !provider.isOfficialOAuthProvider else {
+                return nil
+            }
+            guard let target = targetsByID[provider.id] else {
+                return nil
+            }
+            guard target.enabled || includeDisabled else {
+                return nil
+            }
+            return target
+        }
+    }
 }
 
 enum AIOUsageRefreshPolicy {

@@ -94,6 +94,9 @@ enum SentinelTheme {
         static let balanceDot: CGFloat = 8
         static let disclosureChevron: CGFloat = 12
         static let sheetWidth: CGFloat = 380
+        static let settingsWindowWidth: CGFloat = 460
+        static let settingsCountFieldWidth: CGFloat = 60
+        static let settingsCategoryIndent: CGFloat = 20
         static let statusDot: CGFloat = 7
         static let headerDot: CGFloat = 10
         static let iconButton: CGFloat = 28
@@ -225,6 +228,42 @@ struct SentinelButtonStyle: ButtonStyle {
     }
 }
 
+struct SentinelSwitchToggleStyle: ToggleStyle {
+    @Environment(\.isEnabled) private var isEnabled
+    var expandLabel = true
+
+    func makeBody(configuration: Configuration) -> some View {
+        Button {
+            configuration.isOn.toggle()
+        } label: {
+            HStack(alignment: .center, spacing: SentinelTheme.Spacing.md) {
+                configuration.label
+                    .frame(maxWidth: expandLabel ? .infinity : nil, alignment: .leading)
+                switchTrack(isOn: configuration.isOn)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .opacity(isEnabled ? 1 : SentinelTheme.Metrics.disabledOpacity)
+    }
+
+    private func switchTrack(isOn: Bool) -> some View {
+        Capsule()
+            .fill(isOn ? SentinelTheme.Colors.primary : SentinelTheme.Colors.raised)
+            .overlay(
+                Capsule()
+                    .stroke(SentinelTheme.Colors.border, lineWidth: SentinelTheme.Metrics.borderWidth)
+            )
+            .frame(width: 36, height: 22)
+            .overlay(alignment: isOn ? .trailing : .leading) {
+                Circle()
+                    .fill(SentinelTheme.Colors.onPrimary)
+                    .frame(width: 18, height: 18)
+                    .padding(2)
+            }
+    }
+}
+
 struct SentinelTextFieldStyle: TextFieldStyle {
     func _body(configuration: TextField<Self._Label>) -> some View {
         configuration
@@ -317,7 +356,7 @@ struct SentinelRowModifier: ViewModifier {
     }
 }
 
-enum SentinelRowTone {
+enum SentinelRowTone: Equatable {
     case normal
     case primary
     case success

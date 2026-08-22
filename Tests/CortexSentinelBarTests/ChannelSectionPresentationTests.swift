@@ -75,10 +75,105 @@ final class ChannelSectionPresentationTests: XCTestCase {
         XCTAssertEqual(
             presentation.render,
             ChannelSectionPresentation.Render(
-                primaryRow: ["Codex 无数据", "Grok 无数据"],
+                primaryRow: ["Codex 还没有记录", "Grok 还没有记录"],
                 problemLines: []
             )
         )
+        XCTAssertEqual(presentation.rowCount, 1)
+    }
+
+    func testMissingFileUsesNoRecordOnPrimaryRow() {
+        let presentation = ChannelSectionPresentation(
+            grok: .missing,
+            codex: .missing,
+            liveCounts: EngineCounts()
+        )
+        XCTAssertEqual(presentation.render.primaryRow, ["Codex 还没有记录", "Grok 还没有记录"])
+        XCTAssertEqual(presentation.render.problemLines, [])
+        XCTAssertEqual(presentation.codex.verdict.unknownKind, .noRecord)
+        XCTAssertEqual(presentation.grok.verdict.unknownKind, .noRecord)
+    }
+
+    func testUnreadableFileUsesUnreadableOnPrimaryRow() {
+        let presentation = ChannelSectionPresentation(
+            grok: .unreadable,
+            codex: .unreadable,
+            liveCounts: EngineCounts()
+        )
+        XCTAssertEqual(presentation.render.primaryRow, ["Codex 状态读不出", "Grok 状态读不出"])
+        XCTAssertEqual(presentation.render.problemLines, [])
+        XCTAssertEqual(presentation.codex.verdict.statusText, ChannelUnknownKind.unreadable.statusText)
+    }
+
+    func testMissingEngineEntryUsesNoRecordOnPrimaryRow() {
+        let snapshot = SentinelFileReader.parseChannelStatus(
+            data: Data(
+                """
+                {
+                  "channels": {
+                    "grok": {"status": "alive", "evidence": "2 条在跑", "running": 2}
+                  }
+                }
+                """.utf8
+            )
+        )
+        let presentation = ChannelSectionPresentation(
+            grok: snapshot.grok,
+            codex: snapshot.codex,
+            liveCounts: EngineCounts()
+        )
+        XCTAssertEqual(presentation.render.primaryRow, ["Codex 还没有记录", "Grok 通 闲"])
+        XCTAssertEqual(presentation.render.problemLines, [])
+        XCTAssertNil(snapshot.grok.unknownKind)
+        XCTAssertEqual(snapshot.codex.unknownKind, .noRecord)
+    }
+
+    func testUnrecognizedStatusValueUsesUnintelligibleOnPrimaryRow() {
+        let snapshot = SentinelFileReader.parseChannelStatus(
+            data: Data(
+                """
+                {
+                  "channels": {
+                    "grok": {},
+                    "codex": {"status": "weird-value", "evidence": "x"}
+                  }
+                }
+                """.utf8
+            )
+        )
+        let presentation = ChannelSectionPresentation(
+            grok: snapshot.grok,
+            codex: snapshot.codex,
+            liveCounts: EngineCounts()
+        )
+        XCTAssertEqual(presentation.render.primaryRow, ["Codex 状态看不懂", "Grok 状态看不懂"])
+        XCTAssertEqual(presentation.render.problemLines, [])
+        XCTAssertEqual(snapshot.grok.unknownKind, .unrecognized)
+        XCTAssertEqual(snapshot.codex.unknownKind, .unrecognized)
+    }
+
+    func testCollectorUnknownUsesUndeterminedOnPrimaryRow() {
+        let snapshot = SentinelFileReader.parseChannelStatus(
+            data: Data(
+                """
+                {
+                  "channels": {
+                    "grok": {"status": "unknown", "evidence": "无数据"},
+                    "codex": {"status": "unknown"}
+                  }
+                }
+                """.utf8
+            )
+        )
+        let presentation = ChannelSectionPresentation(
+            grok: snapshot.grok,
+            codex: snapshot.codex,
+            liveCounts: EngineCounts()
+        )
+        XCTAssertEqual(presentation.render.primaryRow, ["Codex 查不出来", "Grok 查不出来"])
+        XCTAssertEqual(presentation.render.problemLines, [])
+        XCTAssertEqual(snapshot.grok.unknownKind, .undetermined)
+        XCTAssertEqual(snapshot.codex.statusText, ChannelUnknownKind.undetermined.statusText)
     }
 
     func testHealthySectionHasOnlyThePrimaryRow() {

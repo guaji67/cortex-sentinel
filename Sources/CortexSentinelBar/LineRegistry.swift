@@ -6,6 +6,9 @@ struct CodexLineRegistration: Decodable, Equatable, Sendable {
     let labelZH: String
     let dispatcherZH: String
     let registeredAt: TimeInterval
+    /// 派工写入的主机名。缺字段或空字符串都是 nil，界面显示「机器未知」，
+    /// 不许猜成本机。字段名与主仓登记脚本对齐，叫 `host`。
+    let host: String?
 
     enum CodingKeys: String, CodingKey {
         case slug
@@ -13,6 +16,7 @@ struct CodexLineRegistration: Decodable, Equatable, Sendable {
         case labelZH = "label_zh"
         case dispatcherZH = "dispatcher_zh"
         case registeredAt = "registered_at"
+        case host
     }
 
     init(from decoder: Decoder) throws {
@@ -22,6 +26,106 @@ struct CodexLineRegistration: Decodable, Equatable, Sendable {
         labelZH = try container.decode(String.self, forKey: .labelZH)
         dispatcherZH = try container.decode(String.self, forKey: .dispatcherZH)
         registeredAt = try container.decodeTimestamp(forKey: .registeredAt)
+        host = Self.normalizedHost(try container.decodeIfPresent(String.self, forKey: .host))
+    }
+
+    private static func normalizedHost(_ value: String?) -> String? {
+        guard let value else {
+            return nil
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+/// 本机用来对照登记表 `host` 的名字。派工侧写 `scutil --get ComputerName`
+/// 或 `hostname`，所以两边都认；对不上或字段缺失都不许当成「本机」。
+struct LocalHostIdentity: Equatable, Sendable {
+    let identifiers: [String]
+    private let normalizedIdentifiers: Set<String>
+
+    init(identifiers: [String]) {
+        var seen = Set<String>()
+        var unique: [String] = []
+        for raw in identifiers {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                continue
+            }
+            let key = trimmed.lowercased()
+            guard seen.insert(key).inserted else {
+                continue
+            }
+            unique.append(trimmed)
+        }
+        self.identifiers = unique
+        normalizedIdentifiers = seen
+    }
+
+    static func current(
+        host: Host = .current(),
+        processHostName: String = ProcessInfo.processInfo.hostName
+    ) -> LocalHostIdentity {
+        LocalHostIdentity(
+            identifiers: [
+                host.localizedName,
+                host.name,
+                processHostName,
+            ].compactMap { $0 }
+        )
+    }
+
+    var dumpText: String {
+        identifiers.isEmpty ? "（未取到）" : identifiers.joined(separator: " / ")
+    }
+
+    func origin(of rawHost: String?) -> LineHostOrigin {
+        let trimmed = rawHost?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else {
+            return .unknown
+        }
+        if normalizedIdentifiers.contains(trimmed.lowercased()) {
+            return .local
+        }
+        return .remote(trimmed)
+    }
+}
+
+enum LineHostOrigin: Equatable, Sendable {
+    case local
+    case remote(String)
+    case unknown
+
+    var badgeText: String {
+        switch self {
+        case .local:
+            return "本机"
+        case let .remote(name):
+            return name
+        case .unknown:
+            return "机器未知"
+        }
+    }
+
+    var isLocal: Bool {
+        if case .local = self {
+            return true
+        }
+        return false
+    }
+
+    var isRemote: Bool {
+        if case .remote = self {
+            return true
+        }
+        return false
+    }
+
+    var isUnknown: Bool {
+        if case .unknown = self {
+            return true
+        }
+        return false
     }
 }
 
@@ -95,6 +199,75 @@ enum CodexLineRegistryReader {
     }
 }
 
+final class CodexLineRegistryCache: @unchecked Sendable {
+    private struct FileIdentity: Equatable {
+        let modificationDate: Date
+        let size: UInt64
+    }
+
+    private let lock = NSLock()
+    private var cachedURL: URL?
+    private var cachedIdentity: FileIdentity?
+    private var lastGoodRegistry: CodexLineRegistry?
+
+    func read(
+        at url: URL,
+        fileManager: FileManager = .default
+    ) -> CodexLineRegistry {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let normalizedURL = url.standardizedFileURL
+        if cachedURL != normalizedURL {
+            cachedURL = normalizedURL
+            cachedIdentity = nil
+            lastGoodRegistry = nil
+        }
+
+        guard fileManager.fileExists(atPath: normalizedURL.path) else {
+            cachedIdentity = nil
+            lastGoodRegistry = nil
+            return .empty
+        }
+
+        guard let identity = Self.fileIdentity(at: normalizedURL, fileManager: fileManager) else {
+            cachedIdentity = nil
+            return lastGoodRegistry ?? .empty
+        }
+
+        if cachedIdentity == identity, let lastGoodRegistry {
+            return lastGoodRegistry
+        }
+
+        guard identity.size > 0,
+              let data = try? Data(contentsOf: normalizedURL),
+              let registry = CodexLineRegistryReader.decode(data)
+        else {
+            // A writer may be between truncate and replace. Keep the last usable
+            // value for this refresh, but retry instead of caching the failure.
+            cachedIdentity = nil
+            return lastGoodRegistry ?? .empty
+        }
+
+        cachedIdentity = identity
+        lastGoodRegistry = registry
+        return registry
+    }
+
+    private static func fileIdentity(
+        at url: URL,
+        fileManager: FileManager
+    ) -> FileIdentity? {
+        guard let attributes = try? fileManager.attributesOfItem(atPath: url.path),
+              let modificationDate = attributes[.modificationDate] as? Date,
+              let size = attributes[.size] as? NSNumber
+        else {
+            return nil
+        }
+        return FileIdentity(modificationDate: modificationDate, size: size.uint64Value)
+    }
+}
+
 struct LinePresentation: Equatable, Identifiable {
     let line: LineStatus
     let registration: CodexLineRegistration?
@@ -114,6 +287,10 @@ struct LinePresentation: Equatable, Identifiable {
             return .cursorGrok
         }
         return registration?.engine ?? line.engine
+    }
+
+    func hostOrigin(localHost: LocalHostIdentity) -> LineHostOrigin {
+        localHost.origin(of: registration?.host)
     }
 }
 

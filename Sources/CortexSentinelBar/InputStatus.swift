@@ -303,6 +303,19 @@ struct InputStatusSnapshot: Equatable, Sendable {
     }
 }
 
+/// 面板 Input 服务块：所有展示模型都是 0/60 时收成一行；任一模型有样本则原样展开。
+enum InputServiceSectionPresentation: Equatable {
+    case compact(statusText: String)
+    case expanded
+
+    static let emptyStatusText = "暂无数据"
+
+    static func resolve(probes: [InputStatusDisplayProbe]) -> Self {
+        let hasSamples = probes.contains { !$0.probe.history.isEmpty }
+        return hasSamples ? .expanded : .compact(statusText: emptyStatusText)
+    }
+}
+
 protocol InputStatusRequestLoading: Sendable {
     func data(for request: URLRequest) async throws -> (Data, URLResponse)
 }

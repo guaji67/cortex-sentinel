@@ -74,6 +74,147 @@ final class LineRegistryTests: XCTestCase {
         )
     }
 
+    /// COR-1504：本机线 / 外机线 / 无 host 的历史线。缺字段不许猜成本机，
+    /// 通道行「N 条」只数本机；三条都还在列表里。
+    func testHostFieldSplitsLocalRemoteAndUnknownWithoutGuessing() throws {
+        let localHost = LocalHostIdentity(
+            identifiers: ["Falcon 的 Mac mini", "Falcons-Mac-mini.local"]
+        )
+        let data = Data(
+            """
+            [
+              {
+                "engine": "cursor-grok",
+                "slug": "local-line",
+                "label_zh": "本机线",
+                "dispatcher_zh": "来源对话",
+                "registered_at": 1784823993,
+                "host": "Falcon 的 Mac mini"
+              },
+              {
+                "engine": "cursor-grok",
+                "slug": "remote-line",
+                "label_zh": "外机线",
+                "dispatcher_zh": "来源对话",
+                "registered_at": 1784823993,
+                "host": "Falcon 的 MacBook Pro"
+              },
+              {
+                "engine": "cursor-grok",
+                "slug": "legacy-line",
+                "label_zh": "历史线",
+                "dispatcher_zh": "来源对话",
+                "registered_at": 1784823993
+              }
+            ]
+            """.utf8
+        )
+
+        let registry = try XCTUnwrap(CodexLineRegistryReader.decode(data))
+        XCTAssertEqual(registry.registration(for: "local-line")?.host, "Falcon 的 Mac mini")
+        XCTAssertEqual(registry.registration(for: "remote-line")?.host, "Falcon 的 MacBook Pro")
+        XCTAssertNil(registry.registration(for: "legacy-line")?.host)
+
+        let localLine = makeLine(slug: "local-line", state: .running, age: 30)
+        let remoteLine = makeLine(slug: "remote-line", state: .running, age: 30)
+        let legacyLine = makeLine(slug: "legacy-line", state: .running, age: 30)
+        let localPresentation = LinePresentation(
+            line: localLine,
+            registration: registry.registration(for: "local-line")
+        )
+        let remotePresentation = LinePresentation(
+            line: remoteLine,
+            registration: registry.registration(for: "remote-line")
+        )
+        let legacyPresentation = LinePresentation(
+            line: legacyLine,
+            registration: registry.registration(for: "legacy-line")
+        )
+
+        XCTAssertEqual(localPresentation.hostOrigin(localHost: localHost), .local)
+        XCTAssertEqual(localPresentation.hostOrigin(localHost: localHost).badgeText, "本机")
+        XCTAssertEqual(
+            remotePresentation.hostOrigin(localHost: localHost),
+            .remote("Falcon 的 MacBook Pro")
+        )
+        XCTAssertEqual(
+            remotePresentation.hostOrigin(localHost: localHost).badgeText,
+            "Falcon 的 MacBook Pro"
+        )
+        XCTAssertEqual(legacyPresentation.hostOrigin(localHost: localHost), .unknown)
+        XCTAssertEqual(legacyPresentation.hostOrigin(localHost: localHost).badgeText, "机器未知")
+
+        let groups = SentinelAggregation.lineGroups(
+            lines: [localLine, remoteLine, legacyLine],
+            registry: registry,
+            now: now
+        )
+        XCTAssertEqual(groups.activeRegistered.map(\.line.slug), ["legacy-line", "local-line", "remote-line"])
+        XCTAssertEqual(groups.activeEngineCounts.grok, 3)
+        XCTAssertEqual(groups.localActiveEngineCounts(localHost: localHost).grok, 1)
+        XCTAssertEqual(groups.localActivePresentations(localHost: localHost).map(\.line.slug), ["local-line"])
+        let origins = groups.activeHostOriginCounts(localHost: localHost)
+        XCTAssertEqual(origins.local, 1)
+        XCTAssertEqual(origins.remote, 1)
+        XCTAssertEqual(origins.unknown, 1)
+        XCTAssertEqual(
+            ChannelSectionPresentation(
+                grok: ChannelVerdict(status: .alive, evidence: "3 条在跑", running: 3),
+                codex: ChannelVerdict(status: .alive, evidence: "闲", running: 0),
+                liveCounts: groups.localActiveEngineCounts(localHost: localHost)
+            ).render.primaryRow,
+            ["Codex 通 闲", "Grok 通 1 条"]
+        )
+    }
+
+    func testHostnameAlsoCountsAsLocalAndBlankHostStaysUnknown() throws {
+        let localHost = LocalHostIdentity(
+            identifiers: ["Falcon 的 Mac mini", "Falcons-Mac-mini.local"]
+        )
+        let data = Data(
+            """
+            [
+              {
+                "engine": "cursor-grok",
+                "slug": "hostname-line",
+                "label_zh": "hostname 本机",
+                "dispatcher_zh": "来源对话",
+                "registered_at": 1784823993,
+                "host": "Falcons-Mac-mini.local"
+              },
+              {
+                "engine": "cursor-grok",
+                "slug": "blank-host-line",
+                "label_zh": "空 host",
+                "dispatcher_zh": "来源对话",
+                "registered_at": 1784823993,
+                "host": "   "
+              }
+            ]
+            """.utf8
+        )
+        let registry = try XCTUnwrap(CodexLineRegistryReader.decode(data))
+        XCTAssertEqual(registry.registration(for: "hostname-line")?.host, "Falcons-Mac-mini.local")
+        XCTAssertNil(registry.registration(for: "blank-host-line")?.host)
+
+        let hostnameLine = makeLine(slug: "hostname-line", state: .running, age: 10)
+        let blankLine = makeLine(slug: "blank-host-line", state: .running, age: 10)
+        XCTAssertEqual(
+            LinePresentation(
+                line: hostnameLine,
+                registration: registry.registration(for: "hostname-line")
+            ).hostOrigin(localHost: localHost),
+            .local
+        )
+        XCTAssertEqual(
+            LinePresentation(
+                line: blankLine,
+                registration: registry.registration(for: "blank-host-line")
+            ).hostOrigin(localHost: localHost),
+            .unknown
+        )
+    }
+
     func testRegistryDecodesEastEightOffsetUsedByGrokDispatch() throws {
         let data = Data(
             """
@@ -341,6 +482,119 @@ final class LineRegistryTests: XCTestCase {
             updatedAt: now,
             sourceModifiedAt: now.addingTimeInterval(-age),
             relay: nil
+        )
+    }
+}
+
+final class CodexLineRegistryCacheTests: XCTestCase {
+    private let fileManager = FileManager.default
+    private var root: URL!
+    private var registryURL: URL!
+    private let fixedModificationDate = Date(timeIntervalSince1970: 1_700_000_000)
+
+    override func setUpWithError() throws {
+        root = fileManager.temporaryDirectory
+            .appendingPathComponent("line-registry-cache-\(UUID().uuidString)", isDirectory: true)
+        registryURL = root.appendingPathComponent("codex-line-registry.json")
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        try? fileManager.removeItem(at: root)
+    }
+
+    func testUnchangedModificationDateAndSizeReuseDecodedRegistry() throws {
+        let cache = CodexLineRegistryCache()
+        let first = registryData(slug: "first")
+        let replacement = registryData(slug: "other")
+        XCTAssertEqual(first.count, replacement.count)
+
+        try write(first, modificationDate: fixedModificationDate)
+        XCTAssertNotNil(cache.read(at: registryURL).registration(for: "first"))
+
+        try write(replacement, modificationDate: fixedModificationDate)
+        let cached = cache.read(at: registryURL)
+        XCTAssertNotNil(cached.registration(for: "first"))
+        XCTAssertNil(cached.registration(for: "other"))
+    }
+
+    func testModificationDateChangeReloadsSameSizedRegistry() throws {
+        let cache = CodexLineRegistryCache()
+        let first = registryData(slug: "first")
+        let replacement = registryData(slug: "other")
+        XCTAssertEqual(first.count, replacement.count)
+
+        try write(first, modificationDate: fixedModificationDate)
+        XCTAssertNotNil(cache.read(at: registryURL).registration(for: "first"))
+
+        try write(replacement, modificationDate: fixedModificationDate.addingTimeInterval(1))
+        let reloaded = cache.read(at: registryURL)
+        XCTAssertNil(reloaded.registration(for: "first"))
+        XCTAssertNotNil(reloaded.registration(for: "other"))
+    }
+
+    func testSizeChangeReloadsRegistryWithSameModificationDate() throws {
+        let cache = CodexLineRegistryCache()
+        try write(registryData(slug: "first"), modificationDate: fixedModificationDate)
+        XCTAssertNotNil(cache.read(at: registryURL).registration(for: "first"))
+
+        try write(registryData(slug: "longer-slug"), modificationDate: fixedModificationDate)
+        let reloaded = cache.read(at: registryURL)
+        XCTAssertNil(reloaded.registration(for: "first"))
+        XCTAssertNotNil(reloaded.registration(for: "longer-slug"))
+    }
+
+    func testMissingFileClearsCacheAndCanBeRecreated() throws {
+        let cache = CodexLineRegistryCache()
+        try write(registryData(slug: "first"), modificationDate: fixedModificationDate)
+        XCTAssertNotNil(cache.read(at: registryURL).registration(for: "first"))
+
+        try fileManager.removeItem(at: registryURL)
+        XCTAssertEqual(cache.read(at: registryURL), .empty)
+
+        try write(registryData(slug: "other"), modificationDate: fixedModificationDate)
+        XCTAssertNotNil(cache.read(at: registryURL).registration(for: "other"))
+    }
+
+    func testEmptyAndInvalidFilesPreserveLastGoodButRemainRetryable() throws {
+        let cache = CodexLineRegistryCache()
+        try write(registryData(slug: "first"), modificationDate: fixedModificationDate)
+        XCTAssertNotNil(cache.read(at: registryURL).registration(for: "first"))
+
+        try write(Data(), modificationDate: fixedModificationDate.addingTimeInterval(1))
+        XCTAssertNotNil(cache.read(at: registryURL).registration(for: "first"))
+
+        let replacement = registryData(slug: "other")
+        let invalid = Data(repeating: 0x78, count: replacement.count)
+        let failedIdentityDate = fixedModificationDate.addingTimeInterval(2)
+        try write(invalid, modificationDate: failedIdentityDate)
+        XCTAssertNotNil(cache.read(at: registryURL).registration(for: "first"))
+
+        // Same mtime and size as the failed read must still be decoded again.
+        try write(replacement, modificationDate: failedIdentityDate)
+        let recovered = cache.read(at: registryURL)
+        XCTAssertNil(recovered.registration(for: "first"))
+        XCTAssertNotNil(recovered.registration(for: "other"))
+    }
+
+    private func write(_ data: Data, modificationDate: Date) throws {
+        try data.write(to: registryURL, options: .atomic)
+        try fileManager.setAttributes(
+            [.modificationDate: modificationDate],
+            ofItemAtPath: registryURL.path
+        )
+    }
+
+    private func registryData(slug: String) -> Data {
+        Data(
+            """
+            [{
+              "slug": "\(slug)",
+              "label_zh": "缓存测试",
+              "dispatcher_zh": "测试",
+              "registered_at": 1700000000
+            }]
+            """.utf8
         )
     }
 }

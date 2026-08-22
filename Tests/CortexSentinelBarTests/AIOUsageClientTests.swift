@@ -91,6 +91,28 @@ final class AIOUsageClientTests: XCTestCase {
         )
     }
 
+    func testFetchAllRunsEnabledTargetsConcurrently() async throws {
+        let loader = RecordingUsageLoader(data: try fixtureData(named: "usage-metered"))
+        let statuses = await AIOUsageClient(
+            requestLoader: loader
+        ).fetchAll(
+            targets: [
+                makeTarget(id: 3, enabled: true),
+                makeTarget(id: 1, enabled: true),
+                makeTarget(id: 2, enabled: false),
+            ]
+        )
+
+        XCTAssertEqual(statuses.count, 2)
+        XCTAssertEqual(
+            Set(loader.recordedURLs),
+            Set([
+                "https://provider-3.fixture.test/v1/usage",
+                "https://provider-1.fixture.test/v1/usage",
+            ])
+        )
+    }
+
     func testOfficialUsageDecodesWeeklyWindowFromCurrentGatewaySchema() throws {
         let data = Data(
             """

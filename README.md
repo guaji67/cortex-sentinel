@@ -4,6 +4,45 @@
 
 Swift + SwiftUI 写成，单二进制，没有第三方依赖。
 
+## 产品结构
+
+Cortex 哨兵是一个产品，前端和后端放在同一个仓库中，各自占一个目录层级。
+
+### 前端
+
+这是一个 macOS 菜单栏应用。给需要盯着 AI 编码任务是否还在跑、中转是否通、密钥余额还剩多少的人用。装上之后菜单栏会出现一个叫「Cortex 哨兵」的图标，点开是一块固定宽度的状态面板。
+
+Swift + SwiftUI 写成，单二进制，没有第三方依赖。
+
+从源码安装：
+
+```bash
+bash scripts/install-app.sh
+```
+
+本机需要能跑 `swift`。
+
+### 后端
+
+`backend/` 是 Python 后端，负责盯线、通道和机器健康。它只需要系统自带的 Python 3.9+，不需要虚拟环境或 `pip`。从仓库根目录运行：
+
+```bash
+cd backend
+/usr/bin/python3 -m cortex_sentinel doctor
+/usr/bin/python3 -m cortex_sentinel status
+/usr/bin/python3 -m cortex_sentinel watch list
+/usr/bin/python3 -m cortex_sentinel lines
+/usr/bin/python3 -m cortex_sentinel reap
+/usr/bin/python3 -m cortex_sentinel dispatch grok --help
+```
+
+也可以使用可执行入口：
+
+```bash
+cd backend
+./bin/cortex-sentinel doctor
+```
+
 ## 功能
 
 - **Input 服务探针**：三个监控模型（gpt-5.6-sol / gpt-5.6-terra / gpt-5.5）各一行 60 格历史条，绿=通、橙=高延迟（≥3s）、红=失败；状态栏三个彩点与面板同一套颜色口径。数据来自公开的 Input 状态接口，不依赖本仓库以外的代码。
@@ -68,7 +107,7 @@ launchd 安装时会把选中的那一项写进 `~/Library/LaunchAgents/com.cort
 
 ## 构建与安装
 
-见 [INSTALL.md](INSTALL.md)。没有开发环境时，打开安装盘，把「Cortex哨兵」拖到「应用程序」。从源码安装：
+见 [INSTALL.md](INSTALL.md)。没有开发环境时，打开安装盘，把「Cortex哨兵」拖到「应用程序」——这个包没有经过 Apple 公证，第一次打开会被系统拦一次，INSTALL.md 里写了怎么过。从源码安装：
 
 ```bash
 bash scripts/install-app.sh
@@ -76,9 +115,12 @@ bash scripts/install-app.sh
 
 本机需要能跑 `swift`。
 
-## 文档
+## 仓库里有什么
 
-- `docs/` — 历版工单与交付报告，给维护者看，不是用户手册
-- `screenshots/` — 各版本运行截图
+- `Sources/` — 应用本体
+- `Tests/` — 单元测试，`swift test` 跑
+- `scripts/` — 构建、打安装盘、装到系统
+- `Resources/` — Info.plist 与应用图标
+- `backend/` — Python 后端、测试、launchd 模板与运维脚本
 
-`screenshots/` 与 `docs/` 里可能有开发期运行数据。公开发布前请自行审查。
+这个仓库是从一个内部开发仓整理出来的，只带了程序本身。历版工单、设计文档、开发期的运行数据都没有带过来，所以这里看不到它们，提交历史也是从整理那天重新开始的。

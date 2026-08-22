@@ -234,6 +234,61 @@ final class AIOModelsTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(successfulRefresh[disabled.id]?.usage?.remaining), 80)
     }
 
+    func testPanelOpenFreshnessGateIsThirtySeconds() {
+        let lastRefreshAt = Date(timeIntervalSince1970: 1_000)
+
+        XCTAssertTrue(
+            PanelBalanceRefreshPolicy.shouldRefresh(lastRefreshAt: nil, now: lastRefreshAt)
+        )
+        XCTAssertFalse(
+            PanelBalanceRefreshPolicy.shouldRefresh(
+                lastRefreshAt: lastRefreshAt,
+                now: lastRefreshAt.addingTimeInterval(29)
+            )
+        )
+        XCTAssertTrue(
+            PanelBalanceRefreshPolicy.shouldRefresh(
+                lastRefreshAt: lastRefreshAt,
+                now: lastRefreshAt.addingTimeInterval(31)
+            )
+        )
+        XCTAssertEqual(AIOConstants.panelOpenFreshnessInterval, 30)
+        XCTAssertEqual(AIOConstants.statusRefreshInterval, 5)
+        XCTAssertEqual(AIOConstants.statusRefreshIntervalWhenClosed, 120)
+        XCTAssertEqual(AIOConstants.aioRefreshInterval, 60)
+        XCTAssertEqual(AIOConstants.manualRefreshThrottle, 10)
+    }
+
+    func testSequentialTargetsFollowPanelDisplayOrderNotInternalID() {
+        let providers = [
+            makeProvider(id: 3, remaining: 1),
+            makeProvider(id: 1, remaining: 2),
+            makeProvider(id: 2, remaining: 3),
+        ]
+        let targets = [
+            AIOUsageTarget(id: 1, baseURL: "https://a.test", apiKey: "k", enabled: true),
+            AIOUsageTarget(id: 2, baseURL: "https://b.test", apiKey: "k", enabled: false),
+            AIOUsageTarget(id: 3, baseURL: "https://c.test", apiKey: "k", enabled: true),
+        ]
+
+        XCTAssertEqual(
+            PanelBalanceRefreshPolicy.sequentialTargets(
+                providers: providers,
+                targets: targets,
+                includeDisabled: false
+            ).map(\.id),
+            [3, 1]
+        )
+        XCTAssertEqual(
+            PanelBalanceRefreshPolicy.sequentialTargets(
+                providers: providers,
+                targets: targets,
+                includeDisabled: true
+            ).map(\.id),
+            [3, 1, 2]
+        )
+    }
+
     private func makeCircuitProvider(
         enabled: Bool,
         circuit: AIOCircuitState,

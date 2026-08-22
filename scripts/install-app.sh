@@ -3,6 +3,14 @@
 
 set -euo pipefail
 
+# ps 在 C locale 会把中文路径打成 M- 转义，按绝对路径对 pid 会对不上。
+if [ -z "${LC_ALL:-}" ] || [ "${LC_ALL}" = "C" ]; then
+  export LC_ALL=en_US.UTF-8
+fi
+if [ -z "${LANG:-}" ] || [ "${LANG}" = "C" ]; then
+  export LANG=en_US.UTF-8
+fi
+
 package_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 app_dest="/Applications/Cortex哨兵.app"
 app_executable="$app_dest/Contents/MacOS/CortexSentinelBar"
@@ -20,6 +28,8 @@ if [ -n "$watch_dir" ]; then
   watch_dir_explicit=1
 fi
 skip_login_item_cleanup=0
+print_watch_plan=0
+used_fallback_watch=0
 if [ -n "${SSH_CONNECTION:-}" ]; then
   skip_login_item_cleanup=1
 fi
@@ -34,9 +44,10 @@ usage() {
 
 监视目录（写入 launchd）：
   CORTEX_SENTINEL_WATCH_DIR   优先，直接指向日志目录
-  CORTEX_REPO_ROOT / --cortex-root   兼容旧装法，读取 <root>/logs
-  都没给时默认 ~/.cortex-sentinel/logs，并创建该目录
-  若 ~/Documents/Code/cortex/logs 存在，交互安装会询问要不要用它，不会静默选用
+  CORTEX_REPO_ROOT / --cortex-root   兼容旧装法，读取 <root>/logs（目录必须存在）
+  自动找到 ~/Documents/Code/cortex/logs 则用它
+  都没有时创建并使用 ~/.cortex-sentinel/logs；此时不往 LaunchAgent 写 CORTEX_REPO_ROOT
+  给了无效的 CORTEX_REPO_ROOT 不会失败，按上面顺序继续往下落
 
 不传 --app-source 时从当前源码构建；DMG 分发使用预构建 app，不依赖目标机 Swift/Xcode。
 SSH/headless 环境会自动跳过可能阻塞的 System Events 查询；旧 app 仍会被归档，因此不会再次启动。
@@ -59,6 +70,10 @@ while [ "$#" -gt 0 ]; do
       skip_login_item_cleanup=1
       shift
       ;;
+    --print-watch-plan)
+      print_watch_plan=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -71,40 +86,41 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-if [ -z "$watch_dir" ] && [ -n "$cortex_repo_root" ]; then
-  watch_dir="$cortex_repo_root/logs"
-  if [ ! -d "$watch_dir" ]; then
-    echo "失败：CORTEX_REPO_ROOT/logs 不存在：$watch_dir" >&2
-    echo "可改设 CORTEX_SENTINEL_WATCH_DIR 指向日志目录本身，或先建好 logs。" >&2
-    exit 1
-  fi
-elif [ -z "$watch_dir" ]; then
-  if [ -d "$detected_cortex_logs" ]; then
+if [ -z "$watch_dir" ]; then
+  if [ -n "$cortex_repo_root" ] && [ -d "$cortex_repo_root/logs" ]; then
+    watch_dir="$cortex_repo_root/logs"
+  elif [ -d "$detected_cortex_logs" ]; then
+    cortex_repo_root="$HOME/Documents/Code/cortex"
+    watch_dir="$detected_cortex_logs"
     echo "检测到 Cortex 仓：$detected_cortex_logs"
-    if [ -t 0 ]; then
-      printf "要不要用它作为监视目录？[y/N] "
-      read -r answer || answer=""
-      case "$answer" in
-        y|Y|yes|YES)
-          cortex_repo_root="$HOME/Documents/Code/cortex"
-          watch_dir="$detected_cortex_logs"
-          ;;
-        *)
-          echo "未确认，默认监视 $default_watch_dir"
-          watch_dir="$default_watch_dir"
-          ;;
-      esac
-    else
-      echo "未交互确认，默认监视 $default_watch_dir"
-      watch_dir="$default_watch_dir"
-    fi
   else
+    cortex_repo_root=""
     watch_dir="$default_watch_dir"
+    used_fallback_watch=1
   fi
 fi
 
-if [ "$watch_dir_explicit" -eq 1 ] || [ -z "$cortex_repo_root" ]; then
-  mkdir -p "$watch_dir"
+if [ -n "$cortex_repo_root" ] && [ ! -d "$cortex_repo_root" ]; then
+  cortex_repo_root=""
+fi
+
+mkdir -p "$watch_dir"
+
+if [ "$print_watch_plan" -eq 1 ]; then
+  echo "watch_dir=$watch_dir"
+  echo "cortex_repo_root=${cortex_repo_root}"
+  echo "used_fallback_watch=$used_fallback_watch"
+  if [ "$watch_dir_explicit" -eq 1 ]; then
+    echo "launch_env=CORTEX_SENTINEL_WATCH_DIR=$watch_dir"
+  elif [ -n "$cortex_repo_root" ] && [ -d "$cortex_repo_root" ]; then
+    echo "launch_env=CORTEX_REPO_ROOT=$cortex_repo_root"
+  else
+    echo "launch_env="
+  fi
+  if [ "$used_fallback_watch" -eq 1 ]; then
+    echo "没找到 Cortex 仓库，先盯 ~/.cortex-sentinel/logs。要换目录在设置里点「选择」。"
+  fi
+  exit 0
 fi
 
 trash_path_script=""
@@ -262,10 +278,10 @@ write_launch_agent() {
   plutil -insert KeepAlive -bool true "$temporary_plist"
   plutil -insert ProcessType -string Interactive "$temporary_plist"
   plutil -insert EnvironmentVariables -dictionary "$temporary_plist"
-  if [ -n "$cortex_repo_root" ] && [ "$watch_dir_explicit" -eq 0 ]; then
-    plutil -insert EnvironmentVariables.CORTEX_REPO_ROOT -string "$cortex_repo_root" "$temporary_plist"
-  else
+  if [ "$watch_dir_explicit" -eq 1 ]; then
     plutil -insert EnvironmentVariables.CORTEX_SENTINEL_WATCH_DIR -string "$watch_dir" "$temporary_plist"
+  elif [ -n "$cortex_repo_root" ] && [ -d "$cortex_repo_root" ]; then
+    plutil -insert EnvironmentVariables.CORTEX_REPO_ROOT -string "$cortex_repo_root" "$temporary_plist"
   fi
   chmod 0644 "$temporary_plist"
   mv "$temporary_plist" "$plist"
@@ -350,7 +366,7 @@ running_pids="$(pids_for_executable "$app_executable")"
 running_count="$(printf '%s\n' "$running_pids" | awk 'NF { count++ } END { print count + 0 }')"
 all_sentinel_count="$(ps -axo command= | awk '/\/Contents\/MacOS\/CortexSentinelBar$/ { count++ } END { print count + 0 }')"
 if [ "$running_count" -ne 1 ] || [ "$all_sentinel_count" -ne 1 ]; then
-  echo "失败：期望 1 个正式实例，实际正式=$running_count、全部=$all_sentinel_count" >&2
+  echo "失败：期望 1 个正式实例，实际正式=${running_count}，全部=${all_sentinel_count}" >&2
   exit 1
 fi
 echo "== 已运行唯一正式实例 pid=$running_pids =="
@@ -370,3 +386,6 @@ fi
 
 trap - EXIT
 echo "== 安装完成：自启已修复，常驻实例=1 =="
+if [ "$used_fallback_watch" -eq 1 ]; then
+  echo "没找到 Cortex 仓库，先盯 ~/.cortex-sentinel/logs。要换目录在设置里点「选择」。"
+fi

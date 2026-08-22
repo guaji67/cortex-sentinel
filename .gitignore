@@ -2,3 +2,13 @@
 .DS_Store
 dist/
 logs/
+
+# Python backend
+__pycache__/
+*.py[cod]
+.DS_Store
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.smoke-home/

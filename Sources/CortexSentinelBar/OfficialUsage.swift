@@ -286,6 +286,7 @@ enum OfficialUsageRefreshReason {
     case startup
     case automatic
     case manual
+    case panelOpen
 }
 
 enum OfficialUsagePresentation {
@@ -313,7 +314,8 @@ enum OfficialUsageRefreshPolicy {
         reason: OfficialUsageRefreshReason,
         lastAttemptAt: Date?,
         isInFlight: Bool,
-        now: Date
+        now: Date,
+        panelOpenInterval: TimeInterval = AIOConstants.panelOpenFreshnessInterval
     ) -> Bool {
         guard !isInFlight else {
             return false
@@ -321,9 +323,15 @@ enum OfficialUsageRefreshPolicy {
         guard let lastAttemptAt else {
             return true
         }
-        let minimumInterval: TimeInterval = reason == .automatic
-            ? OfficialUsageConstants.automaticRefreshInterval
-            : OfficialUsageConstants.manualRefreshThrottle
+        let minimumInterval: TimeInterval
+        switch reason {
+        case .automatic:
+            minimumInterval = OfficialUsageConstants.automaticRefreshInterval
+        case .panelOpen:
+            minimumInterval = panelOpenInterval
+        case .startup, .manual:
+            minimumInterval = OfficialUsageConstants.manualRefreshThrottle
+        }
         return now.timeIntervalSince(lastAttemptAt) >= minimumInterval
     }
 }

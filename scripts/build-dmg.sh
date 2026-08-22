@@ -22,9 +22,14 @@ manifest_path="$output_dir/$candidate_id.manifest.json"
 checksum_path="$dmg_path.sha256"
 
 echo "== 构建 release app =="
-bash "$package_dir/scripts/build-app.sh"
+bash "$package_dir/scripts/build-app.sh" --bundle-version "$commit_short"
 source_app="$package_dir/.build/CortexSentinelBar.app"
 codesign --verify --deep --strict "$source_app"
+built_version="$(defaults read "$source_app/Contents/Info" CFBundleVersion)"
+if [ "$built_version" != "$commit_short" ]; then
+  echo "失败：构建产物 CFBundleVersion=$built_version，期望 $commit_short" >&2
+  exit 1
+fi
 
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/cortex-sentinel-dmg.XXXXXX")"
 mount_dir="$(mktemp -d "${TMPDIR:-/tmp}/cortex-sentinel-mount.XXXXXX")"
@@ -75,6 +80,11 @@ echo "== 挂载验收 =="
 hdiutil attach -quiet -readonly -nobrowse -mountpoint "$mount_dir" "$dmg_path"
 mounted=1
 codesign --verify --deep --strict "$mount_dir/Cortex哨兵.app"
+mounted_version="$(defaults read "$mount_dir/Cortex哨兵.app/Contents/Info" CFBundleVersion)"
+if [ "$mounted_version" != "$commit_short" ]; then
+  echo "失败：DMG 内 CFBundleVersion=$mounted_version，期望 $commit_short" >&2
+  exit 1
+fi
 if [ ! -L "$mount_dir/Applications" ]; then
   echo "失败：DMG 内没有应用程序快捷方式" >&2
   exit 1

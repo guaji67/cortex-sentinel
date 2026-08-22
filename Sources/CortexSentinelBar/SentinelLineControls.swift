@@ -28,7 +28,7 @@ struct SentinelLineControls: View {
 
     @ViewBuilder
     var body: some View {
-        if !engine.isCursorGrok {
+        if SentinelBoardCopy.showsLineSettings(for: engine) {
             HStack(spacing: SentinelTheme.Spacing.xs) {
                 if line.state == .waitingRelay {
                     Button(action: requestProbe) {
@@ -53,7 +53,7 @@ struct SentinelLineControls: View {
                         width: SentinelTheme.Metrics.lineControlIconWidth
                     )
                 )
-                .help("本线设置")
+                .help(SentinelBoardCopy.lineSettingsHelp)
                 .accessibilityLabel("设置 \(line.slug)")
             }
         }
@@ -133,7 +133,7 @@ struct SentinelLineSettingsPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: SentinelTheme.Spacing.section) {
             HStack(spacing: SentinelTheme.Spacing.md) {
-                Text("本线设置")
+                Text(SentinelBoardCopy.lineSettingsTitle)
                     .font(SentinelTheme.Fonts.rowTitle)
                     .foregroundStyle(SentinelTheme.Colors.foreground)
                 Spacer()
@@ -146,7 +146,7 @@ struct SentinelLineSettingsPanel: View {
                     )
                 )
                 .help("关闭")
-                .accessibilityLabel("关闭本线设置")
+                .accessibilityLabel(SentinelBoardCopy.lineSettingsCloseAccessibilityLabel)
             }
 
             Text(line.slug)
@@ -156,7 +156,7 @@ struct SentinelLineSettingsPanel: View {
                 .truncationMode(.middle)
 
             numberField("最多重试", value: $maxRestarts, range: "0-100")
-            numberField("失败几次上报", value: $escalateAfter, range: "1-100")
+            numberField(SentinelBoardCopy.escalateAfterFailuresLabel, value: $escalateAfter, range: "1-100")
 
             if let settingsMessage {
                 Text(settingsMessage)

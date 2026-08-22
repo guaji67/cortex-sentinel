@@ -10,6 +10,7 @@ dist_dir="$package_dir/dist"
 version="${RELEASE_VERSION:-1.1.0}"
 build_number="${RELEASE_BUILD_NUMBER:-$(TZ=Asia/Shanghai date +%Y%m%d)}"
 identity="Developer ID Application: Xiang Yu (M3JSCZ5X23)"
+signing_keychain="$HOME/Library/Keychains/login.keychain-db"
 notary_profile="cortex-notary"
 notary_keychain="$HOME/.cortex-build/notary.keychain-db"
 notary_password_file="$HOME/.cortex-build/notary.keychain-password"
@@ -51,6 +52,10 @@ done
   echo "失败：公证钥匙串密码文件不存在：$notary_password_file" >&2
   exit 1
 }
+[ -f "$signing_keychain" ] || {
+  echo "失败：签名登录钥匙串不存在：$signing_keychain" >&2
+  exit 1
+}
 
 echo "== 解锁公证钥匙串 =="
 # 密码只从 stdin 读取，不出现在命令行、日志或环境变量中。
@@ -73,7 +78,7 @@ if ! lipo -archs "$binary_path" | tr ' ' '\n' | grep -qx arm64; then
 fi
 
 echo "== 签名 app =="
-codesign --force --deep --options runtime --timestamp --sign "$identity" "$app_dir"
+codesign --force --deep --options runtime --timestamp --keychain "$signing_keychain" --sign "$identity" "$app_dir"
 codesign --verify --deep --strict "$app_dir"
 
 submit_notarization() {
@@ -117,7 +122,7 @@ hdiutil create -quiet -ov -format UDZO -volname "Cortex 哨兵" \
 hdiutil verify "$dmg_path"
 
 echo "== 签名 DMG =="
-codesign --force --timestamp --sign "$identity" "$dmg_path"
+codesign --force --timestamp --keychain "$signing_keychain" --sign "$identity" "$dmg_path"
 codesign --verify --strict "$dmg_path"
 
 echo "== 公证 DMG =="

@@ -164,6 +164,7 @@ struct SentinelMenuView: View {
         let presentation = ChannelSectionPresentation(
             grok: store.channelStatus.grok,
             codex: store.channelStatus.codex,
+            claudeOxAlpha: store.channelStatus.claudeOxAlpha,
             liveCounts: store.lineGroups.localActiveEngineCounts(localHost: localHost)
         )
         return VStack(alignment: .leading, spacing: SentinelTheme.Spacing.sm) {
@@ -173,6 +174,8 @@ struct SentinelMenuView: View {
                 channelItem(presentation.codex)
                 Spacer(minLength: SentinelTheme.Spacing.md)
                 channelItem(presentation.grok)
+                Spacer(minLength: SentinelTheme.Spacing.md)
+                channelItem(presentation.claudeOxAlpha)
             }
 
             ForEach(Array(presentation.problemLines.enumerated()), id: \.offset) { _, line in

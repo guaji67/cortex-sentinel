@@ -14,7 +14,8 @@ import Foundation
 /// cortex-run-now-* 等）。因为采用「只列白名单」而非「黑名单排除」，这些文件天然不进候选。
 ///
 /// 删除判定（对白名单内文件）：
-///   - 有 `codex-babysitter-<slug>.status.json` 且 state=running → 活线，永不删
+///   - 有 `codex-babysitter-<slug>.status.json` 或 `claude-oxalpha-<slug>.status.json`
+///     且 state=running → 活线，永不删
 ///   - state ∈ done/dead/help → 终态，删
 ///   - state ∈ retrying/backoff/unknown → 非活线过渡态，正常保留，仅在超 500MB 上限时按旧到新清理
 ///   - 无 status 文件（含 kimi）→ 孤儿；但近 10 分钟内仍在写的按活线保护（防误删仍在跑、
@@ -548,27 +549,38 @@ enum LogCleaner {
 
     // MARK: 内部工具
 
+    /// 判活要看的状态文件前缀。ox-alpha 派工（`claude-oxalpha-<slug>.status.json`）也在内：
+    /// 同一个 slug 只有 ox-alpha 状态文件、没有 babysitter 状态文件时，
+    /// `codex-<slug>.log` 会被当成孤儿，静默满 10 分钟就删掉一条在跑的线的日志。
+    private static let statusPrefixes = ["codex-babysitter-", "claude-oxalpha-"]
+
     private static func statusStateMap(
         in dir: URL,
         fileNames: [String],
         fileManager: FileManager
     ) -> [String: LineState] {
-        let prefix = "codex-babysitter-"
         let suffix = ".status.json"
         var map: [String: LineState] = [:]
-        for name in fileNames where name.hasPrefix(prefix) && name.hasSuffix(suffix) {
-            let slug = String(name.dropFirst(prefix.count).dropLast(suffix.count))
-            guard !slug.isEmpty else {
-                continue
+        for prefix in statusPrefixes {
+            for name in fileNames where name.hasPrefix(prefix) && name.hasSuffix(suffix) {
+                let slug = String(name.dropFirst(prefix.count).dropLast(suffix.count))
+                guard !slug.isEmpty else {
+                    continue
+                }
+                // 同名 slug 在两条渠道各有一份状态文件时，活线优先：
+                // 已经判成活线就不许被另一份的终态覆盖成「可删」。
+                if let existing = map[slug], existing.isCleanupProtectedLive {
+                    continue
+                }
+                let url = dir.appendingPathComponent(name)
+                guard let data = try? Data(contentsOf: url),
+                      let payload = try? JSONDecoder().decode(StatePayload.self, from: data),
+                      let raw = payload.state, !raw.isEmpty
+                else {
+                    continue
+                }
+                map[slug] = LineState(rawValue: raw)
             }
-            let url = dir.appendingPathComponent(name)
-            guard let data = try? Data(contentsOf: url),
-                  let payload = try? JSONDecoder().decode(StatePayload.self, from: data),
-                  let raw = payload.state, !raw.isEmpty
-            else {
-                continue
-            }
-            map[slug] = LineState(rawValue: raw)
         }
         return map
     }

@@ -3,11 +3,12 @@ import AppKit
 enum SentinelStatusBarRenderer {
     static func image(
         probes: [InputStatusDisplayProbe],
-        balances: [StatusBarBalanceItem]
+        balances: [StatusBarBalanceItem],
+        packaging: PackagingProgressSnapshot? = nil
     ) -> NSImage {
         let displayedProbes = Array(probes.prefix(InputStatusConstants.monitoredModels.count))
         let displayedBalances = normalizedBalances(balances)
-        let segments = balanceSegments(displayedBalances)
+        let segments = statusBarSegments(displayedBalances, packaging: packaging)
         let textWidth = segments.reduce(CGFloat.zero) { partial, segment in
             partial + textSize(segment.text).width
         }
@@ -101,6 +102,28 @@ enum SentinelStatusBarRenderer {
             )
         }
         return result
+    }
+
+    private static func statusBarSegments(
+        _ balances: [StatusBarBalanceItem],
+        packaging: PackagingProgressSnapshot?
+    ) -> [BalanceSegment] {
+        var segments: [BalanceSegment] = []
+        if packaging?.isActive == true {
+            segments.append(
+                BalanceSegment(
+                    text: "打包",
+                    color: SentinelTheme.AppKitColors.warning
+                )
+            )
+            segments.append(
+                BalanceSegment(
+                    text: "·",
+                    color: SentinelTheme.AppKitColors.statusBarMuted
+                )
+            )
+        }
+        return segments + balanceSegments(balances)
     }
 
     private static func balanceSegments(

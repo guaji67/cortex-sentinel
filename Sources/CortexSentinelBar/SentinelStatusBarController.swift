@@ -88,8 +88,8 @@ final class SentinelStatusBarController: NSObject, NSPopoverDelegate {
         )
 
         statusObservation = store.$inputStatus
-            .combineLatest(store.$aio)
-            .sink { [weak self] _, _ in
+            .combineLatest(store.$aio, store.$packagingProgress)
+            .sink { [weak self] _, _, _ in
                 Task { @MainActor [weak self] in
                     self?.updateStatusItem()
                 }
@@ -141,7 +141,8 @@ final class SentinelStatusBarController: NSObject, NSPopoverDelegate {
 
         let image = SentinelStatusBarRenderer.image(
             probes: store.inputStatus.displayProbes(),
-            balances: store.statusBarBalances
+            balances: store.statusBarBalances,
+            packaging: store.packagingProgress
         )
         statusItem.length = image.size.width
         button.image = image

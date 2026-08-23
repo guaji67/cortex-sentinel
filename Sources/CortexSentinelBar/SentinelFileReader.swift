@@ -10,6 +10,7 @@ struct RelayFileLocations {
 struct SentinelPaths {
     let repositoryRoot: URL
     let poolDirectory: URL
+    let packagingProgressRoot: URL
     let aioDatabaseURL: URL
     let aioManifestURL: URL
     let codexConfigURL: URL
@@ -21,6 +22,7 @@ struct SentinelPaths {
     init(
         repositoryRoot: URL,
         poolDirectory: URL,
+        packagingProgressRoot: URL = SentinelPaths.defaultPackagingProgressRoot,
         aioDatabaseURL: URL,
         aioManifestURL: URL,
         codexConfigURL: URL,
@@ -31,6 +33,7 @@ struct SentinelPaths {
     ) {
         self.repositoryRoot = repositoryRoot
         self.poolDirectory = poolDirectory
+        self.packagingProgressRoot = packagingProgressRoot
         self.aioDatabaseURL = aioDatabaseURL
         self.aioManifestURL = aioManifestURL
         self.codexConfigURL = codexConfigURL
@@ -38,6 +41,20 @@ struct SentinelPaths {
         self.inputStatusURL = inputStatusURL
         self.logsDirectory = logsDirectory
         self.selfHealingReason = selfHealingReason
+    }
+
+    /// Cortex 打包进度根目录（scripts/packaging_progress.py 写的那处）。
+    static var defaultPackagingProgressRoot: URL {
+        let temporaryDirectory = ProcessInfo.processInfo.environment["TMPDIR"]
+            .flatMap { value -> URL? in
+                guard !value.isEmpty else {
+                    return nil
+                }
+                return URL(fileURLWithPath: value, isDirectory: true)
+            }
+            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        return temporaryDirectory
+            .appendingPathComponent("cortex-pack-progress", isDirectory: true)
     }
 
     /// 安装在本机时用于目录自愈的 Cortex 仓库根目录。
@@ -191,6 +208,10 @@ struct SentinelPaths {
                 .appendingPathComponent(".cortex-air/codex-relay-pool", isDirectory: true)
         }
 
+        let packagingProgressRoot = environment["CORTEX_PACK_PROGRESS_DIR"]
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? SentinelPaths.defaultPackagingProgressRoot
+
         let homeDirectory = FileManager.default.homeDirectoryForCurrentUser
         let aioHome = homeDirectory.appendingPathComponent(".aio-coding-hub", isDirectory: true)
         let aioDatabaseURL = environment["CORTEX_AIO_DB_PATH"].map {
@@ -219,6 +240,7 @@ struct SentinelPaths {
         return SentinelPaths(
             repositoryRoot: repositoryRoot,
             poolDirectory: poolDirectory,
+            packagingProgressRoot: packagingProgressRoot,
             aioDatabaseURL: aioDatabaseURL,
             aioManifestURL: aioManifestURL,
             codexConfigURL: codexConfigURL,
@@ -646,6 +668,7 @@ struct StatusDiskSnapshot {
     var registry: CodexLineRegistry
     var channelStatus: ChannelStatusSnapshot
     var backgroundJobs: BackgroundJobsSnapshot
+    var packagingProgress: PackagingProgressSnapshot?
     var ack: TerminalAckLedger
     var otherCodexProcesses: [OtherCodexProcess]?
     var readOnMainThread: Bool
@@ -657,6 +680,7 @@ enum StatusDiskReader {
         registryURL: URL,
         channelStatusURL: URL,
         ackURL: URL,
+        packagingProgressRoot: URL? = nil,
         lineStatusCache: LineStatusFileCache,
         lineRegistryCache: CodexLineRegistryCache,
         includeOtherProcesses: Bool,
@@ -679,6 +703,10 @@ enum StatusDiskReader {
             at: backgroundJobsURL,
             fileManager: fileManager
         )
+        // 没打包在跑时根目录多半不存在，Reader 直接返回 nil，不报错不占地方。
+        let packagingProgress = packagingProgressRoot.flatMap {
+            PackagingProgressReader.read(at: $0, fileManager: fileManager)
+        }
         let ack = SentinelFileReader.readTerminalAck(at: ackURL)
         let processes: [OtherCodexProcess]?
         if includeOtherProcesses {
@@ -691,6 +719,7 @@ enum StatusDiskReader {
             registry: registry,
             channelStatus: channelStatus,
             backgroundJobs: backgroundJobs,
+            packagingProgress: packagingProgress,
             ack: ack,
             otherCodexProcesses: processes,
             readOnMainThread: Thread.isMainThread

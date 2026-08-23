@@ -88,6 +88,7 @@ struct SentinelMenuView: View {
     @ViewBuilder
     private var sectionStack: some View {
         header
+        packagingSection
         channelSection
         backgroundJobsSection
         serviceSection
@@ -158,6 +159,47 @@ struct SentinelMenuView: View {
             recentCount: recentRegisteredCount,
             offHostActiveCount: offHostActiveLineCount
         )
+    }
+
+    /// Cortex 打包进度：只在 running 时出现，failed/completed 残留不占地方。
+    @ViewBuilder
+    private var packagingSection: some View {
+        if let packaging = store.packagingProgress, packaging.isActive {
+            VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xs) {
+                HStack(alignment: .firstTextBaseline, spacing: SentinelTheme.Spacing.sm) {
+                    Image(systemName: "shippingbox.fill")
+                        .foregroundStyle(SentinelTheme.Colors.warning)
+                    Text("Cortex 打包")
+                        .font(SentinelTheme.Fonts.section)
+                        .foregroundStyle(SentinelTheme.Colors.warning)
+                    Spacer()
+                    Text(packaging.etaText)
+                        .font(SentinelTheme.Fonts.metadata)
+                        .foregroundStyle(SentinelTheme.Colors.warning)
+                }
+
+                Text(packaging.stepTitle)
+                    .font(SentinelTheme.Fonts.rowTitle)
+                    .foregroundStyle(SentinelTheme.Colors.foreground)
+
+                if let detail = packaging.detailText {
+                    Text(detail)
+                        .font(SentinelTheme.Fonts.subtitle)
+                        .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if let updatedAt = packaging.updatedAt {
+                    Text("更新于 \(SentinelTimeFormat.clockTime(updatedAt))")
+                        .font(SentinelTheme.Fonts.rowTime)
+                        .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                }
+            }
+            .sentinelRow(tone: .warning)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(packaging.accessibilityText)
+            .accessibilityIdentifier("packaging-progress")
+        }
     }
 
     private var channelSection: some View {

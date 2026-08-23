@@ -82,12 +82,38 @@ struct SentinelPaths {
         logsDirectory.appendingPathComponent("channel-status.json")
     }
 
-    var lineTerminalAckURL: URL {
-        logsDirectory.appendingPathComponent("line-terminal-ack.json")
+    /// 后台任务健康快照。监视目录里有就用那份（测试/本机覆盖），否则退到数据根 health/。
+    var backgroundJobsHealthURL: URL {
+        Self.backgroundJobsHealthURL(logsDirectory: logsDirectory)
     }
 
-    var backgroundJobsHealthURL: URL {
-        logsDirectory.appendingPathComponent("background-jobs-health.json")
+    static func backgroundJobsHealthURL(
+        logsDirectory: URL,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> URL {
+        if let configured = environment["CORTEX_BACKGROUND_JOBS_HEALTH_PATH"], !configured.isEmpty {
+            return URL(fileURLWithPath: configured)
+        }
+        let inLogs = logsDirectory.appendingPathComponent("background-jobs-health.json")
+        if fileManager.fileExists(atPath: inLogs.path) {
+            return inLogs
+        }
+        if let configured = environment["CORTEX_DATA_ROOT"], !configured.isEmpty {
+            return URL(fileURLWithPath: configured, isDirectory: true)
+                .appendingPathComponent("health", isDirectory: true)
+                .appendingPathComponent("background-jobs-health.json")
+        }
+        // XCTest 默认不碰本机 ~/CortexData，免得测试读到真快照、刷新计数被污染。
+        let processEnv = ProcessInfo.processInfo.environment
+        if processEnv["XCTestConfigurationFilePath"] != nil
+            || processEnv["XCTestSessionIdentifier"] != nil {
+            return inLogs
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("CortexData", isDirectory: true)
+            .appendingPathComponent("health", isDirectory: true)
+            .appendingPathComponent("background-jobs-health.json")
     }
 
     var disabledJobsURL: URL {
@@ -105,6 +131,10 @@ struct SentinelPaths {
             .appendingPathComponent("\(label).plist")
     }
 
+    var lineTerminalAckURL: URL {
+        logsDirectory.appendingPathComponent("line-terminal-ack.json")
+    }
+
     var relayFiles: RelayFileLocations {
         RelayFileLocations(
             pool: poolDirectory.appendingPathComponent("pool.json"),
@@ -118,42 +148,39 @@ struct SentinelPaths {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         currentDirectory _: URL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
         executableURL _: URL? = Bundle.main.executableURL,
+        defaults: UserDefaults = SentinelSettings.resolvedDefaults(),
         defaultWatchDirectory: URL = SentinelPaths.defaultWatchDirectory,
         selfHealingRepositoryRoot: URL = SentinelPaths.selfHealingRepositoryRoot,
         fileManager: FileManager = .default
     ) -> SentinelPaths {
         // 日志目录解析优先级：
-        // 1. CORTEX_SENTINEL_WATCH_DIR  优先，直接就是日志目录
-        // 2. CORTEX_REPO_ROOT           兼容旧装法，仍然解析成 <root>/logs
-        // 3. ~/.cortex-sentinel/logs    都没给时的默认值
-        var repositoryRoot: URL
-        var logsDirectory: URL
-        if let watch = environment["CORTEX_SENTINEL_WATCH_DIR"], !watch.isEmpty {
-            logsDirectory = URL(fileURLWithPath: watch, isDirectory: true)
-            if let configured = environment["CORTEX_REPO_ROOT"], !configured.isEmpty {
-                repositoryRoot = URL(fileURLWithPath: configured, isDirectory: true)
-            } else {
-                repositoryRoot = logsDirectory.deletingLastPathComponent()
-            }
-        } else if let configured = environment["CORTEX_REPO_ROOT"], !configured.isEmpty {
-            repositoryRoot = URL(fileURLWithPath: configured, isDirectory: true)
-            logsDirectory = repositoryRoot.appendingPathComponent("logs", isDirectory: true)
-        } else {
+        // 1. CORTEX_SENTINEL_WATCH_DIR  优先，直接就是日志目录（设置窗只读）
+        // 2. CORTEX_REPO_ROOT           兼容旧装法，仍然解析成 <root>/logs（设置窗只读）
+        // 3. UserDefaults               用户在设置窗选的目录
+        // 4. ~/.cortex-sentinel/logs    都没给时的默认值
+        let resolved = WatchDirectoryResolution.resolve(
+            environment: environment,
+            defaults: defaults
+        )
+        var repositoryRoot = resolved.repositoryRoot
+        var logsDirectory = resolved.logsDirectory
+        if resolved.source == .defaultHome && defaultWatchDirectory != Self.defaultWatchDirectory {
             logsDirectory = defaultWatchDirectory
-            repositoryRoot = logsDirectory.deletingLastPathComponent()
+            repositoryRoot = defaultWatchDirectory.deletingLastPathComponent()
         }
-
         var selfHealingReason: String?
-        let fallbackLogsDirectory = selfHealingRepositoryRoot
-            .appendingPathComponent("logs", isDirectory: true)
-        if !hasSentinelFiles(in: logsDirectory, fileManager: fileManager),
-           hasSentinelFiles(in: fallbackLogsDirectory, fileManager: fileManager),
+        let fallbackLogsDirectory = selfHealingRepositoryRoot.appendingPathComponent("logs", isDirectory: true)
+        // CORTEX_DATA_ROOT 是测试/沙盒显式数据根时，不能被本机默认仓库日志自愈劫持。
+        let shouldAttemptSelfHealing = selfHealingRepositoryRoot != Self.selfHealingRepositoryRoot
+            || resolved.source == .defaultHome
+        if shouldAttemptSelfHealing,
+           !Self.hasSentinelFiles(in: logsDirectory, fileManager: fileManager),
+           Self.hasSentinelFiles(in: fallbackLogsDirectory, fileManager: fileManager),
            logsDirectory.standardizedFileURL.path != fallbackLogsDirectory.standardizedFileURL.path {
             let originalLogsDirectory = logsDirectory
             logsDirectory = fallbackLogsDirectory
             repositoryRoot = selfHealingRepositoryRoot
-            selfHealingReason =
-                "解析出的监视目录 \(originalLogsDirectory.path) 没有登记表或状态文件，已切换到仓库日志目录 \(fallbackLogsDirectory.path)"
+            selfHealingReason = "解析出的监视目录 \(originalLogsDirectory.path) 没有登记表或状态文件，已切换到仓库日志目录 \(fallbackLogsDirectory.path)"
         }
 
         let poolDirectory: URL
@@ -202,28 +229,85 @@ struct SentinelPaths {
         )
     }
 
-    private static func hasSentinelFiles(
-        in directory: URL,
-        fileManager: FileManager
-    ) -> Bool {
+    private static func hasSentinelFiles(in directory: URL, fileManager: FileManager) -> Bool {
         var isDirectory: ObjCBool = false
-        guard fileManager.fileExists(atPath: directory.path, isDirectory: &isDirectory),
-              isDirectory.boolValue
+        guard fileManager.fileExists(atPath: directory.path, isDirectory: &isDirectory), isDirectory.boolValue else { return false }
+        if fileManager.fileExists(atPath: directory.appendingPathComponent("codex-line-registry.json").path) { return true }
+        return (try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil, options: []))?.contains { $0.lastPathComponent.hasSuffix(".status.json") } == true
+    }
+}
+
+/// 按单个状态文件的 mtime + size 缓存解析结果。
+/// 目录 mtime 不动也要能看见原地改写；所以这里不按目录级跳过。
+final class LineStatusFileCache: @unchecked Sendable {
+    fileprivate struct FileIdentity: Equatable {
+        let modificationDate: Date
+        let size: UInt64
+    }
+
+    private struct CachedFile {
+        let identity: FileIdentity
+        let line: LineStatus
+    }
+
+    private let lock = NSLock()
+    private var files: [URL: CachedFile] = [:]
+    private var parseCountStorage = 0
+
+    var parseCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return parseCountStorage
+    }
+
+    func resetParseCount() {
+        lock.lock()
+        defer { lock.unlock() }
+        parseCountStorage = 0
+    }
+
+    fileprivate func line(for url: URL, identity: FileIdentity) -> LineStatus? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let entry = files[url], entry.identity == identity else {
+            return nil
+        }
+        return entry.line
+    }
+
+    fileprivate func store(url: URL, identity: FileIdentity?, line: LineStatus) {
+        lock.lock()
+        defer { lock.unlock() }
+        parseCountStorage += 1
+        guard let identity else {
+            return
+        }
+        files[url] = CachedFile(identity: identity, line: line)
+    }
+
+    fileprivate func retainOnly(_ urls: Set<URL>) {
+        lock.lock()
+        defer { lock.unlock() }
+        files = files.filter { urls.contains($0.key) }
+    }
+
+    fileprivate func removeAll() {
+        lock.lock()
+        defer { lock.unlock() }
+        files.removeAll()
+    }
+
+    fileprivate static func fileIdentity(
+        at url: URL,
+        fileManager: FileManager
+    ) -> FileIdentity? {
+        guard let attributes = try? fileManager.attributesOfItem(atPath: url.path),
+              let modificationDate = attributes[.modificationDate] as? Date,
+              let size = attributes[.size] as? NSNumber
         else {
-            return false
+            return nil
         }
-
-        if fileManager.fileExists(
-            atPath: directory.appendingPathComponent("codex-line-registry.json").path
-        ) {
-            return true
-        }
-
-        return (try? fileManager.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: nil,
-            options: []
-        ))?.contains { $0.lastPathComponent.hasSuffix(".status.json") } == true
+        return FileIdentity(modificationDate: modificationDate, size: size.uint64Value)
     }
 }
 
@@ -256,35 +340,53 @@ enum SentinelFileReader {
         )
     }
 
-    static func readLines(in logsDirectory: URL, fileManager: FileManager = .default) -> [LineStatus] {
+    static func readLines(
+        in logsDirectory: URL,
+        fileManager: FileManager = .default,
+        cache: LineStatusFileCache? = nil
+    ) -> [LineStatus] {
         let resolvedLogsDirectory = logsDirectory.resolvingSymlinksInPath()
         guard let urls = try? fileManager.contentsOfDirectory(
             at: resolvedLogsDirectory,
-            includingPropertiesForKeys: [.contentModificationDateKey],
+            includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
             options: [.skipsHiddenFiles]
         ) else {
+            cache?.removeAll()
             return []
         }
 
-        return urls.compactMap { url -> (url: URL, fallbackSlug: String, engine: LineEngine)? in
+        let statusEntries = urls.compactMap { url -> (url: URL, fallbackSlug: String, engine: LineEngine)? in
             guard let metadata = statusFileMetadata(for: url.lastPathComponent) else {
                 return nil
             }
             return (url, metadata.fallbackSlug, metadata.engine)
         }
-            .sorted { $0.url.lastPathComponent < $1.url.lastPathComponent }
-            .map { entry in
-                let url = entry.url
-                let modifiedAt = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-                let data = (try? Data(contentsOf: url)) ?? Data()
-                return parseLine(
-                    data: data,
-                    fallbackSlug: entry.fallbackSlug,
-                    fallbackEngine: entry.engine,
-                    sourceFile: url,
-                    sourceModifiedAt: modifiedAt ?? nil
-                )
+        .sorted { $0.url.lastPathComponent < $1.url.lastPathComponent }
+
+        cache?.retainOnly(Set(statusEntries.map { $0.url.standardizedFileURL }))
+
+        return statusEntries.map { entry in
+            let url = entry.url
+            let cacheKey = url.standardizedFileURL
+            let identity = cache == nil
+                ? nil
+                : LineStatusFileCache.fileIdentity(at: cacheKey, fileManager: fileManager)
+            if let identity, let cached = cache?.line(for: cacheKey, identity: identity) {
+                return cached
             }
+            let modifiedAt = identity?.modificationDate
+                ?? (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+            let data = (try? Data(contentsOf: url)) ?? Data()
+            let line = parseLine(
+                data: data,
+                fallbackSlug: entry.fallbackSlug,
+                fallbackEngine: entry.engine,
+                sourceFile: url,
+                sourceModifiedAt: modifiedAt
+            )
+            cache?.store(url: cacheKey, identity: identity, line: line)
+            return line
+        }
     }
 
     static func parseLine(
@@ -524,5 +626,62 @@ enum SentinelDateParser {
         let standard = ISO8601DateFormatter()
         standard.formatOptions = [.withInternetDateTime]
         return standard.date(from: value)
+    }
+}
+
+struct StatusDiskSnapshot {
+    var lines: [LineStatus]
+    var registry: CodexLineRegistry
+    var channelStatus: ChannelStatusSnapshot
+    var backgroundJobs: BackgroundJobsSnapshot
+    var ack: TerminalAckLedger
+    var otherCodexProcesses: [OtherCodexProcess]?
+    var readOnMainThread: Bool
+}
+
+enum StatusDiskReader {
+    static func load(
+        logsDirectory: URL,
+        registryURL: URL,
+        channelStatusURL: URL,
+        ackURL: URL,
+        lineStatusCache: LineStatusFileCache,
+        lineRegistryCache: CodexLineRegistryCache,
+        includeOtherProcesses: Bool,
+        otherCodexProcessReader: (Set<Int>) -> [OtherCodexProcess],
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> StatusDiskSnapshot {
+        let lines = SentinelFileReader.readLines(
+            in: logsDirectory,
+            cache: lineStatusCache
+        )
+        let registry = lineRegistryCache.read(at: registryURL)
+        let channelStatus = SentinelFileReader.readChannelStatus(at: channelStatusURL)
+        let backgroundJobsURL = SentinelPaths.backgroundJobsHealthURL(
+            logsDirectory: logsDirectory,
+            environment: environment,
+            fileManager: fileManager
+        )
+        let backgroundJobs = BackgroundJobsReader.read(
+            at: backgroundJobsURL,
+            fileManager: fileManager
+        )
+        let ack = SentinelFileReader.readTerminalAck(at: ackURL)
+        let processes: [OtherCodexProcess]?
+        if includeOtherProcesses {
+            processes = otherCodexProcessReader(Set(lines.compactMap(\.processID)))
+        } else {
+            processes = nil
+        }
+        return StatusDiskSnapshot(
+            lines: lines,
+            registry: registry,
+            channelStatus: channelStatus,
+            backgroundJobs: backgroundJobs,
+            ack: ack,
+            otherCodexProcesses: processes,
+            readOnMainThread: Thread.isMainThread
+        )
     }
 }

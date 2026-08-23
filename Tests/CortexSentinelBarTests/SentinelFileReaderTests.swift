@@ -215,14 +215,14 @@ final class SentinelFileReaderTests: XCTestCase {
         let unhandledPresentation = LineDispositionPresentation(line: unhandled)
 
         XCTAssertEqual(handled.note, note)
-        XCTAssertEqual(handledPresentation.stateText, "已处置")
+        XCTAssertEqual(handledPresentation.stateText, "挂了")
         XCTAssertEqual(handledPresentation.symbolName, "checkmark.seal.fill")
         XCTAssertEqual(handledPresentation.markerText, "已有处置记录")
         XCTAssertEqual(handledPresentation.note, note)
         XCTAssertFalse(handledPresentation.requiresAttention)
 
         XCTAssertNil(unhandled.note)
-        XCTAssertEqual(unhandledPresentation.stateText, "已失联")
+        XCTAssertEqual(unhandledPresentation.stateText, "挂了")
         XCTAssertEqual(unhandledPresentation.symbolName, "xmark.circle.fill")
         XCTAssertNil(unhandledPresentation.markerText)
         XCTAssertNil(unhandledPresentation.note)
@@ -256,7 +256,7 @@ final class SentinelFileReaderTests: XCTestCase {
 
         XCTAssertNil(line.note)
         XCTAssertTrue(line.requiresAttention)
-        XCTAssertEqual(LineDispositionPresentation(line: line).stateText, "已失联")
+        XCTAssertEqual(LineDispositionPresentation(line: line).stateText, "挂了")
     }
 
     func testParsesPoolHealthActiveAndSwitchContract() throws {
@@ -955,6 +955,197 @@ final class SentinelFileReaderTests: XCTestCase {
             ["dated", "missing-alpha", "missing-zulu"]
         )
     }
+
+    func testInvalidRouteSummaryDoesNotReuseChannelWording() {
+        let invalid = SentinelTopChannelPresentation(
+            aio: AIOSnapshot(
+                sourceState: .invalid,
+                gatewayEnabled: false,
+                routeMode: .direct,
+                providers: [],
+                lastHitProviderID: nil,
+                lastHitProviderName: nil,
+                readAt: Date(),
+                errorMessage: "AIO 数据读取失败"
+            )
+        )
+        XCTAssertEqual(invalid.routeSummary, "还不知道走的哪条路")
+        XCTAssertNil(invalid.routeModeBadge)
+    }
+
+    func testMissingEngineEntrySaysNoRecordInsteadOfUnintelligible() {
+        let snapshot = SentinelFileReader.parseChannelStatus(
+            data: Data(
+                """
+                {
+                  "channels": {
+                    "grok": {"status": "alive", "evidence": "1 条在跑", "running": 1}
+                  }
+                }
+                """.utf8
+            )
+        )
+        XCTAssertEqual(snapshot.grok.status, .alive)
+        XCTAssertEqual(snapshot.codex.unknownKind, .noRecord)
+        XCTAssertEqual(snapshot.codex.statusText, "还没有记录")
+        XCTAssertEqual(
+            ChannelSectionPresentation(
+                grok: snapshot.grok,
+                codex: snapshot.codex,
+                liveCounts: EngineCounts()
+            ).render.primaryRow,
+            ["Codex 还没有记录", "Grok 通 闲"]
+        )
+    }
+
+    func testReadChannelStatusSplitsFourUnknownKinds() throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory.appendingPathComponent(
+            "channel-four-kinds-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: root) }
+
+        let missingURL = root.appendingPathComponent("missing.json")
+        let missing = SentinelFileReader.readChannelStatus(at: missingURL)
+        XCTAssertEqual(missing, .missing)
+        XCTAssertEqual(
+            ChannelSectionPresentation(grok: missing.grok, codex: missing.codex, liveCounts: EngineCounts())
+                .render.primaryRow,
+            ["Codex 还没有记录", "Grok 还没有记录"]
+        )
+
+        let unreadableURL = root.appendingPathComponent("unreadable.json")
+        try Data("not-json".utf8).write(to: unreadableURL)
+        let unreadable = SentinelFileReader.readChannelStatus(at: unreadableURL)
+        XCTAssertEqual(unreadable, .invalid)
+        XCTAssertEqual(
+            ChannelSectionPresentation(
+                grok: unreadable.grok,
+                codex: unreadable.codex,
+                liveCounts: EngineCounts()
+            ).render.primaryRow,
+            ["Codex 状态读不出", "Grok 状态读不出"]
+        )
+
+        let unrecognizedURL = root.appendingPathComponent("unrecognized.json")
+        try Data(
+            """
+            {
+              "channels": {
+                "grok": {"status": "???"},
+                "codex": {}
+              }
+            }
+            """.utf8
+        ).write(to: unrecognizedURL)
+        let unrecognized = SentinelFileReader.readChannelStatus(at: unrecognizedURL)
+        XCTAssertEqual(unrecognized.grok.unknownKind, .unrecognized)
+        XCTAssertEqual(unrecognized.codex.unknownKind, .unrecognized)
+        XCTAssertEqual(
+            ChannelSectionPresentation(
+                grok: unrecognized.grok,
+                codex: unrecognized.codex,
+                liveCounts: EngineCounts()
+            ).render.primaryRow,
+            ["Codex 状态看不懂", "Grok 状态看不懂"]
+        )
+
+        let undeterminedURL = root.appendingPathComponent("undetermined.json")
+        try Data(
+            """
+            {
+              "channels": {
+                "grok": {"status": "unknown", "evidence": "无数据"},
+                "codex": {"status": "unknown"}
+              }
+            }
+            """.utf8
+        ).write(to: undeterminedURL)
+        let undetermined = SentinelFileReader.readChannelStatus(at: undeterminedURL)
+        XCTAssertEqual(undetermined.grok.unknownKind, .undetermined)
+        XCTAssertEqual(undetermined.codex.unknownKind, .undetermined)
+        XCTAssertEqual(
+            ChannelSectionPresentation(
+                grok: undetermined.grok,
+                codex: undetermined.codex,
+                liveCounts: EngineCounts()
+            ).render.primaryRow,
+            ["Codex 查不出来", "Grok 查不出来"]
+        )
+    }
+
+    func testUnconfiguredRouteSummaryDoesNotReuseChannelWording() {
+        let unread = SentinelTopChannelPresentation(aio: .unconfigured)
+        XCTAssertEqual(unread.routeSummary, "没在用本地网关")
+        XCTAssertNil(unread.routeModeBadge)
+    }
+
+    func testUnreadRouteDataHidesConnectionBadgeAndUsesFixedCopy() {
+        XCTAssertEqual(
+            SentinelTopChannelPresentation(aio: .unconfigured).routeSummary,
+            "没在用本地网关"
+        )
+
+        let invalid = SentinelTopChannelPresentation(
+            aio: AIOSnapshot(
+                sourceState: .invalid,
+                gatewayEnabled: false,
+                routeMode: .direct,
+                providers: [],
+                lastHitProviderID: nil,
+                lastHitProviderName: nil,
+                readAt: Date(),
+                errorMessage: "AIO 数据读取失败"
+            )
+        )
+        XCTAssertEqual(invalid.routeSummary, "还不知道走的哪条路")
+        XCTAssertNil(invalid.routeModeBadge)
+
+        let direct = SentinelTopChannelPresentation(
+            aio: AIOSnapshot(
+                sourceState: .available,
+                gatewayEnabled: false,
+                routeMode: .direct,
+                providers: [],
+                lastHitProviderID: nil,
+                lastHitProviderName: nil,
+                readAt: Date(),
+                errorMessage: nil
+            )
+        )
+        XCTAssertEqual(direct.routeSummary, "Codex 当前使用直连")
+        XCTAssertEqual(direct.routeModeBadge, "直连")
+    }
+
+    func testUnrecognizedStatusValueStaysUnintelligible() {
+        let snapshot = SentinelFileReader.parseChannelStatus(
+            data: Data(
+                """
+                {
+                  "channels": {
+                    "grok": {"status": "weird-value", "evidence": "x"},
+                    "codex": {"status": "weird-value"}
+                  }
+                }
+                """.utf8
+            )
+        )
+        XCTAssertEqual(snapshot.grok.unknownKind, .unrecognized)
+        XCTAssertEqual(snapshot.codex.unknownKind, .unrecognized)
+        XCTAssertEqual(snapshot.grok.statusText, "状态看不懂")
+        XCTAssertEqual(snapshot.codex.statusText, "状态看不懂")
+        XCTAssertEqual(
+            ChannelSectionPresentation(
+                grok: snapshot.grok,
+                codex: snapshot.codex,
+                liveCounts: EngineCounts()
+            ).render.primaryRow,
+            ["Codex 状态看不懂", "Grok 状态看不懂"]
+        )
+    }
+
 
     private func makeSortableLine(slug: String, startedAt: Date?) -> LineStatus {
         LineStatus(

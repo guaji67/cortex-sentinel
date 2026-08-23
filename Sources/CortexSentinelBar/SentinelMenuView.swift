@@ -11,7 +11,11 @@ struct SentinelMenuView: View {
     var initialSection: SentinelMenuInitialSection = .top
     /// 仅截图 smoke 用：预展开第一条最近完成，便于给第 4 点留证；菜单栏常驻默认 false。
     var autoExpandFirstCompleted = false
+    /// 离屏出图用：ImageRenderer 吃不下 ScrollView/LazyVStack，换成同等间距的 VStack。
+    /// 菜单栏常驻默认 false，现场布局一条都不改。
+    var rendersOffscreen = false
     @State private var showsAutomaticLines = false
+    @State private var showsBackgroundJobs = false
     @State private var showsHistory = false
     @State private var expandedCompletedLines: Set<String> = []
     @State private var expandedLineNotes: Set<String> = []
@@ -20,34 +24,32 @@ struct SentinelMenuView: View {
 
     var body: some View {
         ZStack {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: SentinelTheme.Spacing.section) {
-                        header
-                        channelSection
-                        serviceSection
-                        balancesSection
-                        dispatchSection
-                            .id(SentinelMenuInitialSection.dispatch)
-                        backgroundJobsSection
-                        automaticSection
-                        historySection
-                        footer
+            if rendersOffscreen {
+                VStack(alignment: .leading, spacing: SentinelTheme.Spacing.section) {
+                    sectionStack
+                }
+                .padding(SentinelTheme.Spacing.panel)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: SentinelTheme.Spacing.section) {
+                            sectionStack
+                        }
+                        .padding(SentinelTheme.Spacing.panel)
                     }
-                    .padding(SentinelTheme.Spacing.panel)
+                    .onAppear {
+                        scrollToInitialSection(using: proxy)
+                        seedAutoExpandIfNeeded()
+                    }
+                    .onChange(of: store.aio.readAt) {
+                        scrollToInitialSection(using: proxy)
+                        seedAutoExpandIfNeeded()
+                    }
+                    .onChange(of: store.lines) {
+                        seedAutoExpandIfNeeded()
+                    }
+                    .disabled(settingsLine != nil)
                 }
-                .onAppear {
-                    scrollToInitialSection(using: proxy)
-                    seedAutoExpandIfNeeded()
-                }
-                .onChange(of: store.aio.readAt) {
-                    scrollToInitialSection(using: proxy)
-                    seedAutoExpandIfNeeded()
-                }
-                .onChange(of: store.lines) {
-                    seedAutoExpandIfNeeded()
-                }
-                .disabled(settingsLine != nil)
             }
 
             if let settingsLine {
@@ -57,7 +59,7 @@ struct SentinelMenuView: View {
         .background(SentinelTheme.Colors.canvas)
         .frame(
             width: SentinelTheme.Metrics.menuWidth,
-            height: SentinelTheme.Metrics.menuHeight
+            height: rendersOffscreen ? nil : SentinelTheme.Metrics.menuHeight
         )
         .tint(SentinelTheme.Colors.primary)
         .preferredColorScheme(.dark)
@@ -65,11 +67,7 @@ struct SentinelMenuView: View {
             "确认关闭后台任务？",
             isPresented: Binding(
                 get: { pendingBackgroundJobConfirmation != nil },
-                set: { isPresented in
-                    if !isPresented {
-                        pendingBackgroundJobConfirmation = nil
-                    }
-                }
+                set: { if !$0 { pendingBackgroundJobConfirmation = nil } }
             ),
             titleVisibility: .visible
         ) {
@@ -79,14 +77,26 @@ struct SentinelMenuView: View {
                     pendingBackgroundJobConfirmation = nil
                 }
             }
-            Button("取消", role: .cancel) {
-                pendingBackgroundJobConfirmation = nil
-            }
+            Button("取消", role: .cancel) { pendingBackgroundJobConfirmation = nil }
         } message: {
             if let job = pendingBackgroundJobConfirmation {
                 Text("这会停止并持久关闭 \(job.label)。")
             }
         }
+    }
+
+    @ViewBuilder
+    private var sectionStack: some View {
+        header
+        channelSection
+        backgroundJobsSection
+        serviceSection
+        balancesSection
+        dispatchSection
+            .id(SentinelMenuInitialSection.dispatch)
+        automaticSection
+        historySection
+        footer
     }
 
     private func settingsOverlay(for line: LineStatus) -> some View {
@@ -143,14 +153,18 @@ struct SentinelMenuView: View {
         if store.watchDirectoryMissing {
             return SentinelPaths.missingWatchDirectoryTitle
         }
-        return "\(activeLineCount) 条活跃派工 · \(recentRegisteredCount) 条最近完成"
+        return SentinelBoardCopy.headerSubtitle(
+            localActiveCount: localActiveLineCount,
+            recentCount: recentRegisteredCount,
+            offHostActiveCount: offHostActiveLineCount
+        )
     }
 
     private var channelSection: some View {
         let presentation = ChannelSectionPresentation(
             grok: store.channelStatus.grok,
             codex: store.channelStatus.codex,
-            liveCounts: store.lineGroups.activeEngineCounts
+            liveCounts: store.lineGroups.localActiveEngineCounts(localHost: localHost)
         )
         return VStack(alignment: .leading, spacing: SentinelTheme.Spacing.sm) {
             sectionTitle("通道", trailing: channelUpdatedText)
@@ -186,7 +200,7 @@ struct SentinelMenuView: View {
                 .fixedSize(horizontal: true, vertical: false)
                 .layoutPriority(2)
 
-            Text(item.verdict.status.displayName)
+            Text(item.verdict.statusText)
                 .font(SentinelTheme.Fonts.balanceAmount)
                 .foregroundStyle(item.verdict.status.color)
                 .lineLimit(1)
@@ -205,6 +219,80 @@ struct SentinelMenuView: View {
         .accessibilityLabel(item.itemText)
     }
 
+    private var backgroundJobsSection: some View {
+        VStack(alignment: .leading, spacing: SentinelTheme.Spacing.sm) {
+            // PR 腿的健康快照折叠展示保留；私有腿的 launchctl 控制行另列在下方。
+            BackgroundJobsSectionView(
+                snapshot: store.backgroundJobs,
+                showsHealthy: $showsBackgroundJobs
+            )
+            if !store.backgroundJobRows.isEmpty {
+                sectionTitle("后台任务操作", trailing: "\(store.backgroundJobRows.count)")
+                ForEach(store.backgroundJobRows) { row in
+                    backgroundJobOperationRow(row)
+                }
+            }
+        }
+    }
+
+    private func backgroundJobOperationRow(_ row: BackgroundJobRow) -> some View {
+        let job = row.job
+        let busy = store.backgroundJobOperations.contains(job.label)
+        let statusText = row.isDisabled ? "已关闭" : job.statusText
+        return HStack(alignment: .top, spacing: SentinelTheme.Spacing.md) {
+            Circle()
+                .fill(row.isDisabled ? SentinelTheme.Colors.secondaryForeground : backgroundJobStatusColor(job.status))
+                .frame(width: SentinelTheme.Metrics.statusDot, height: SentinelTheme.Metrics.statusDot)
+                .padding(.top, SentinelTheme.Spacing.xs)
+            VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xxs) {
+                HStack(alignment: .firstTextBaseline, spacing: SentinelTheme.Spacing.xs) {
+                    Text(job.displayName).font(SentinelTheme.Fonts.rowTitle).foregroundStyle(SentinelTheme.Colors.foreground)
+                    Text(statusText).sentinelBadge(
+                        foreground: row.isDisabled ? SentinelTheme.Colors.secondaryForeground : backgroundJobStatusColor(job.status),
+                        background: row.isDisabled ? SentinelTheme.Colors.inset : backgroundJobStatusColor(job.status).opacity(0.14)
+                    )
+                }
+                Text(job.label).font(SentinelTheme.Fonts.metadata).foregroundStyle(SentinelTheme.Colors.secondaryForeground).lineLimit(1)
+                if !job.reason.isEmpty && !row.isDisabled { Text(job.reason).font(SentinelTheme.Fonts.subtitle).foregroundStyle(SentinelTheme.Colors.secondaryForeground).fixedSize(horizontal: false, vertical: true) }
+                if let message = store.backgroundJobMessages[job.label] { Text(message).font(SentinelTheme.Fonts.subtitle).foregroundStyle(SentinelTheme.Colors.warning).fixedSize(horizontal: false, vertical: true) }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if busy {
+                ProgressView().controlSize(.small).frame(width: 62, height: SentinelTheme.Metrics.lineControlHeight)
+            } else {
+                Button {
+                    if row.isDisabled { store.enableBackgroundJob(job.label) }
+                    else if BackgroundJobsConstants.criticalLabels.contains(job.label) { pendingBackgroundJobConfirmation = job }
+                    else { store.disableBackgroundJob(job.label) }
+                } label: {
+                    Label(row.isDisabled ? "开启" : "关闭", systemImage: row.isDisabled ? "play.circle" : "stop.circle")
+                }
+                .buttonStyle(SentinelLineControlButtonStyle(width: 62))
+                .accessibilityLabel("\(row.isDisabled ? "开启" : "关闭") \(job.displayName)")
+            }
+        }
+        .sentinelRow(tone: row.isDisabled ? .normal : backgroundJobRowTone(job.status))
+        .accessibilityIdentifier("background-job-operation-\(job.label)")
+    }
+
+    private func backgroundJobStatusColor(_ status: BackgroundJobStatus) -> Color {
+        switch status {
+        case .ok: return SentinelTheme.Colors.success
+        case .stalled, .hung, .neverRan: return SentinelTheme.Colors.warning
+        case .error: return SentinelTheme.Colors.danger
+        case .unknown: return SentinelTheme.Colors.secondaryForeground
+        }
+    }
+
+    private func backgroundJobRowTone(_ status: BackgroundJobStatus) -> SentinelRowTone {
+        switch status {
+        case .ok: return .success
+        case .stalled, .hung, .neverRan: return .warning
+        case .error: return .danger
+        case .unknown: return .normal
+        }
+    }
+
     private var channelUpdatedText: String? {
         guard let generatedAt = store.channelStatus.generatedAt else {
             return nil
@@ -212,9 +300,19 @@ struct SentinelMenuView: View {
         return SentinelTimeFormat.clockTime(generatedAt)
     }
 
+    @ViewBuilder
     private var serviceSection: some View {
         let probes = store.inputStatus.displayProbes()
-        return VStack(alignment: .leading, spacing: SentinelTheme.Spacing.md) {
+        switch InputServiceSectionPresentation.resolve(probes: probes) {
+        case let .compact(statusText):
+            compactDiagnosticRow(title: "Input 服务", status: statusText)
+        case .expanded:
+            expandedServiceSection(probes: probes)
+        }
+    }
+
+    private func expandedServiceSection(probes: [InputStatusDisplayProbe]) -> some View {
+        VStack(alignment: .leading, spacing: SentinelTheme.Spacing.md) {
             Text("Input 服务")
                 .font(SentinelTheme.Fonts.section)
                 .kerning(0.5)
@@ -333,20 +431,30 @@ struct SentinelMenuView: View {
         return parts.joined(separator: " · ")
     }
 
+    @ViewBuilder
     private var balancesSection: some View {
+        switch BalanceSectionPresentation.resolve(
+            official: store.officialUsage,
+            aio: store.aio
+        ) {
+        case let .compact(statusText):
+            compactDiagnosticRow(title: "余额", status: statusText)
+        case .unread:
+            unreadBalanceSection
+        case .expanded:
+            expandedBalancesSection
+        }
+    }
+
+    private var expandedBalancesSection: some View {
         VStack(alignment: .leading, spacing: SentinelTheme.Spacing.sm) {
             sectionTitle("余额", trailing: balanceCountText)
 
             officialUsageRow
 
             switch store.aio.sourceState {
-            case .unconfigured:
-                emptyState("未找到 AIO 数据库")
-            case .invalid:
-                Text(store.aio.errorMessage ?? "AIO 数据读取失败")
-                    .font(SentinelTheme.Fonts.subtitle)
-                    .foregroundStyle(SentinelTheme.Colors.warning)
-                    .sentinelRow(tone: .warning)
+            case .unconfigured, .invalid:
+                EmptyView()
             case .available:
                 if relayBalanceProviders.isEmpty {
                     emptyState("没有可显示的中转余额")
@@ -523,6 +631,14 @@ struct SentinelMenuView: View {
 
             Spacer(minLength: SentinelTheme.Spacing.md)
 
+            if case .loading = provider.usage {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .controlSize(.small)
+                    .frame(width: 14, height: 14)
+                    .accessibilityLabel("正在刷新余额")
+            }
+
             Text(balance.text)
                 .font(SentinelTheme.Fonts.balanceAmount)
                 .foregroundStyle(balance.color)
@@ -566,7 +682,7 @@ struct SentinelMenuView: View {
     private var dispatchSection: some View {
         let groups = store.lineGroups
         return VStack(alignment: .leading, spacing: SentinelTheme.Spacing.sm) {
-            sectionTitle("已登记派工", trailing: "\(groups.activeRegistered.count)")
+            sectionTitle(SentinelBoardCopy.registeredSectionTitle, trailing: "\(groups.activeRegistered.count)")
 
             if store.watchDirectoryMissing {
                 missingWatchDirectoryEmptyState
@@ -592,141 +708,6 @@ struct SentinelMenuView: View {
         }
     }
 
-    private var backgroundJobsSection: some View {
-        VStack(alignment: .leading, spacing: SentinelTheme.Spacing.sm) {
-            sectionTitle("后台任务", trailing: "\(store.backgroundJobs.count)")
-
-            if store.backgroundJobs.isEmpty {
-                emptyState("暂无后台任务数据")
-            } else {
-                ForEach(store.backgroundJobs) { row in
-                    backgroundJobRow(row)
-                }
-            }
-        }
-    }
-
-    private func backgroundJobRow(_ row: BackgroundJobRow) -> some View {
-        let job = row.job
-        let isBusy = store.backgroundJobOperations.contains(job.label)
-        let statusText = row.isDisabled
-            ? "已关闭"
-            : (job.statusText ?? backgroundJobStatusText(job.status))
-        return HStack(alignment: .top, spacing: SentinelTheme.Spacing.md) {
-            Circle()
-                .fill(
-                    row.isDisabled
-                        ? SentinelTheme.Colors.secondaryForeground
-                        : backgroundJobStatusColor(job.status)
-                )
-                .frame(
-                    width: SentinelTheme.Metrics.statusDot,
-                    height: SentinelTheme.Metrics.statusDot
-                )
-                .padding(.top, SentinelTheme.Spacing.xs)
-
-            VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xxs) {
-                HStack(alignment: .firstTextBaseline, spacing: SentinelTheme.Spacing.xs) {
-                    Text(job.displayName)
-                        .font(SentinelTheme.Fonts.rowTitle)
-                        .foregroundStyle(SentinelTheme.Colors.foreground)
-                        .lineLimit(1)
-                    Text(statusText)
-                        .sentinelBadge(
-                            foreground: row.isDisabled
-                                ? SentinelTheme.Colors.secondaryForeground
-                                : backgroundJobStatusColor(job.status),
-                            background: row.isDisabled
-                                ? SentinelTheme.Colors.inset
-                                : backgroundJobStatusColor(job.status).opacity(0.14)
-                        )
-                }
-                Text(job.label)
-                    .font(SentinelTheme.Fonts.metadata)
-                    .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
-                    .lineLimit(1)
-                if let reason = job.reason, !reason.isEmpty, !row.isDisabled {
-                    Text(reason)
-                        .font(SentinelTheme.Fonts.subtitle)
-                        .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if let message = store.backgroundJobMessages[job.label] {
-                    Text(message)
-                        .font(SentinelTheme.Fonts.subtitle)
-                        .foregroundStyle(SentinelTheme.Colors.warning)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            if isBusy {
-                ProgressView()
-                    .controlSize(.small)
-                    .frame(width: 62, height: SentinelTheme.Metrics.lineControlHeight)
-            } else {
-                Button {
-                    if row.isDisabled {
-                        store.enableBackgroundJob(job.label)
-                    } else if BackgroundJobsConstants.criticalLabels.contains(job.label) {
-                        pendingBackgroundJobConfirmation = job
-                    } else {
-                        store.disableBackgroundJob(job.label)
-                    }
-                } label: {
-                    Label(
-                        row.isDisabled ? "开启" : "关闭",
-                        systemImage: row.isDisabled ? "play.circle" : "stop.circle"
-                    )
-                }
-                .buttonStyle(SentinelLineControlButtonStyle(width: 62))
-                .help(row.isDisabled ? "开启后台任务" : "关闭后台任务")
-                .accessibilityLabel("\(row.isDisabled ? "开启" : "关闭") \(job.displayName)")
-            }
-        }
-        .sentinelRow(tone: row.isDisabled ? .normal : backgroundJobRowTone(job.status))
-        .accessibilityIdentifier("background-job-\(job.label)")
-    }
-
-    private func backgroundJobStatusText(_ status: String) -> String {
-        switch status.lowercased() {
-        case "ok", "healthy", "running":
-            return "正常"
-        case "stalled", "hung", "error", "failed":
-            return "出错"
-        case "disabled":
-            return "已关闭"
-        default:
-            return "未知"
-        }
-    }
-
-    private func backgroundJobStatusColor(_ status: String) -> Color {
-        switch status.lowercased() {
-        case "ok", "healthy", "running":
-            return SentinelTheme.Colors.success
-        case "stalled", "hung":
-            return SentinelTheme.Colors.warning
-        case "error", "failed":
-            return SentinelTheme.Colors.danger
-        default:
-            return SentinelTheme.Colors.secondaryForeground
-        }
-    }
-
-    private func backgroundJobRowTone(_ status: String) -> SentinelRowTone {
-        switch status.lowercased() {
-        case "ok", "healthy", "running":
-            return .success
-        case "stalled", "hung":
-            return .warning
-        case "error", "failed":
-            return .danger
-        default:
-            return .normal
-        }
-    }
-
     private func registeredLineRow(_ presentation: LinePresentation) -> some View {
         let line = presentation.line
         let registration = presentation.registration
@@ -746,6 +727,7 @@ struct SentinelMenuView: View {
                         .foregroundStyle(SentinelTheme.Colors.foreground)
                         .fixedSize(horizontal: false, vertical: true)
                     engineBadge(presentation.engine)
+                    hostBadge(presentation.hostOrigin(localHost: localHost))
                 }
 
                 if let registration {
@@ -826,24 +808,25 @@ struct SentinelMenuView: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                     engineBadge(presentation.engine)
+                    hostBadge(presentation.hostOrigin(localHost: localHost))
                 }
 
                 Spacer()
 
                 VStack(alignment: .trailing, spacing: SentinelTheme.Spacing.xxs) {
-                    if line.state != .done {
-                        Text(line.state.displayName)
+                    if let outcome = LineTerminalOutcomePresentation.label(for: line.state) {
+                        Text(outcome)
                             .font(SentinelTheme.Fonts.badge)
-                            .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                            .foregroundStyle(
+                                line.state == .done
+                                    ? SentinelTheme.Colors.success
+                                    : SentinelTheme.Colors.secondaryForeground
+                            )
                     }
                     if let completedAt = line.sourceModifiedAt {
                         Text(SentinelTimeFormat.shortTime(completedAt))
                             .font(SentinelTheme.Fonts.rowTime)
                             .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
-                    } else if line.state == .done {
-                        Text("已完成")
-                            .font(SentinelTheme.Fonts.badge)
-                            .foregroundStyle(SentinelTheme.Colors.success)
                     }
                 }
 
@@ -917,7 +900,7 @@ struct SentinelMenuView: View {
             + recentUnregisteredLines.count
             + store.otherCodexProcesses.count
         return collapsibleSection(
-            title: "自动识别",
+            title: SentinelBoardCopy.unregisteredSectionTitle,
             count: count,
             isExpanded: $showsAutomaticLines
         ) {
@@ -1074,7 +1057,7 @@ struct SentinelMenuView: View {
 
             Spacer()
 
-            Text(line.state.displayName)
+            Text(LineTerminalOutcomePresentation.label(for: line.state) ?? line.state.displayName)
                 .font(SentinelTheme.Fonts.badge)
                 .foregroundStyle(
                     line.state == .done
@@ -1161,6 +1144,7 @@ struct SentinelMenuView: View {
                             .foregroundStyle(SentinelTheme.Colors.foreground)
                             .lineLimit(2)
                         engineBadge(presentation.engine)
+                        hostBadge(presentation.hostOrigin(localHost: localHost))
                     }
 
                     if let registration = presentation.registration {
@@ -1211,14 +1195,18 @@ struct SentinelMenuView: View {
 
                 Spacer()
 
-                Text(store.aio.routeMode.displayName)
-                    .sentinelBadge(
-                        foreground: SentinelTheme.Colors.info,
-                        background: SentinelTheme.Colors.infoSoft
-                    )
+                if let routeModeBadge {
+                    Text(routeModeBadge)
+                        .sentinelBadge(
+                            foreground: SentinelTheme.Colors.info,
+                            background: SentinelTheme.Colors.infoSoft
+                        )
+                }
             }
 
             HStack(spacing: SentinelTheme.Spacing.md) {
+                Spacer(minLength: 0)
+
                 Button {
                     store.openLogsDirectory()
                 } label: {
@@ -1232,7 +1220,7 @@ struct SentinelMenuView: View {
                 )
 
                 Button {
-                    store.refreshAll()
+                    Task { await store.refreshAll() }
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
@@ -1246,7 +1234,21 @@ struct SentinelMenuView: View {
                 .help("刷新")
                 .accessibilityLabel("刷新")
 
-                Spacer()
+                Button {
+                    store.openSettings()
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .buttonStyle(
+                    SentinelButtonStyle(
+                        kind: .secondary,
+                        compact: true,
+                        iconOnly: true
+                    )
+                )
+                .help("设置")
+                .accessibilityLabel("设置")
+                .accessibilityIdentifier("app-settings-button")
 
                 Button {
                     NSApplication.shared.terminate(nil)
@@ -1289,6 +1291,32 @@ struct SentinelMenuView: View {
         }
     }
 
+    private func compactDiagnosticRow(title: String, status: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: SentinelTheme.Spacing.md) {
+            Text(title)
+                .font(SentinelTheme.Fonts.section)
+                .kerning(0.5)
+                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+            Text(status)
+                .font(SentinelTheme.Fonts.subtitle)
+                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var unreadBalanceSection: some View {
+        VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xxs) {
+            Text(BalanceSectionPresentation.unreadTitle)
+                .font(SentinelTheme.Fonts.subtitle)
+                .foregroundStyle(SentinelTheme.Colors.foreground)
+            Text(BalanceSectionPresentation.unreadDetail)
+                .font(SentinelTheme.Fonts.subtitle)
+                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private func emptyState(_ text: String) -> some View {
         Text(text)
             .font(SentinelTheme.Fonts.subtitle)
@@ -1315,9 +1343,17 @@ struct SentinelMenuView: View {
         .sentinelRow()
     }
 
-    private var activeLineCount: Int {
-        store.lineGroups.activeRegistered.count
-            + store.lineGroups.activeUnregistered.count
+    private var localHost: LocalHostIdentity {
+        .current()
+    }
+
+    private var localActiveLineCount: Int {
+        store.lineGroups.localActivePresentations(localHost: localHost).count
+    }
+
+    private var offHostActiveLineCount: Int {
+        let origins = store.lineGroups.activeHostOriginCounts(localHost: localHost)
+        return origins.remote + origins.unknown
     }
 
     private var boardWindow: SentinelBoardWindow {
@@ -1340,6 +1376,10 @@ struct SentinelMenuView: View {
 
     private var routeSummary: String {
         SentinelTopChannelPresentation(aio: store.aio).routeSummary
+    }
+
+    private var routeModeBadge: String? {
+        SentinelTopChannelPresentation(aio: store.aio).routeModeBadge
     }
 
     private func usagePresentation(_ status: AIOUsageStatus) -> (
@@ -1470,6 +1510,24 @@ struct SentinelMenuView: View {
                     : SentinelTheme.Colors.inset
             )
             .accessibilityLabel("引擎 \(engine.displayName)")
+    }
+
+    private func hostBadge(_ origin: LineHostOrigin) -> some View {
+        Text(origin.badgeText)
+            .lineLimit(1)
+            .sentinelBadge(
+                foreground: origin.isRemote
+                    ? SentinelTheme.Colors.info
+                    : origin.isUnknown
+                        ? SentinelTheme.Colors.warning
+                        : SentinelTheme.Colors.secondaryForeground,
+                background: origin.isRemote
+                    ? SentinelTheme.Colors.infoSoft
+                    : origin.isUnknown
+                        ? SentinelTheme.Colors.warningSoft
+                        : SentinelTheme.Colors.inset
+            )
+            .accessibilityLabel("机器 \(origin.badgeText)")
     }
 
     @ViewBuilder

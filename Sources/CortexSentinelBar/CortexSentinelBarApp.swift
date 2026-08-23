@@ -202,6 +202,9 @@ enum CortexSentinelBarMain {
             "  Codex \(channelStatus.codex.statusText) · 文件running=\(channelStatus.codex.running.map(String.init) ?? "无") · 面板条数(本机)=\(liveChannelCounts.codex) · \(channelStatus.codex.evidence)"
         )
         print(
+            "  ox-alpha \(channelStatus.claudeOxAlpha.statusText) · 文件running=\(channelStatus.claudeOxAlpha.running.map(String.init) ?? "无") · 面板条数(本机)=\(liveChannelCounts.claudeOxAlpha) · \(channelStatus.claudeOxAlpha.evidence)"
+        )
+        print(
             "  活跃口径：本机 \(originCounts.local) · 外机 \(originCounts.remote) · 机器未知 \(originCounts.unknown)（通道行和标题只数本机）"
         )
         let backgroundJobs = BackgroundJobsReader.read(at: paths.backgroundJobsHealthURL)
@@ -228,6 +231,10 @@ enum CortexSentinelBarMain {
             print("  ⚠️ 文件在但一条都没解出来 —— 多半是格式对不上，看 LineRegistry.swift")
         }
         print("状态文件：读到 \(lines.count) 条线")
+        let localActiveCounts = groups.localActiveEngineCounts(localHost: localHost)
+        print(
+            "  活跃按引擎（本机）：Codex=\(localActiveCounts.codex) Grok=\(localActiveCounts.grok) ox-alpha=\(localActiveCounts.claudeOxAlpha) 其它=\(localActiveCounts.unknown)"
+        )
         print(String(format: "读取耗时：%.1f ms", readMilliseconds))
         print("分组结果：")
         print("  已登记派工（活跃）：\(groups.activeRegistered.count)")
@@ -244,12 +251,12 @@ enum CortexSentinelBarMain {
         }
         print("  历史（分组全量）：\(groups.history.count)")
         print("看板窗口（使用者面板实际露出，不是分组全量）：")
-        print("  最近完成露出：\(board.recentShown.count)  Grok=\(board.recentCounts.grok) Codex=\(board.recentCounts.codex)")
+        print("  最近完成露出：\(board.recentShown.count)  Codex=\(board.recentCounts.codex) Grok=\(board.recentCounts.grok) ox-alpha=\(board.recentCounts.claudeOxAlpha)")
         for item in board.recentShown {
             print("    - \(item.line.slug) → \(item.registration?.labelZH ?? "（无中文名）") [\(item.engine.displayName) · \(item.line.state.displayName) · \(item.hostOrigin(localHost: localHost).badgeText)]")
         }
-        print("  历史露出：\(board.historyShown.count)  Grok=\(board.historyCounts.grok) Codex=\(board.historyCounts.codex)")
-        print("  历史隐藏：\(board.hiddenCount)  Grok=\(board.hiddenCounts.grok) Codex=\(board.hiddenCounts.codex)")
+        print("  历史露出：\(board.historyShown.count)  Codex=\(board.historyCounts.codex) Grok=\(board.historyCounts.grok) ox-alpha=\(board.historyCounts.claudeOxAlpha)")
+        print("  历史隐藏：\(board.hiddenCount)  Codex=\(board.hiddenCounts.codex) Grok=\(board.hiddenCounts.grok) ox-alpha=\(board.hiddenCounts.claudeOxAlpha)")
         print("  裁剪判据：\(SentinelBoardWindow.recencyCriterion)")
         if let footerText = board.footerText {
             print("  脚注：\(footerText)")

@@ -42,6 +42,103 @@ final class SentinelFileReaderTests: XCTestCase {
         XCTAssertFalse(line.reportsCodexChannelTelemetry)
     }
 
+    func testDiscoversAndParsesClaudeOxAlphaStatusContract() throws {
+        let fileManager = FileManager.default
+        let logsDirectory = fileManager.temporaryDirectory.appendingPathComponent(
+            "CortexSentinelOxAlpha-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(at: logsDirectory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: logsDirectory) }
+
+        try fileManager.copyItem(
+            at: try fixtureURL("claude-oxalpha-status", extension: "json"),
+            to: logsDirectory.appendingPathComponent("claude-oxalpha-riskclean-neutral.status.json")
+        )
+
+        let lines = SentinelFileReader.readLines(in: logsDirectory)
+        let line = try XCTUnwrap(lines.first)
+
+        XCTAssertEqual(lines.count, 1)
+        XCTAssertEqual(line.slug, "riskclean-neutral")
+        XCTAssertEqual(line.engine, .claudeOxAlpha)
+        XCTAssertEqual(line.engine.displayName, "ox-alpha")
+        XCTAssertEqual(line.engine.ackChannel, "claude-oxalpha")
+        XCTAssertEqual(line.engine.prefixedAckKey(slug: line.slug), "claude-oxalpha:riskclean-neutral")
+        XCTAssertEqual(line.state, .done)
+        XCTAssertTrue(line.state.isTerminal)
+        XCTAssertEqual(line.model, "stealth/ox-alpha[1M]")
+        XCTAssertEqual(line.branch, "codex/riskclean-neutral")
+        XCTAssertEqual(line.logBytes, 310)
+        XCTAssertEqual(line.exitCode, 0)
+        // 契约里没有 codex_pid，只有 agent_pid；supervisor_pid 不是运行判据。
+        XCTAssertEqual(line.processID, 19_153)
+        XCTAssertFalse(line.reportsRestarts)
+        XCTAssertFalse(line.reportsCodexChannelTelemetry)
+    }
+
+    func testClaudeOxAlphaFallbackSlugAndEngineComeFromFileNamePrefix() throws {
+        let fileManager = FileManager.default
+        let logsDirectory = fileManager.temporaryDirectory.appendingPathComponent(
+            "CortexSentinelOxAlphaFallback-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(at: logsDirectory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: logsDirectory) }
+        // 没有 engine 字段：引擎必须由 claude-oxalpha- 前缀兜底，不能掉回 Codex。
+        try Data(#"{"state":"running","agent_pid":4242}"#.utf8).write(
+            to: logsDirectory.appendingPathComponent("claude-oxalpha-fallback-line.status.json")
+        )
+
+        let line = try XCTUnwrap(SentinelFileReader.readLines(in: logsDirectory).first)
+
+        XCTAssertEqual(line.slug, "fallback-line")
+        XCTAssertEqual(line.engine, .claudeOxAlpha)
+        XCTAssertEqual(line.processID, 4_242)
+    }
+
+    func testCodexPidWinsOverAgentPidWhenBothPresent() {
+        let line = SentinelFileReader.parseLine(
+            data: Data(#"{"state":"running","codex_pid":11,"agent_pid":22}"#.utf8),
+            fallbackSlug: "both-pids",
+            sourceFile: URL(fileURLWithPath: "/tmp/codex-babysitter-both-pids.status.json")
+        )
+
+        XCTAssertEqual(line.processID, 11)
+    }
+
+    func testClaudeOxAlphaEngineRawValuesBothMapToTheSameEngine() {
+        XCTAssertEqual(LineEngine(rawValue: "claude"), .claudeOxAlpha)
+        XCTAssertEqual(LineEngine(rawValue: "claude-oxalpha"), .claudeOxAlpha)
+        XCTAssertEqual(LineEngine(rawValue: " Claude "), .claudeOxAlpha)
+        XCTAssertFalse(LineEngine.claudeOxAlpha.isCursorGrok)
+    }
+
+    func testClaudeOxAlphaTerminalAckMatchesPrefixedKey() {
+        let ledger = SentinelFileReader.parseTerminalAck(
+            data: Data(
+                #"{"acks":{"claude-oxalpha:riskclean-neutral":{"state":"done","updated_at":"2026-08-22T23:53:06+08:00"}}}"#.utf8
+            )
+        )
+
+        XCTAssertTrue(
+            ledger.matches(
+                slug: "riskclean-neutral",
+                engine: .claudeOxAlpha,
+                state: "done",
+                updatedAt: "2026-08-22T23:53:06+08:00"
+            )
+        )
+        XCTAssertFalse(
+            ledger.matches(
+                slug: "riskclean-neutral",
+                engine: .codex,
+                state: "done",
+                updatedAt: "2026-08-22T23:53:06+08:00"
+            )
+        )
+    }
+
     func testParsesChannelStatusContract() throws {
         let json = """
         {

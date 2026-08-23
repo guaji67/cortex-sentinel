@@ -19,6 +19,7 @@ plist="$HOME/Library/LaunchAgents/$service_label.plist"
 uid="$(id -u)"
 lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 app_source=""
+verify_integrity_only=0
 cortex_repo_root="${CORTEX_REPO_ROOT:-}"
 watch_dir="${CORTEX_SENTINEL_WATCH_DIR:-}"
 watch_dir_explicit=0
@@ -40,6 +41,7 @@ usage() {
   bash scripts/install-app.sh --app-source /path/to/Cortex哨兵.app
   bash scripts/install-app.sh --app-source /path/to/Cortex哨兵.app --cortex-root /path/to/cortex
   bash scripts/install-app.sh --app-source /path/to/Cortex哨兵.app --skip-login-item-cleanup
+  bash scripts/install-app.sh --verify-installer-integrity --app-source /path/to/Cortex哨兵.app
 
 监视目录（写入 launchd）：
   CORTEX_SENTINEL_WATCH_DIR   优先，直接指向日志目录
@@ -68,6 +70,10 @@ while [ "$#" -gt 0 ]; do
       skip_login_item_cleanup=1
       shift
       ;;
+    --verify-installer-integrity)
+      verify_integrity_only=1
+      shift
+      ;;
     --print-watch-plan)
       print_watch_plan=1
       shift
@@ -83,6 +89,52 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+installer_script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+
+verify_installer_integrity() {
+  local app_path="$1"
+  local manifest_path="$app_path/Contents/Resources/installer-manifest.json"
+  local expected_sha256
+  local actual_sha256
+  local normalized_expected_sha256
+  local normalized_actual_sha256
+
+  [ -d "$app_path" ] || {
+    echo "失败：待安装 app 不存在：$app_path" >&2
+    return 1
+  }
+  [ -f "$manifest_path" ] || {
+    echo "失败：app 内缺少安装器完整性清单：$manifest_path" >&2
+    return 1
+  }
+  if ! expected_sha256="$(plutil -extract installer_sha256 raw -o - "$manifest_path" 2>/dev/null)"; then
+    echo "失败：读取安装器完整性清单失败：$manifest_path" >&2
+    return 1
+  fi
+  if [[ ! "$expected_sha256" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    echo "失败：安装器完整性清单中的 SHA-256 格式不正确：$expected_sha256" >&2
+    return 1
+  fi
+  actual_sha256="$(shasum -a 256 "$installer_script_path" | awk '{print $1}')"
+  normalized_expected_sha256="$(printf '%s' "$expected_sha256" | tr '[:upper:]' '[:lower:]')"
+  normalized_actual_sha256="$(printf '%s' "$actual_sha256" | tr '[:upper:]' '[:lower:]')"
+  if [ "$normalized_expected_sha256" != "$normalized_actual_sha256" ]; then
+    echo "失败：安装器完整性校验不匹配：manifest=${expected_sha256}，实际=${actual_sha256}，文件=${installer_script_path}" >&2
+    return 1
+  fi
+  echo "安装器完整性校验通过：sha256=$normalized_actual_sha256"
+}
+
+if [ "$verify_integrity_only" -eq 1 ]; then
+  [ -n "$app_source" ] || {
+    echo "失败：--verify-installer-integrity 必须配合 --app-source" >&2
+    exit 2
+  }
+  app_source="$(cd "$(dirname "$app_source")" && pwd)/$(basename "$app_source")"
+  verify_installer_integrity "$app_source"
+  exit 0
+fi
 
 if [ -z "$watch_dir" ]; then
   if [ -n "$cortex_repo_root" ] && [ -d "$cortex_repo_root/logs" ]; then
@@ -295,6 +347,7 @@ else
   echo "使用预构建 app：$app_source"
 fi
 codesign --verify --deep --strict "$app_source"
+verify_installer_integrity "$app_source"
 if ! lipo -archs "$app_source/Contents/MacOS/CortexSentinelBar" | tr ' ' '\n' | grep -qx arm64; then
   echo "失败：预构建 app 不包含 arm64" >&2
   exit 1

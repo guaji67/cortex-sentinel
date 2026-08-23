@@ -33,6 +33,23 @@ final class LineTerminalOutcomeTests: XCTestCase {
         XCTAssertFalse(presentation.requiresAttention)
     }
 
+    /// COR-502 修改五：「最近完成」折叠态标记的渲染条件就是 markerText 是否为 nil。
+    /// 写了处置结论的完成线必须给标记，没写的一个字都不加。
+    func testCompletedRowMarkerAppearsOnlyWhenNoteExists() {
+        let handledDone = makeLine(state: .done, note: "结论已回填")
+        XCTAssertEqual(LineDispositionPresentation(line: handledDone).markerText, "有备注")
+
+        let handledKilled = makeLine(state: .killed, note: "人工停掉，不再重拉")
+        XCTAssertEqual(LineDispositionPresentation(line: handledKilled).markerText, "有备注")
+
+        XCTAssertNil(
+            LineDispositionPresentation(line: makeLine(state: .done)).markerText
+        )
+        XCTAssertNil(
+            LineDispositionPresentation(line: makeLine(state: .killed)).markerText
+        )
+    }
+
     private func makeLine(state: LineState, note: String? = nil) -> LineStatus {
         LineStatus(
             sourceFile: URL(fileURLWithPath: "/tmp/codex-babysitter-outcome.status.json"),

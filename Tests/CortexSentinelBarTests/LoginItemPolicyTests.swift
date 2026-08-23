@@ -99,7 +99,7 @@ final class LoginItemPolicyTests: XCTestCase {
         )
         try Data().write(to: executable)
 
-        let environment = ["CORTEX_REPO_ROOT": "/Users/falcon/Documents/Code/cortex"]
+        let environment = ["CORTEX_REPO_ROOT": "/tmp/cortex-repo-fixture"]
         let plist: [String: Any] = [
             "Label": LoginItemConstants.launchAgentLabel,
             "ProgramArguments": [executable.path],

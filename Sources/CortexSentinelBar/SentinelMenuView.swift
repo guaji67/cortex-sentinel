@@ -836,6 +836,21 @@ struct SentinelMenuView: View {
                     .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
             }
 
+            // COR-502 修改五：终态线落在「最近完成」这一档时，处置结论原先
+            // 只在展开后的详情里，折叠着看不出「已经有人处理过」。
+            // 这里补一行折叠态就能看见的标记，全文仍在展开的详情里。
+            if let markerText = completedDispositionMarker(for: line) {
+                HStack(spacing: SentinelTheme.Spacing.xs) {
+                    Image(systemName: "checkmark.seal.fill")
+                        .imageScale(.small)
+                    Text(markerText)
+                }
+                .font(SentinelTheme.Fonts.metadata)
+                .foregroundStyle(SentinelTheme.Colors.success)
+                .padding(.leading, SentinelTheme.Metrics.statusDot + SentinelTheme.Spacing.md)
+                .accessibilityIdentifier("completed-note-marker-\(line.slug)")
+            }
+
             if isExpanded {
                 completedLineDetail(presentation)
                     .padding(.leading, SentinelTheme.Metrics.statusDot + SentinelTheme.Spacing.md)
@@ -856,6 +871,12 @@ struct SentinelMenuView: View {
         .accessibilityLabel(
             "\(presentation.registration?.labelZH ?? line.slug)，\(isExpanded ? "已展开" : "已折叠")"
         )
+    }
+
+    /// 只有真写了处置结论的终态线才给折叠态标记；没写的一个字都不加，
+    /// 免得「已经有人处理过」的绿标记贴到其实还没人管的线上。
+    private func completedDispositionMarker(for line: LineStatus) -> String? {
+        LineDispositionPresentation(line: line).markerText
     }
 
     private func completedLineDetail(_ presentation: LinePresentation) -> some View {

@@ -42,6 +42,7 @@ final class SentinelSettingsTests: XCTestCase {
         XCTAssertTrue(SentinelSettingsKey.panelOpenRefreshInterval.hasPrefix(SentinelSettingsKey.bundlePrefix + "."))
         XCTAssertTrue(SentinelSettingsKey.panelClosedRefreshInterval.hasPrefix(SentinelSettingsKey.bundlePrefix + "."))
         XCTAssertTrue(SentinelSettingsKey.balanceRecheckInterval.hasPrefix(SentinelSettingsKey.bundlePrefix + "."))
+        XCTAssertTrue(SentinelSettingsKey.backgroundJobsExpanded.hasPrefix(SentinelSettingsKey.bundlePrefix + "."))
         XCTAssertEqual(SentinelSettingsCopy.windowTitle, "哨兵设置")
         XCTAssertEqual(SentinelSettingsCopy.notifyGroupTitle, "通知")
         XCTAssertEqual(SentinelSettingsCopy.notifyMasterTitle, "通知我")
@@ -290,6 +291,26 @@ final class SentinelSettingsTests: XCTestCase {
         XCTAssertTrue(locked.isWatchDirectoryLocked)
         locked.setWatchDirectory(second)
         XCTAssertEqual(locked.paths.logsDirectory.path, first.path)
+    }
+
+    /// 后台任务默认收起；点开之后，下次再开面板（= 新建一个 store）要记得住。
+    @MainActor
+    func testBackgroundJobsCollapsedByDefaultAndRemembersExpandChoice() {
+        XCTAssertFalse(SentinelSettings.backgroundJobsExpanded(defaults: defaults))
+
+        let store = SentinelStore(defaults: defaults, environment: [:])
+        XCTAssertFalse(store.backgroundJobsExpanded)
+
+        store.setBackgroundJobsExpanded(true)
+        XCTAssertTrue(store.backgroundJobsExpanded)
+        XCTAssertTrue(SentinelSettings.backgroundJobsExpanded(defaults: defaults))
+
+        let reopened = SentinelStore(defaults: defaults, environment: [:])
+        XCTAssertTrue(reopened.backgroundJobsExpanded)
+
+        reopened.setBackgroundJobsExpanded(false)
+        XCTAssertFalse(SentinelSettings.backgroundJobsExpanded(defaults: defaults))
+        XCTAssertFalse(SentinelStore(defaults: defaults, environment: [:]).backgroundJobsExpanded)
     }
 
     @MainActor

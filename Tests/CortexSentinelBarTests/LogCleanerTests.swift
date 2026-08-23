@@ -34,6 +34,8 @@ final class LogCleanerTests: XCTestCase {
         for protected in [
             "codex-line-registry.json",
             "codex-babysitter-foo.status.json",
+            "claude-oxalpha-foo.status.json",
+            "claude-oxalpha-foo.log",
             "codex-prompt-foo.md",
             "codex-foo-DELIVERY.md",
             "codex-babysitter-foo.out",
@@ -131,6 +133,40 @@ final class LogCleanerTests: XCTestCase {
         XCTAssertFalse(
             fileManager.fileExists(atPath: root.appendingPathComponent("log-cleanup-inspect.log").path)
         )
+    }
+
+    // MARK: ox-alpha 活线保护
+
+    func testOxAlphaRunningLineProtectsItsLogAndItsOwnFilesAreNeverCandidates() throws {
+        // 只有 ox-alpha 状态文件、没有 babysitter 状态文件的活线：
+        // 它的 codex-<slug>.log 以前会被当孤儿删掉。
+        writeLog("codex-oxlive.log", bytes: 100, ageSeconds: 7200)
+        writeOxAlphaStatus("oxlive", state: "running")
+        // ox-alpha 自己的状态文件和日志本来就不在白名单里，任何时候都不该进计划。
+        writeLog("claude-oxalpha-oxlive.log", bytes: 100, ageSeconds: 7200)
+        // ox-alpha 终态线的 codex 日志照常按终态删。
+        writeLog("codex-oxdone.log", bytes: 100, ageSeconds: 7200)
+        writeOxAlphaStatus("oxdone", state: "done")
+
+        let plan = LogCleaner.plan(logsDirectory: root, now: now, fileManager: fileManager)
+        let deleteNames = Set(plan.candidates.map(\.fileName))
+
+        XCTAssertFalse(deleteNames.contains("codex-oxlive.log"))
+        XCTAssertTrue(plan.protectedActive.contains("codex-oxlive.log"))
+        XCTAssertFalse(deleteNames.contains("claude-oxalpha-oxlive.log"))
+        XCTAssertFalse(deleteNames.contains("claude-oxalpha-oxlive.status.json"))
+        XCTAssertEqual(deleteNames, ["codex-oxdone.log"])
+    }
+
+    func testRunningOxAlphaStatusBeatsTerminalBabysitterStatusForTheSameSlug() throws {
+        writeLog("codex-shared.log", bytes: 100, ageSeconds: 7200)
+        writeStatus("shared", state: "done")
+        writeOxAlphaStatus("shared", state: "running")
+
+        let plan = LogCleaner.plan(logsDirectory: root, now: now, fileManager: fileManager)
+
+        XCTAssertTrue(plan.candidates.isEmpty)
+        XCTAssertTrue(plan.protectedActive.contains("codex-shared.log"))
     }
 
     // MARK: 超上限清理
@@ -439,6 +475,13 @@ final class LogCleanerTests: XCTestCase {
     private func writeStatus(_ slug: String, state: String) {
         let url = root.appendingPathComponent("codex-babysitter-\(slug).status.json")
         let json = "{\"slug\":\"\(slug)\",\"state\":\"\(state)\"}"
+        fileManager.createFile(atPath: url.path, contents: Data(json.utf8))
+        setModified(url, ageSeconds: 60)
+    }
+
+    private func writeOxAlphaStatus(_ slug: String, state: String) {
+        let url = root.appendingPathComponent("claude-oxalpha-\(slug).status.json")
+        let json = "{\"engine\":\"claude\",\"slug\":\"\(slug)\",\"state\":\"\(state)\"}"
         fileManager.createFile(atPath: url.path, contents: Data(json.utf8))
         setModified(url, ageSeconds: 60)
     }

@@ -312,9 +312,12 @@ final class LineStatusFileCache: @unchecked Sendable {
 }
 
 enum SentinelFileReader {
+    /// logs/ 里认得出的派工线状态文件前缀。再来一种派工渠道只需要在这里加一行、
+    /// 在 `LineEngine` 里加一个 case，不用再改读取流程。
     private static let statusPrefixes: [(prefix: String, engine: LineEngine)] = [
         ("codex-babysitter-", .codex),
         ("grok-", .cursorGrok),
+        ("claude-oxalpha-", .claudeOxAlpha),
     ]
     private static let statusSuffix = ".status.json"
 
@@ -336,7 +339,8 @@ enum SentinelFileReader {
         return ChannelStatusSnapshot(
             generatedAt: SentinelDateParser.parse(payload.generatedAt),
             grok: ChannelVerdict(payload: payload.channels?.grok),
-            codex: ChannelVerdict(payload: payload.channels?.codex)
+            codex: ChannelVerdict(payload: payload.channels?.codex),
+            claudeOxAlpha: ChannelVerdict(payload: payload.channels?.claudeOxAlpha)
         )
     }
 
@@ -551,6 +555,14 @@ private struct ChannelStatusPayload: Decodable {
 private struct ChannelStatusChannelsPayload: Decodable {
     let grok: ChannelVerdictPayload?
     let codex: ChannelVerdictPayload?
+    let claudeOxAlpha: ChannelVerdictPayload?
+
+    /// `channel_status.py` 的通道键带连字符，写法是 `claude-oxalpha`。
+    enum CodingKeys: String, CodingKey {
+        case grok
+        case codex
+        case claudeOxAlpha = "claude-oxalpha"
+    }
 }
 
 struct ChannelVerdictPayload: Decodable {

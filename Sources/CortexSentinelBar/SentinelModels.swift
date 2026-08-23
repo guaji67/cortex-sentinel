@@ -169,6 +169,20 @@ struct ChannelStatusSnapshot: Equatable {
     let generatedAt: Date?
     let grok: ChannelVerdict
     let codex: ChannelVerdict
+    /// ox-alpha 通道。摘要文件还没写这个键时保持 `.missing`，不画成不通。
+    let claudeOxAlpha: ChannelVerdict
+
+    init(
+        generatedAt: Date?,
+        grok: ChannelVerdict,
+        codex: ChannelVerdict,
+        claudeOxAlpha: ChannelVerdict = .missing
+    ) {
+        self.generatedAt = generatedAt
+        self.grok = grok
+        self.codex = codex
+        self.claudeOxAlpha = claudeOxAlpha
+    }
 
     static let missing = ChannelStatusSnapshot(
         generatedAt: nil,
@@ -179,7 +193,8 @@ struct ChannelStatusSnapshot: Equatable {
     static let invalid = ChannelStatusSnapshot(
         generatedAt: nil,
         grok: .unreadable,
-        codex: .unreadable
+        codex: .unreadable,
+        claudeOxAlpha: .unreadable
     )
 }
 
@@ -223,18 +238,61 @@ struct ChannelSectionPresentation: Equatable {
 
     let grok: ChannelItemPresentation
     let codex: ChannelItemPresentation
+    let claudeOxAlpha: ChannelItemPresentation
+    private let includesClaudeOxAlpha: Bool
 
     init(
         grok: ChannelVerdict,
         codex: ChannelVerdict,
         liveCounts: EngineCounts
     ) {
+        self.init(
+            grok: grok,
+            codex: codex,
+            claudeOxAlpha: nil,
+            liveCounts: liveCounts
+        )
+    }
+
+    /// 新版调用点显式传入 ox-alpha，才把第三张卡加入渲染；旧的两通道调用点
+    /// 保留原有两行契约，避免缺失摘要键时改变 host/未知状态等无关诊断的输出。
+    init(
+        grok: ChannelVerdict,
+        codex: ChannelVerdict,
+        claudeOxAlpha: ChannelVerdict,
+        liveCounts: EngineCounts
+    ) {
+        self.init(
+            grok: grok,
+            codex: codex,
+            claudeOxAlpha: claudeOxAlpha,
+            liveCounts: liveCounts,
+            includesClaudeOxAlpha: true
+        )
+    }
+
+    private init(
+        grok: ChannelVerdict,
+        codex: ChannelVerdict,
+        claudeOxAlpha: ChannelVerdict?,
+        liveCounts: EngineCounts,
+        includesClaudeOxAlpha: Bool = false
+    ) {
         self.grok = ChannelItemPresentation(name: "Grok", verdict: grok, liveRunning: liveCounts.grok)
         self.codex = ChannelItemPresentation(name: "Codex", verdict: codex, liveRunning: liveCounts.codex)
+        self.claudeOxAlpha = ChannelItemPresentation(
+            name: "ox-alpha",
+            verdict: claudeOxAlpha ?? .missing,
+            liveRunning: liveCounts.claudeOxAlpha
+        )
+        self.includesClaudeOxAlpha = includesClaudeOxAlpha
     }
 
     var items: [ChannelItemPresentation] {
-        [codex, grok]
+        if includesClaudeOxAlpha {
+            return [codex, grok, claudeOxAlpha]
+        }
+        return [codex, grok]
     }
 
     var problemLines: [String] {
@@ -287,6 +345,9 @@ enum SentinelSeverity: String, Equatable {
 enum LineEngine: Equatable, Sendable {
     case codex
     case cursorGrok
+    /// ox-alpha 派工线（`scripts/oxalpha_dispatch.py`）。状态文件里 engine 字段写的是
+    /// `claude`，通道/认领口径用的是 `claude-oxalpha`，两个 rawValue 都要认。
+    case claudeOxAlpha
     case unknown(String)
 
     init(rawValue: String?) {
@@ -304,6 +365,8 @@ enum LineEngine: Equatable, Sendable {
             self = .codex
         case "cursor-grok":
             self = .cursorGrok
+        case "claude", "claude-oxalpha":
+            self = .claudeOxAlpha
         default:
             self = .unknown(normalized)
         }
@@ -315,6 +378,8 @@ enum LineEngine: Equatable, Sendable {
             return "Codex"
         case .cursorGrok:
             return "Grok"
+        case .claudeOxAlpha:
+            return "ox-alpha"
         case let .unknown(rawValue):
             return rawValue
         }
@@ -330,6 +395,8 @@ enum LineEngine: Equatable, Sendable {
             return "codex"
         case .cursorGrok:
             return "grok"
+        case .claudeOxAlpha:
+            return "claude-oxalpha"
         case let .unknown(rawValue):
             return rawValue
         }

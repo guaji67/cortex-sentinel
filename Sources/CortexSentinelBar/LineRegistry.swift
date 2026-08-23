@@ -276,15 +276,16 @@ struct LinePresentation: Equatable, Identifiable {
         line.id
     }
 
-    /// 状态文件写了 Grok 时，登记表缺 engine 也不能把它画成 Codex。
+    /// 状态文件写了非 Codex 引擎时，登记表缺 engine（解码落成 Codex）也不能把它画成 Codex。
     /// 旧登记条目没有 engine 字段，解码会落成 Codex；若仍优先登记表，
-    /// grok-*.status.json 就会在历史上全部变成 Codex 徽章。
+    /// `grok-*` 和 `claude-oxalpha-*` 的线就会在历史上全部变成 Codex 徽章。
+    /// 判据用「不是 Codex」而不是逐个引擎点名，加新引擎时这里不用再改。
     var engine: LineEngine {
-        if line.engine.isCursorGrok {
-            return .cursorGrok
+        if line.engine != .codex {
+            return line.engine
         }
-        if let registered = registration?.engine, registered.isCursorGrok {
-            return .cursorGrok
+        if let registered = registration?.engine, registered != .codex {
+            return registered
         }
         return registration?.engine ?? line.engine
     }

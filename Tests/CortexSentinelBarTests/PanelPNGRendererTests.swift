@@ -184,11 +184,13 @@ final class PanelPNGRendererTests: XCTestCase {
             let presentation = ChannelSectionPresentation(
                 grok: session.store.channelStatus.grok,
                 codex: session.store.channelStatus.codex,
+                claudeOxAlpha: session.store.channelStatus.claudeOxAlpha,
                 liveCounts: EngineCounts()
             )
+            let oxAlphaPhrase = session.store.channelStatus.claudeOxAlpha.statusText
             XCTAssertEqual(
                 presentation.render.primaryRow,
-                ["Codex \(phrase)", "Grok \(phrase)"],
+                ["Codex \(phrase)", "Grok \(phrase)", "ox-alpha \(oxAlphaPhrase)"],
                 fixture.rawValue
             )
             XCTAssertEqual(presentation.render.problemLines, [], fixture.rawValue)

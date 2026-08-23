@@ -187,9 +187,60 @@ final class SentinelBoardWindowTests: XCTestCase {
             ChannelSectionPresentation(
                 grok: ChannelVerdict(status: .alive, evidence: "1 条在跑", running: 1),
                 codex: ChannelVerdict(status: .alive, evidence: "闲", running: 0),
+                claudeOxAlpha: .missing,
                 liveCounts: groups.localActiveEngineCounts(localHost: localHost)
             ).render.primaryRow,
-            ["Codex 通 闲", "Grok 通 4 条"]
+            ["Codex 通 闲", "Grok 通 4 条", "ox-alpha 还没有记录"]
+        )
+    }
+
+    func testActiveEngineCountsSplitOxAlphaOutOfCodex() throws {
+        let registry = try makeRegistry(
+            [
+                (
+                    slug: "riskclean-neutral",
+                    engine: "claude",
+                    label: "风险清理中立复核",
+                    registeredAt: now.timeIntervalSince1970
+                ),
+                (
+                    slug: "oxalpha-board",
+                    engine: "claude",
+                    label: "ox-alpha 看板",
+                    registeredAt: now.timeIntervalSince1970
+                ),
+                (
+                    slug: "packbar",
+                    engine: "codex",
+                    label: "打包进度条",
+                    registeredAt: now.timeIntervalSince1970
+                ),
+            ],
+            host: "Test Mac"
+        )
+        let lines = [
+            makeLine(slug: "riskclean-neutral", engine: .claudeOxAlpha, state: .running, age: 5),
+            makeLine(slug: "oxalpha-board", engine: .claudeOxAlpha, state: .running, age: 5),
+            makeLine(slug: "packbar", engine: .codex, state: .running, age: 5),
+        ]
+        let groups = SentinelAggregation.lineGroups(lines: lines, registry: registry, now: now)
+        let localHost = LocalHostIdentity(identifiers: ["Test Mac"])
+
+        XCTAssertEqual(groups.activeRegistered.count, 3)
+        XCTAssertEqual(groups.activeEngineCounts.claudeOxAlpha, 2)
+        XCTAssertEqual(groups.activeEngineCounts.codex, 1)
+        XCTAssertEqual(groups.activeEngineCounts.grok, 0)
+        XCTAssertEqual(groups.activeEngineCounts.unknown, 0)
+        // 本机口径（通道行用的那个）同样把 ox-alpha 算进去。
+        XCTAssertEqual(groups.localActiveEngineCounts(localHost: localHost).claudeOxAlpha, 2)
+        XCTAssertEqual(
+            ChannelSectionPresentation(
+                grok: .missing,
+                codex: ChannelVerdict(status: .alive, evidence: "1 条在跑", running: 1),
+                claudeOxAlpha: ChannelVerdict(status: .alive, evidence: "2 条在跑", running: 2),
+                liveCounts: groups.localActiveEngineCounts(localHost: localHost)
+            ).render.primaryRow,
+            ["Codex 通 1 条", "Grok 还没有记录", "ox-alpha 通 2 条"]
         )
     }
 

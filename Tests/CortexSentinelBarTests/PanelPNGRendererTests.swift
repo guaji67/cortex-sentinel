@@ -213,6 +213,39 @@ final class PanelPNGRendererTests: XCTestCase {
         }
     }
 
+    /// 后台任务默认收起，只留一行摘要；点开才把问题行和操作行铺出来。
+    /// 用离屏渲染高度做判据：收起那份必须明显矮一截，否则「收起」是假的。
+    func testBackgroundJobsCollapsedByDefaultAndExpandingMakesPanelTaller() async throws {
+        let session = try await PanelPreviewFactory.makeSession(fixture: .bgjobsProblems)
+        defer { session.tearDown() }
+
+        XCTAssertFalse(session.store.backgroundJobsExpanded)
+        XCTAssertFalse(session.store.backgroundJobRows.isEmpty)
+        let collapsed = try panelHeight(store: session.store)
+
+        session.store.setBackgroundJobsExpanded(true)
+        XCTAssertTrue(session.store.backgroundJobsExpanded)
+        let expanded = try panelHeight(store: session.store)
+
+        XCTAssertGreaterThan(expanded, collapsed + 100)
+
+        session.store.setBackgroundJobsExpanded(false)
+        XCTAssertEqual(try panelHeight(store: session.store), collapsed)
+    }
+
+    private func panelHeight(store: SentinelStore) throws -> CGFloat {
+        let view = SentinelMenuView(store: store, rendersOffscreen: true)
+            .frame(width: SentinelTheme.Metrics.menuWidth)
+            .fixedSize(horizontal: true, vertical: true)
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 2
+        renderer.proposedSize = ProposedViewSize(
+            width: SentinelTheme.Metrics.menuWidth,
+            height: nil
+        )
+        return try XCTUnwrap(renderer.nsImage?.size.height)
+    }
+
     func testIdlePanelHeightAccountsForCriticalBackgroundJobs() async throws {
         let session = try await PanelPreviewFactory.makeSession(fixture: .idle)
         defer { session.tearDown() }

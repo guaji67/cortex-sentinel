@@ -90,13 +90,14 @@ struct SentinelMenuView: View {
         header
         packagingSection
         channelSection
-        backgroundJobsSection
         serviceSection
         balancesSection
         dispatchSection
             .id(SentinelMenuInitialSection.dispatch)
         automaticSection
         historySection
+        // 后台任务垫在内容区最后：它平时只是一行摘要，出问题时展开才铺告警，不该抢派工的位置。
+        backgroundJobsSection
         footer
     }
 
@@ -269,9 +270,14 @@ struct SentinelMenuView: View {
             // PR 腿的健康快照折叠展示保留；私有腿的 launchctl 控制行另列在下方。
             BackgroundJobsSectionView(
                 snapshot: store.backgroundJobs,
-                showsHealthy: $showsBackgroundJobs
+                showsHealthy: $showsBackgroundJobs,
+                isExpanded: Binding(
+                    get: { store.backgroundJobsExpanded },
+                    set: { store.setBackgroundJobsExpanded($0) }
+                )
             )
-            if !store.backgroundJobRows.isEmpty {
+            // 操作行跟着整块一起收：收起时只留摘要那一行。
+            if store.backgroundJobsExpanded, !store.backgroundJobRows.isEmpty {
                 sectionTitle("后台任务操作", trailing: "\(store.backgroundJobRows.count)")
                 ForEach(store.backgroundJobRows) { row in
                     backgroundJobOperationRow(row)

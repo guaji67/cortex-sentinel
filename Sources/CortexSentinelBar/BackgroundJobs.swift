@@ -81,31 +81,45 @@ struct BackgroundJob: Identifiable, Equatable, Codable, Sendable {
 
     var id: String { label }
     var displayName: String { name.isEmpty ? label : name }
-    var isProblem: Bool { status.isProblem || plistStatus.isProblem }
+    /// 服务死活只认 launchd 实际状态（快照的 status/pid/退出码）。
+    /// 配置文件在不在不推翻运行事实；plist 异常只作为展示备注。
+    var isProblem: Bool { status.isProblem }
 
-    var problemDetail: String {
+    /// plist 异常的备注文案；loaded 返回 nil。
+    var plistNote: String? {
         switch plistStatus {
+        case .loaded:
+            return nil
         case .missing:
             return BackgroundJobPlistStatus.missingDisplayText
         case .unreadable:
-            if plistErrorDetail.isEmpty { return BackgroundJobPlistStatus.unreadableDisplayText }
-            return [BackgroundJobPlistStatus.unreadableDisplayText,
-                    BackgroundJobPlistStatus.truncatedDetail(plistErrorDetail)].joined(separator: " · ")
+            if plistErrorDetail.isEmpty {
+                return BackgroundJobPlistStatus.unreadableDisplayText
+            }
+            return "\(BackgroundJobPlistStatus.unreadableDisplayText)（\(BackgroundJobPlistStatus.truncatedDetail(plistErrorDetail))）"
         case .unrecognized:
             return BackgroundJobPlistStatus.unrecognizedDisplayText
-        case .loaded:
-            break
         }
+    }
+
+    var problemDetail: String {
         var parts: [String] = []
         if !lastRunText.isEmpty { parts.append("上次跑：\(lastRunText)") }
         if !reason.isEmpty { parts.append(reason) }
+        if let note = plistNote { parts.append(note) }
+        if parts.isEmpty { parts.append(statusText) }
         return parts.joined(separator: " · ")
     }
 
     var healthyDetail: String {
-        [intervalText, lastRunText.isEmpty ? "" : "上次跑：\(lastRunText)", statusText]
-            .filter { !$0.isEmpty }
-            .joined(separator: " · ")
+        var parts = [intervalText]
+        if !lastRunText.isEmpty { parts.append("上次跑：\(lastRunText)") }
+        parts.append(statusText)
+        if let note = plistNote {
+            let suffix = plistStatus == .unrecognized ? "按运行状态显示" : "服务正常运行"
+            parts.append("\(note)，\(suffix)")
+        }
+        return parts.filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
     init(
@@ -289,6 +303,21 @@ struct BackgroundJobsPresentation: Equatable {
         let stale = snapshot.generatedAt.map { now.timeIntervalSince($0) > Self.snapshotStaleSeconds } ?? true
         snapshotStale = stale
         var problems = snapshot.jobs.filter(\.isProblem).map { BackgroundJobRow(id: $0.label, name: $0.displayName, detail: $0.problemDetail, isProblem: true) }
+        // 新鲜快照中，关键常驻服务缺席 = launchd 里没有该任务，必须标红。
+        if !stale {
+            let presentLabels = Set(snapshot.jobs.map(\.label))
+            for label in BackgroundJobsConstants.criticalLabels.sorted()
+            where !presentLabels.contains(label) {
+                problems.append(
+                    BackgroundJobRow(
+                        id: label,
+                        name: BackgroundJobsConstants.criticalDisplayNames[label] ?? label,
+                        detail: "不在系统服务里，launchctl 里没有这个任务",
+                        isProblem: true
+                    )
+                )
+            }
+        }
         if stale {
             let ageText = snapshot.generatedAt.map { "\(max(1, Int(now.timeIntervalSince($0) / 60))) 分钟未更新" } ?? "没有生成时间"
             problems.insert(BackgroundJobRow(id: "snapshot-stale", name: "健康快照", detail: ageText, isProblem: true), at: 0)
@@ -355,6 +384,13 @@ enum BackgroundJobsConstants {
     static let criticalLabels: Set<String> = [
         "com.falcon.cortex.web", "com.falcon.cortex.web-guard",
         "com.falcon.cortex.memory-monitor", "com.falcon.cortex.mini-mirror-sync",
+    ]
+
+    static let criticalDisplayNames: [String: String] = [
+        "com.falcon.cortex.web": "界面常驻服务",
+        "com.falcon.cortex.web-guard": "界面守护",
+        "com.falcon.cortex.memory-monitor": "内存与回收巡检",
+        "com.falcon.cortex.mini-mirror-sync": "数据镜像同步",
     ]
 }
 

@@ -13,8 +13,8 @@ config.toml 示例（默认值只是例子，不会在缺文件时自动写进�
 
     [[projects]]
     name = "cortex"
-    root = "/Users/falcon/Documents/Code/cortex"
-    data_root = "/Users/falcon/CortexData"
+    root = "/path/to/cortex"
+    data_root = "/path/to/cortex-data"
     dev_ports = [3000, "3401-3439"]
 """
 

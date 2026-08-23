@@ -153,18 +153,20 @@ final class BackgroundJobsPresentationTests: XCTestCase {
         let snapshot = BackgroundJobsSnapshot(
             sourceState: .available,
             generatedAt: now,
-            okCount: 5,
+            okCount: 4,
             problemCount: 0,
             jobs: [
                 job(label: "com.falcon.cortex.web", name: "界面常驻服务", status: .ok),
-                job(label: "com.cortex.sentinelbar", name: "Cortex 哨兵", status: .ok),
+                job(label: "com.falcon.cortex.web-guard", name: "界面守护", status: .ok),
+                job(label: "com.falcon.cortex.memory-monitor", name: "内存与回收巡检", status: .ok),
+                job(label: "com.falcon.cortex.mini-mirror-sync", name: "数据镜像同步", status: .ok),
             ]
         )
         let presentation = BackgroundJobsPresentation(snapshot: snapshot, now: now)
-        XCTAssertEqual(presentation.summaryText, "后台任务 2 个，全部正常")
+        XCTAssertEqual(presentation.summaryText, "后台任务 4 个，全部正常")
         XCTAssertFalse(presentation.hasProblems)
         XCTAssertEqual(presentation.problemRows, [])
-        XCTAssertEqual(presentation.healthyRows.count, 2)
+        XCTAssertEqual(presentation.healthyRows.count, 4)
         XCTAssertEqual(presentation.tone, .success)
     }
 
@@ -172,7 +174,7 @@ final class BackgroundJobsPresentationTests: XCTestCase {
         let snapshot = BackgroundJobsSnapshot(
             sourceState: .available,
             generatedAt: now,
-            okCount: 1,
+            okCount: 3,
             problemCount: 1,
             jobs: [
                 job(
@@ -183,10 +185,12 @@ final class BackgroundJobsPresentationTests: XCTestCase {
                     reason: "超过两个周期没有新记录"
                 ),
                 job(label: "com.falcon.cortex.web", name: "界面常驻服务", status: .ok),
+                job(label: "com.falcon.cortex.web-guard", name: "界面守护", status: .ok),
+                job(label: "com.falcon.cortex.mini-mirror-sync", name: "数据镜像同步", status: .ok),
             ]
         )
         let presentation = BackgroundJobsPresentation(snapshot: snapshot, now: now)
-        XCTAssertEqual(presentation.summaryText, "后台任务 2 个，1 个不正常")
+        XCTAssertEqual(presentation.summaryText, "后台任务 4 个，1 个不正常")
         XCTAssertTrue(presentation.hasProblems)
         XCTAssertEqual(presentation.tone, .warning)
         XCTAssertEqual(presentation.problemRows.count, 1)
@@ -195,7 +199,10 @@ final class BackgroundJobsPresentationTests: XCTestCase {
             presentation.problemRows[0].detail,
             "上次跑：25 小时前 · 超过两个周期没有新记录"
         )
-        XCTAssertEqual(presentation.healthyRows.map(\.name), ["界面常驻服务"])
+        XCTAssertEqual(
+            presentation.healthyRows.map(\.name),
+            ["界面常驻服务", "界面守护", "数据镜像同步"]
+        )
     }
 
     func testMissingSnapshotIsOneQuietLine() {
@@ -270,102 +277,136 @@ final class BackgroundJobsPresentationTests: XCTestCase {
         )
     }
 
-    func testMissingPlistStatusFieldTreatsJobAsLoaded() {
-        let json = """
-        {
-          "generated_at": "2026-08-20T01:40:00+08:00",
-          "jobs": [
-            {
-              "label": "com.falcon.cortex.web",
-              "name": "界面常驻服务",
-              "status": "ok",
-              "status_text": "正常"
-            }
-          ]
-        }
-        """
+    /// COR-1862 主判据：服务活着（launchd 有 pid、退出码 0），配置文件不在
+    /// 只做备注，不许把整行判红。
+    func testAliveJobWithMissingPlistStaysGreenWithHint() {
+        let json = fullSnapshotJSON(
+            withWeb: """
+            {"label": "com.falcon.cortex.web", "name": "界面常驻服务", \
+            "interval_text": "常驻", "last_run_text": "正在运行", \
+            "status": "ok", "status_text": "正常", "plist_status": "missing"}
+            """
+        )
         let snapshot = BackgroundJobsReader.parse(data: Data(json.utf8))
-        XCTAssertEqual(snapshot.jobs.count, 1)
+        XCTAssertEqual(snapshot.jobs[0].plistStatus, .missing)
+        XCTAssertFalse(snapshot.jobs[0].isProblem)
+        let presentation = BackgroundJobsPresentation(snapshot: snapshot, now: now)
+        XCTAssertFalse(presentation.hasProblems)
+        XCTAssertEqual(presentation.problemRows, [])
+        XCTAssertEqual(presentation.summaryText, "后台任务 4 个，全部正常")
+        XCTAssertEqual(presentation.tone, .success)
+        let webRow = presentation.healthyRows.first { $0.id == "com.falcon.cortex.web" }
+        XCTAssertEqual(webRow?.detail, "常驻 · 上次跑：正在运行 · 正常 · 配置不在了，服务正常运行")
+    }
+
+    func testMissingPlistStatusFieldTreatsJobAsLoaded() {
+        let snapshot = BackgroundJobsReader.parse(data: Data(fullSnapshotJSON().utf8))
+        XCTAssertEqual(snapshot.jobs.count, 4)
         XCTAssertEqual(snapshot.jobs[0].plistStatus, .loaded)
         XCTAssertFalse(snapshot.jobs[0].isProblem)
         let presentation = BackgroundJobsPresentation(snapshot: snapshot, now: now)
         XCTAssertFalse(presentation.hasProblems)
-        XCTAssertEqual(presentation.summaryText, "后台任务 1 个，全部正常")
+        XCTAssertEqual(presentation.summaryText, "后台任务 4 个，全部正常")
         XCTAssertEqual(presentation.problemRows, [])
     }
 
-    func testMissingPlistStatusIsAProblemWithFixedCopy() {
-        let json = """
-        {
-          "generated_at": "2026-08-20T01:40:00+08:00",
-          "jobs": [
-            {
-              "label": "com.falcon.cortex.web",
-              "name": "界面常驻服务",
-              "status": "ok",
-              "plist_status": "missing"
-            }
-          ]
-        }
-        """
-        let snapshot = BackgroundJobsReader.parse(data: Data(json.utf8))
-        XCTAssertEqual(snapshot.jobs[0].plistStatus, .missing)
-        XCTAssertTrue(snapshot.jobs[0].isProblem)
-        XCTAssertEqual(
-            snapshot.jobs[0].problemDetail,
-            BackgroundJobPlistStatus.missingDisplayText
+    func testUnreadablePlistStaysGreenWithHintAndDetail() {
+        let withoutDetail = BackgroundJobsReader.parse(
+            data: Data(
+                fullSnapshotJSON(
+                    withWeb: """
+                    {"label": "com.falcon.cortex.web", "name": "界面常驻服务", \
+                    "status": "ok", "plist_status": "unreadable"}
+                    """
+                )
+                .utf8
+            )
         )
-        XCTAssertEqual(snapshot.jobs[0].problemDetail, "配置不在了")
-        let presentation = BackgroundJobsPresentation(snapshot: snapshot, now: now)
-        XCTAssertTrue(presentation.hasProblems)
-        XCTAssertEqual(presentation.problemRows.count, 1)
-        XCTAssertEqual(presentation.problemRows[0].detail, "配置不在了")
-        XCTAssertEqual(presentation.summaryText, "后台任务 1 个，1 个不正常")
+        XCTAssertEqual(withoutDetail.jobs[0].plistStatus, .unreadable)
+        XCTAssertFalse(withoutDetail.jobs[0].isProblem)
+        let withoutPresentation = BackgroundJobsPresentation(
+            snapshot: withoutDetail,
+            now: now
+        )
+        XCTAssertFalse(withoutPresentation.hasProblems)
+        let withoutRow = withoutPresentation.healthyRows
+            .first { $0.id == "com.falcon.cortex.web" }
+        XCTAssertEqual(withoutRow?.detail, "正常 · 配置读不了，服务正常运行")
+
+        let withDetail = BackgroundJobsReader.parse(
+            data: Data(
+                fullSnapshotJSON(
+                    withWeb: """
+                    {"label": "com.falcon.cortex.web", "name": "界面常驻服务", \
+                    "status": "ok", "plist_status": "unreadable", \
+                    "plist_error_detail": "permission denied"}
+                    """
+                )
+                .utf8
+            )
+        )
+        XCTAssertFalse(withDetail.jobs[0].isProblem)
+        let withPresentation = BackgroundJobsPresentation(snapshot: withDetail, now: now)
+        XCTAssertFalse(withPresentation.hasProblems)
+        let withRow = withPresentation.healthyRows
+            .first { $0.id == "com.falcon.cortex.web" }
+        XCTAssertEqual(withRow?.detail, "正常 · 配置读不了（permission denied），服务正常运行")
+        XCTAssertFalse(withRow?.detail.contains("\n") == true)
     }
 
-    func testUnreadablePlistStatusShowsFixedCopyAndDetail() {
-        let withoutDetail = """
-        {
-          "generated_at": "2026-08-20T01:40:00+08:00",
-          "jobs": [
-            {
-              "label": "com.falcon.cortex.web",
-              "name": "界面常驻服务",
-              "status": "ok",
-              "plist_status": "unreadable"
-            }
-          ]
-        }
-        """
-        let without = BackgroundJobsReader.parse(data: Data(withoutDetail.utf8))
-        XCTAssertEqual(without.jobs[0].plistStatus, .unreadable)
-        XCTAssertTrue(without.jobs[0].isProblem)
-        XCTAssertEqual(without.jobs[0].problemDetail, "配置读不了")
-        let withoutPresentation = BackgroundJobsPresentation(snapshot: without, now: now)
-        XCTAssertTrue(withoutPresentation.hasProblems)
-        XCTAssertEqual(withoutPresentation.problemRows[0].detail, "配置读不了")
+    func testUnknownPlistStatusStaysGreenWithHint() {
+        let snapshot = BackgroundJobsReader.parse(
+            data: Data(
+                fullSnapshotJSON(
+                    withWeb: """
+                    {"label": "com.falcon.cortex.web", "name": "界面常驻服务", \
+                    "status": "ok", "plist_status": "unexpected_enum"}
+                    """
+                )
+                .utf8
+            )
+        )
+        XCTAssertEqual(snapshot.jobs[0].plistStatus, .unrecognized)
+        XCTAssertFalse(snapshot.jobs[0].isProblem)
+        let presentation = BackgroundJobsPresentation(snapshot: snapshot, now: now)
+        XCTAssertFalse(presentation.hasProblems)
+        XCTAssertEqual(presentation.problemRows, [])
+        let webRow = presentation.healthyRows.first { $0.id == "com.falcon.cortex.web" }
+        XCTAssertEqual(webRow?.detail, "正常 · 状态看不懂，按运行状态显示")
+        XCTAssertEqual(
+            BackgroundJobPlistStatus.unrecognizedDisplayText,
+            ChannelUnknownKind.unrecognized.statusText
+        )
+    }
 
-        let withDetail = """
-        {
-          "generated_at": "2026-08-20T01:40:00+08:00",
-          "jobs": [
-            {
-              "label": "com.falcon.cortex.web",
-              "name": "界面常驻服务",
-              "status": "ok",
-              "plist_status": "unreadable",
-              "plist_error_detail": "permission denied"
-            }
-          ]
-        }
-        """
-        let with = BackgroundJobsReader.parse(data: Data(withDetail.utf8))
-        XCTAssertEqual(with.jobs[0].plistStatus, .unreadable)
-        XCTAssertTrue(with.jobs[0].isProblem)
-        XCTAssertEqual(with.jobs[0].problemDetail, "配置读不了 · permission denied")
-        let withPresentation = BackgroundJobsPresentation(snapshot: with, now: now)
-        XCTAssertEqual(withPresentation.problemRows[0].detail, "配置读不了 · permission denied")
-        XCTAssertFalse(withPresentation.problemRows[0].detail.contains("\n"))
+    func testNullAndEmptyPlistStatusAreUnrecognized() {
+        let nullSnapshot = BackgroundJobsReader.parse(
+            data: Data(
+                fullSnapshotJSON(
+                    withWeb: """
+                    {"label": "com.falcon.cortex.web", "name": "界面常驻服务", \
+                    "status": "ok", "plist_status": null}
+                    """
+                )
+                .utf8
+            )
+        )
+        XCTAssertEqual(nullSnapshot.jobs[0].plistStatus, .unrecognized)
+        XCTAssertFalse(nullSnapshot.jobs[0].isProblem)
+
+        let emptySnapshot = BackgroundJobsReader.parse(
+            data: Data(
+                fullSnapshotJSON(
+                    withWeb: """
+                    {"label": "com.falcon.cortex.web", "name": "界面常驻服务", \
+                    "status": "ok", "plist_status": ""}
+                    """
+                )
+                .utf8
+            )
+        )
+        XCTAssertEqual(emptySnapshot.jobs[0].plistStatus, .unrecognized)
+        XCTAssertFalse(emptySnapshot.jobs[0].isProblem)
     }
 
     func testPrefersWatchDirectoryFileOverDataRoot() throws {
@@ -413,151 +454,135 @@ final class BackgroundJobsPresentationTests: XCTestCase {
         )
     }
 
-    func testUnknownPlistStatusIsAProblemWithFixedCopy() {
-        let json = """
-        {
-          "generated_at": "2026-08-20T01:40:00+08:00",
-          "jobs": [
-            {
-              "label": "com.falcon.cortex.web",
-              "name": "界面常驻服务",
-              "status": "ok",
-              "plist_status": "unexpected_enum"
-            }
-          ]
-        }
-        """
-        let snapshot = BackgroundJobsReader.parse(data: Data(json.utf8))
-        XCTAssertEqual(snapshot.jobs[0].plistStatus, .unrecognized)
-        XCTAssertTrue(snapshot.jobs[0].isProblem)
-        XCTAssertEqual(snapshot.jobs[0].problemDetail, "状态看不懂")
-        XCTAssertEqual(
-            snapshot.jobs[0].problemDetail,
-            BackgroundJobPlistStatus.unrecognizedDisplayText
-        )
-        XCTAssertEqual(
-            BackgroundJobPlistStatus.unrecognizedDisplayText,
-            ChannelUnknownKind.unrecognized.statusText
-        )
-        let presentation = BackgroundJobsPresentation(snapshot: snapshot, now: now)
-        XCTAssertTrue(presentation.hasProblems)
-        XCTAssertEqual(presentation.problemRows.count, 1)
-        XCTAssertEqual(presentation.problemRows[0].detail, "状态看不懂")
-        XCTAssertEqual(presentation.summaryText, "后台任务 1 个，1 个不正常")
-    }
-
-    func testNullAndEmptyPlistStatusAreUnrecognized() {
-        let nullJSON = """
-        {
-          "generated_at": "2026-08-20T01:40:00+08:00",
-          "jobs": [
-            {
-              "label": "com.falcon.cortex.web",
-              "name": "界面常驻服务",
-              "status": "ok",
-              "plist_status": null
-            }
-          ]
-        }
-        """
-        let emptyJSON = """
-        {
-          "generated_at": "2026-08-20T01:40:00+08:00",
-          "jobs": [
-            {
-              "label": "com.falcon.cortex.web",
-              "name": "界面常驻服务",
-              "status": "ok",
-              "plist_status": ""
-            }
-          ]
-        }
-        """
-        let nullSnapshot = BackgroundJobsReader.parse(data: Data(nullJSON.utf8))
-        XCTAssertEqual(nullSnapshot.jobs[0].plistStatus, .unrecognized)
-        XCTAssertTrue(nullSnapshot.jobs[0].isProblem)
-        XCTAssertEqual(nullSnapshot.jobs[0].problemDetail, "状态看不懂")
-
-        let emptySnapshot = BackgroundJobsReader.parse(data: Data(emptyJSON.utf8))
-        XCTAssertEqual(emptySnapshot.jobs[0].plistStatus, .unrecognized)
-        XCTAssertTrue(emptySnapshot.jobs[0].isProblem)
-        XCTAssertEqual(emptySnapshot.jobs[0].problemDetail, "状态看不懂")
-    }
-
     func testExplicitLoadedPlistStatusStaysHealthy() {
-        let json = """
-        {
-          "generated_at": "2026-08-20T01:40:00+08:00",
-          "jobs": [
-            {
-              "label": "com.falcon.cortex.web",
-              "name": "界面常驻服务",
-              "status": "ok",
-              "plist_status": "loaded"
-            }
-          ]
-        }
-        """
-        let snapshot = BackgroundJobsReader.parse(data: Data(json.utf8))
+        let snapshot = BackgroundJobsReader.parse(data: Data(fullSnapshotJSON().utf8))
         XCTAssertEqual(snapshot.jobs[0].plistStatus, .loaded)
         XCTAssertFalse(snapshot.jobs[0].isProblem)
         let presentation = BackgroundJobsPresentation(snapshot: snapshot, now: now)
         XCTAssertFalse(presentation.hasProblems)
     }
 
-    func testPlistErrorDetailLongerThan40CharactersIsTruncatedForDisplay() {
+    func testPlistErrorDetailLongerThan40CharactersIsTruncatedInHint() {
         let detail = String(repeating: "长", count: 41)
-        let json = """
-        {
-          "generated_at": "2026-08-20T01:40:00+08:00",
-          "jobs": [
-            {
-              "label": "com.falcon.cortex.web",
-              "name": "界面常驻服务",
-              "status": "ok",
-              "plist_status": "unreadable",
-              "plist_error_detail": "\(detail)"
-            }
-          ]
-        }
-        """
-        let snapshot = BackgroundJobsReader.parse(data: Data(json.utf8))
+        let snapshot = BackgroundJobsReader.parse(
+            data: Data(
+                fullSnapshotJSON(
+                    withWeb: """
+                    {"label": "com.falcon.cortex.web", "name": "界面常驻服务", \
+                    "status": "ok", "plist_status": "unreadable", \
+                    "plist_error_detail": "\(detail)"}
+                    """
+                )
+                .utf8
+            )
+        )
         XCTAssertEqual(snapshot.jobs[0].plistErrorDetail, detail)
         XCTAssertEqual(snapshot.jobs[0].plistErrorDetail.count, 41)
-        let displayed = snapshot.jobs[0].problemDetail
-        XCTAssertTrue(displayed.hasSuffix("…"))
-        XCTAssertEqual(
-            displayed,
-            "配置读不了 · " + String(repeating: "长", count: 40) + "…"
-        )
         let presentation = BackgroundJobsPresentation(snapshot: snapshot, now: now)
-        XCTAssertEqual(presentation.problemRows[0].detail, displayed)
-        XCTAssertTrue(presentation.problemRows[0].detail.hasSuffix("…"))
+        XCTAssertFalse(presentation.hasProblems)
+        let row = presentation.healthyRows.first { $0.id == "com.falcon.cortex.web" }
+        XCTAssertEqual(
+            row?.detail,
+            "正常 · 配置读不了（" + String(repeating: "长", count: 40) + "…），服务正常运行"
+        )
     }
 
     func testPlistErrorDetailExactly40CharactersIsNotTruncated() {
         let detail = String(repeating: "短", count: 40)
-        let json = """
+        let snapshot = BackgroundJobsReader.parse(
+            data: Data(
+                fullSnapshotJSON(
+                    withWeb: """
+                    {"label": "com.falcon.cortex.web", "name": "界面常驻服务", \
+                    "status": "ok", "plist_status": "unreadable", \
+                    "plist_error_detail": "\(detail)"}
+                    """
+                )
+                .utf8
+            )
+        )
+        let presentation = BackgroundJobsPresentation(snapshot: snapshot, now: now)
+        XCTAssertFalse(presentation.hasProblems)
+        let row = presentation.healthyRows.first { $0.id == "com.falcon.cortex.web" }
+        XCTAssertEqual(row?.detail, "正常 · 配置读不了（\(detail)），服务正常运行")
+        XCTAssertFalse(row?.detail.contains("…") == true)
+    }
+
+    /// COR-1862 验收判据 2 的显示侧：关键常驻服务从快照里消失
+    /// （launchctl list 里没有它 = 真没在跑）必须红。
+    func testCriticalJobMissingFromFreshSnapshotIsRed() {
+        let snapshot = BackgroundJobsReader.parse(data: Data(fullSnapshotJSON(withWeb: nil).utf8))
+        XCTAssertEqual(snapshot.jobs.count, 3)
+        let presentation = BackgroundJobsPresentation(snapshot: snapshot, now: now)
+        XCTAssertTrue(presentation.hasProblems)
+        XCTAssertEqual(presentation.tone, .warning)
+        XCTAssertEqual(presentation.problemRows.count, 1)
+        XCTAssertEqual(presentation.problemRows[0].id, "com.falcon.cortex.web")
+        XCTAssertEqual(presentation.problemRows[0].name, "界面常驻服务")
+        XCTAssertEqual(
+            presentation.problemRows[0].detail,
+            "不在系统服务里，launchctl 里没有这个任务"
+        )
+        XCTAssertEqual(presentation.summaryText, "后台任务 3 个，1 个不正常")
+    }
+
+    func testCriticalJobBackInSnapshotClearsAbsentRow() {
+        let snapshot = BackgroundJobsReader.parse(data: Data(fullSnapshotJSON().utf8))
+        let presentation = BackgroundJobsPresentation(snapshot: snapshot, now: now)
+        XCTAssertFalse(presentation.problemRows.contains { $0.id == "com.falcon.cortex.web" })
+        XCTAssertFalse(presentation.hasProblems)
+    }
+
+    /// 快照过期时只报「未更新」，缺席检查让位，不叠双份噪音。
+    func testStaleSnapshotDoesNotStackAbsentCriticalRowOnTopOfStaleWarning() {
+        let payload = fullSnapshotJSON(withWeb: nil)
+            .replacingOccurrences(
+                of: "\"generated_at\": \"2026-08-20T01:40:00+08:00\"",
+                with: "\"generated_at\": \"2026-08-20T01:00:00+08:00\""
+            )
+        let snapshot = BackgroundJobsReader.parse(data: Data(payload.utf8))
+        let presentation = BackgroundJobsPresentation(snapshot: snapshot, now: now)
+        XCTAssertTrue(presentation.snapshotStale)
+        XCTAssertTrue(presentation.problemRows.contains { $0.name == "健康快照" })
+        XCTAssertFalse(presentation.problemRows.contains { $0.id == "com.falcon.cortex.web" })
+    }
+
+    private func fullSnapshotJSON(withWeb webObject: String? = BackgroundJobsPresentationTests.loadedWebJob) -> String {
+        var objects: [String] = []
+        if let webObject {
+            objects.append(webObject)
+        }
+        objects.append(
+            Self.okCriticalJob(label: "com.falcon.cortex.web-guard", name: "界面守护")
+        )
+        objects.append(
+            Self.okCriticalJob(label: "com.falcon.cortex.memory-monitor", name: "内存与回收巡检")
+        )
+        objects.append(
+            Self.okCriticalJob(label: "com.falcon.cortex.mini-mirror-sync", name: "数据镜像同步")
+        )
+        return """
         {
           "generated_at": "2026-08-20T01:40:00+08:00",
           "jobs": [
-            {
-              "label": "com.falcon.cortex.web",
-              "name": "界面常驻服务",
-              "status": "ok",
-              "plist_status": "unreadable",
-              "plist_error_detail": "\(detail)"
-            }
+            \(objects.joined(separator: ",\n            "))
           ]
         }
         """
-        let snapshot = BackgroundJobsReader.parse(data: Data(json.utf8))
-        XCTAssertEqual(snapshot.jobs[0].plistErrorDetail, detail)
-        XCTAssertEqual(snapshot.jobs[0].problemDetail, "配置读不了 · \(detail)")
-        XCTAssertFalse(snapshot.jobs[0].problemDetail.hasSuffix("…"))
-        let presentation = BackgroundJobsPresentation(snapshot: snapshot, now: now)
-        XCTAssertEqual(presentation.problemRows[0].detail, "配置读不了 · \(detail)")
-        XCTAssertFalse(presentation.problemRows[0].detail.hasSuffix("…"))
+    }
+
+    private static let loadedWebJob = """
+    {"label": "com.falcon.cortex.web", "name": "界面常驻服务", \
+    "interval_text": "常驻", "last_run_text": "14 分钟前", \
+    "status": "ok", "status_text": "正常", "plist_status": "loaded"}
+    """
+
+    private static func okCriticalJob(label: String, name: String) -> String {
+        """
+        {"label": "\(label)", "name": "\(name)", "interval_text": "每 10 分钟", \
+        "last_run_text": "14 分钟前", "status": "ok", "status_text": "正常", \
+        "plist_status": "loaded"}
+        """
     }
 
     private func job(

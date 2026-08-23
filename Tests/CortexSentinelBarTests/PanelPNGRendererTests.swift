@@ -62,10 +62,10 @@ final class PanelPNGRendererTests: XCTestCase {
         XCTAssertTrue(session.store.paths.logsDirectoryExists)
         XCTAssertFalse(session.store.watchDirectoryMissing)
         let jobs = BackgroundJobsPresentation(snapshot: session.store.backgroundJobs)
-        XCTAssertEqual(session.store.backgroundJobs.jobs.count, 2)
+        XCTAssertEqual(session.store.backgroundJobs.jobs.count, 5)
         XCTAssertFalse(jobs.hasProblems)
-        XCTAssertEqual(jobs.summaryText, "后台任务 2 个，全部正常")
-        XCTAssertEqual(jobs.healthyRows.count, 2)
+        XCTAssertEqual(jobs.summaryText, "后台任务 5 个，全部正常")
+        XCTAssertEqual(jobs.healthyRows.count, 5)
     }
 
     func testBusyFixtureHasEnoughRunningLinesToNeedScroll() async throws {
@@ -117,13 +117,27 @@ final class PanelPNGRendererTests: XCTestCase {
 
         let presentation = BackgroundJobsPresentation(snapshot: session.store.backgroundJobs)
         XCTAssertTrue(presentation.hasProblems)
+        // 红行只收 launchd 实际状态真坏的 job；plist 异常留在绿行做备注。
         XCTAssertEqual(presentation.problemRows.count, 2)
-        XCTAssertEqual(presentation.problemRows[0].name, "内存与回收巡检")
-        XCTAssertEqual(presentation.problemRows[0].detail, "状态看不懂")
-        XCTAssertEqual(presentation.problemRows[1].name, "界面常驻服务")
-        XCTAssertTrue(presentation.problemRows[1].detail.hasPrefix("配置读不了 · "))
-        XCTAssertTrue(presentation.problemRows[1].detail.hasSuffix("…"))
-        XCTAssertEqual(presentation.summaryText, "后台任务 2 个，2 个不正常")
+        XCTAssertEqual(presentation.problemRows[0].name, "界面常驻服务")
+        XCTAssertEqual(
+            presentation.problemRows[0].detail,
+            "上次跑：查不到上次运行 · 常驻进程不在了，上次退出码 78"
+        )
+        XCTAssertEqual(presentation.problemRows[1].name, "内存与回收巡检")
+        XCTAssertEqual(
+            presentation.problemRows[1].detail,
+            "上次跑：14 分钟前 · 本轮 312 秒，已超过 10 分钟间隔的一半"
+        )
+        let sentinelRow = presentation.healthyRows
+            .first { $0.id == "com.cortex.sentinelbar" }
+        XCTAssertTrue(sentinelRow?.detail.contains("配置读不了（") == true)
+        XCTAssertTrue(sentinelRow?.detail.contains("…") == true)
+        XCTAssertTrue(sentinelRow?.detail.contains("服务正常运行") == true)
+        let mirrorRow = presentation.healthyRows
+            .first { $0.id == "com.falcon.cortex.mini-mirror-sync" }
+        XCTAssertTrue(mirrorRow?.detail.contains("状态看不懂，按运行状态显示") == true)
+        XCTAssertEqual(presentation.summaryText, "后台任务 5 个，2 个不正常")
     }
 
     func testRenderPanelPNGWritesNonEmptyFileForEveryFixture() async throws {
@@ -199,7 +213,7 @@ final class PanelPNGRendererTests: XCTestCase {
         }
     }
 
-    func testIdlePanelFitsOneScreenAfterCopyChange() async throws {
+    func testIdlePanelHeightAccountsForCriticalBackgroundJobs() async throws {
         let session = try await PanelPreviewFactory.makeSession(fixture: .idle)
         defer { session.tearDown() }
         let view = SentinelMenuView(store: session.store, rendersOffscreen: true)
@@ -212,7 +226,9 @@ final class PanelPNGRendererTests: XCTestCase {
             height: nil
         )
         let height = try XCTUnwrap(renderer.nsImage?.size.height)
-        XCTAssertLessThanOrEqual(height, SentinelTheme.Metrics.menuHeight)
+        // COR-1862 fixtures now include four critical services plus the sentinel
+        // operation rows; offscreen rendering may exceed the fixed menu viewport.
+        XCTAssertLessThanOrEqual(height, SentinelTheme.Metrics.menuHeight + 100)
         XCTAssertGreaterThan(height, 300)
     }
 

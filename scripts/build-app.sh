@@ -29,4 +29,7 @@ cp "$package_dir/.build/release/CortexSentinelBar" "$contents_dir/MacOS/CortexSe
 cp "$package_dir/Resources/Info.plist" "$contents_dir/Info.plist"
 plutil -replace CFBundleVersion -string "$bundle_version" "$contents_dir/Info.plist"
 cp "$package_dir/Resources/AppIcon.icns" "$contents_dir/Resources/AppIcon.icns"
+# 必须在签名之前写入：Developer ID 签名会覆盖 Contents/Resources 内的这个文件。
+bash "$package_dir/scripts/write-installer-manifest.sh" \
+  "$app_dir" "$package_dir/scripts/install-app.sh"
 codesign --force --deep --sign - "$app_dir"

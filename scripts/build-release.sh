@@ -80,6 +80,9 @@ cp "$package_dir/Resources/AppIcon.icns" "$app_dir/Contents/Resources/AppIcon.ic
 
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$app_dir/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build_number" "$app_dir/Contents/Info.plist"
+# 所有 app 内容就绪后、Developer ID 签名之前写入，签名才会覆盖安装器清单。
+bash "$package_dir/scripts/write-installer-manifest.sh" \
+  "$app_dir" "$package_dir/scripts/install-app.sh"
 
 if ! lipo -archs "$binary_path" | tr ' ' '\n' | grep -qx arm64; then
   echo "失败：正式 app 不包含 arm64" >&2
@@ -126,6 +129,9 @@ volume_dir="$work_dir/Cortex 哨兵"
 mkdir -p "$volume_dir"
 ditto "$app_dir" "$volume_dir/Cortex哨兵.app"
 ln -s /Applications "$volume_dir/Applications"
+mkdir -p "$volume_dir/scripts"
+cp "$package_dir/Install-Cortex-Sentinel.command" "$volume_dir/Install-Cortex-Sentinel.command"
+cp "$package_dir/scripts/install-app.sh" "$volume_dir/scripts/install-app.sh"
 hdiutil create -quiet -ov -format UDZO -volname "Cortex 哨兵" \
   -srcfolder "$volume_dir" "$dmg_path"
 hdiutil verify "$dmg_path"
@@ -153,6 +159,12 @@ mounted_app="$mount_dir/Cortex哨兵.app"
 spctl -a -vv -t exec "$mounted_app"
 xcrun stapler validate "$mounted_app"
 codesign --verify --deep --strict "$mounted_app"
+mounted_installer_sha256="$(plutil -extract installer_sha256 raw -o - "$mounted_app/Contents/Resources/installer-manifest.json")"
+mounted_script_sha256="$(shasum -a 256 "$mount_dir/scripts/install-app.sh" | awk '{print $1}')"
+if [ "$mounted_installer_sha256" != "$mounted_script_sha256" ]; then
+  echo "失败：DMG 内 installer hash 与安装器脚本不匹配：app=${mounted_installer_sha256}，脚本=${mounted_script_sha256}" >&2
+  exit 1
+fi
 if [ ! -L "$mount_dir/Applications" ] || [ "$(readlink "$mount_dir/Applications")" != "/Applications" ]; then
   echo "失败：DMG 内 Applications 快捷方式不正确" >&2
   exit 1

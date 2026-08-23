@@ -47,8 +47,17 @@ trap cleanup EXIT
 mkdir -p "$volume_dir"
 ditto "$source_app" "$volume_dir/Cortex哨兵.app"
 ln -s /Applications "$volume_dir/Applications"
+mkdir -p "$volume_dir/scripts"
+cp "$package_dir/Install-Cortex-Sentinel.command" "$volume_dir/Install-Cortex-Sentinel.command"
+cp "$package_dir/scripts/install-app.sh" "$volume_dir/scripts/install-app.sh"
 
 binary_sha256="$(shasum -a 256 "$source_app/Contents/MacOS/CortexSentinelBar" | awk '{print $1}')"
+installer_sha256="$(shasum -a 256 "$package_dir/scripts/install-app.sh" | awk '{print $1}')"
+source_app_installer_sha256="$(plutil -extract installer_sha256 raw -o - "$source_app/Contents/Resources/installer-manifest.json")"
+if [ "$source_app_installer_sha256" != "$installer_sha256" ]; then
+  echo "失败：构建 app 内 installer hash 与脚本不匹配：app=${source_app_installer_sha256}，脚本=${installer_sha256}" >&2
+  exit 1
+fi
 generated_at="$(TZ=Asia/Shanghai date +%Y-%m-%dT%H:%M:%S%z)"
 
 cat > "$manifest_path" <<EOF
@@ -62,7 +71,8 @@ cat > "$manifest_path" <<EOF
   "signature": "adhoc",
   "notarized": false,
   "generated_at": "$generated_at",
-  "app_binary_sha256": "$binary_sha256"
+  "app_binary_sha256": "$binary_sha256",
+  "installer_sha256": "$installer_sha256"
 }
 EOF
 jq empty "$manifest_path"
@@ -96,6 +106,12 @@ fi
 mounted_binary_sha256="$(shasum -a 256 "$mount_dir/Cortex哨兵.app/Contents/MacOS/CortexSentinelBar" | awk '{print $1}')"
 if [ "$mounted_binary_sha256" != "$binary_sha256" ]; then
   echo "失败：DMG 内 app hash 不匹配" >&2
+  exit 1
+fi
+mounted_installer_sha256="$(plutil -extract installer_sha256 raw -o - "$mount_dir/Cortex哨兵.app/Contents/Resources/installer-manifest.json")"
+mounted_script_sha256="$(shasum -a 256 "$mount_dir/scripts/install-app.sh" | awk '{print $1}')"
+if [ "$mounted_installer_sha256" != "$mounted_script_sha256" ]; then
+  echo "失败：DMG 内 installer hash 与安装器脚本不匹配：app=${mounted_installer_sha256}，脚本=${mounted_script_sha256}" >&2
   exit 1
 fi
 echo "== 卷内条目 =="

@@ -89,7 +89,7 @@ bash scripts/install-app.sh --app-source /path/to/Cortex哨兵.app
 bash scripts/install-app.sh --cortex-root /path/to/repo
 ```
 
-`--cortex-root` 和环境变量 `CORTEX_REPO_ROOT` 是旧装法：监视 `<该路径>/logs`。新装法用 `CORTEX_SENTINEL_WATCH_DIR` 直接指向日志目录。两者都没有时，安装器创建并使用 `~/.cortex-sentinel/logs`。若本机存在 `~/Documents/Code/cortex/logs`，交互安装会问要不要用它，不会自动替你选。
+`--cortex-root` 和环境变量 `CORTEX_REPO_ROOT` 是旧装法：监视 `<该路径>/logs`。新装法用 `CORTEX_SENTINEL_WATCH_DIR` 直接指向日志目录。两者都没有时，安装器创建并使用 `~/.cortex-sentinel/logs`。
 
 ## 自己构建 app
 

@@ -57,15 +57,26 @@ struct SentinelPaths {
             .appendingPathComponent("cortex-pack-progress", isDirectory: true)
     }
 
-    /// 安装在本机时用于目录自愈的 Cortex 仓库根目录。
-    static let selfHealingRepositoryRoot = URL(
-        fileURLWithPath: "/Users/falcon/Documents/Code/cortex",
-        isDirectory: true
-    )
-
     /// 未设置监视目录环境变量时的默认日志目录。
     static var defaultWatchDirectory: URL {
         FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".cortex-sentinel", isDirectory: true)
+            .appendingPathComponent("logs", isDirectory: true)
+    }
+
+    /// 目录自愈的兜底日志目录。按顺序解析：
+    /// 1. CORTEX_SENTINEL_WATCH_DIR 显式指定，直接用
+    /// 2. ~/.cortex-sentinel/logs
+    /// 都没有（home 取不到）返回 nil，上层走空态；不再兜底到任何写死的绝对路径。
+    static func selfHealingLogsDirectory(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        homeDirectory: URL? = FileManager.default.homeDirectoryForCurrentUser
+    ) -> URL? {
+        if let configured = environment["CORTEX_SENTINEL_WATCH_DIR"], !configured.isEmpty {
+            return URL(fileURLWithPath: configured, isDirectory: true)
+        }
+        guard let homeDirectory, !homeDirectory.path.isEmpty else { return nil }
+        return homeDirectory
             .appendingPathComponent(".cortex-sentinel", isDirectory: true)
             .appendingPathComponent("logs", isDirectory: true)
     }
@@ -167,7 +178,7 @@ struct SentinelPaths {
         executableURL _: URL? = Bundle.main.executableURL,
         defaults: UserDefaults = SentinelSettings.resolvedDefaults(),
         defaultWatchDirectory: URL = SentinelPaths.defaultWatchDirectory,
-        selfHealingRepositoryRoot: URL = SentinelPaths.selfHealingRepositoryRoot,
+        selfHealingLogsDirectory: URL? = SentinelPaths.selfHealingLogsDirectory(),
         fileManager: FileManager = .default
     ) -> SentinelPaths {
         // 日志目录解析优先级：
@@ -186,18 +197,22 @@ struct SentinelPaths {
             repositoryRoot = defaultWatchDirectory.deletingLastPathComponent()
         }
         var selfHealingReason: String?
-        let fallbackLogsDirectory = selfHealingRepositoryRoot.appendingPathComponent("logs", isDirectory: true)
-        // CORTEX_DATA_ROOT 是测试/沙盒显式数据根时，不能被本机默认仓库日志自愈劫持。
-        let shouldAttemptSelfHealing = selfHealingRepositoryRoot != Self.selfHealingRepositoryRoot
+        // CORTEX_DATA_ROOT 是测试/沙盒显式数据根时，不能被本机默认日志目录自愈劫持。
+        // 默认兜底目录是在调用方进程环境下解析的；测试或调用方传入一份
+        // 临时 environment 时，不应因为它和进程环境不同就误触发本机自愈。
+        // 只有显式传入另一份兜底目录，或当前解析结果确实是默认 home，才尝试切换。
+        let shouldAttemptSelfHealing = selfHealingLogsDirectory
+            != Self.selfHealingLogsDirectory()
             || resolved.source == .defaultHome
         if shouldAttemptSelfHealing,
+           let fallbackLogsDirectory = selfHealingLogsDirectory,
            !Self.hasSentinelFiles(in: logsDirectory, fileManager: fileManager),
            Self.hasSentinelFiles(in: fallbackLogsDirectory, fileManager: fileManager),
            logsDirectory.standardizedFileURL.path != fallbackLogsDirectory.standardizedFileURL.path {
             let originalLogsDirectory = logsDirectory
             logsDirectory = fallbackLogsDirectory
-            repositoryRoot = selfHealingRepositoryRoot
-            selfHealingReason = "解析出的监视目录 \(originalLogsDirectory.path) 没有登记表或状态文件，已切换到仓库日志目录 \(fallbackLogsDirectory.path)"
+            repositoryRoot = fallbackLogsDirectory.deletingLastPathComponent()
+            selfHealingReason = "解析出的监视目录 \(originalLogsDirectory.path) 没有登记表或状态文件，已切换到兜底日志目录 \(fallbackLogsDirectory.path)"
         }
 
         let poolDirectory: URL

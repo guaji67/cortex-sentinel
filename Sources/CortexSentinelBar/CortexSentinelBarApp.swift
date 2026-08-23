@@ -228,6 +228,11 @@ enum CortexSentinelBarMain {
             print("  ⚠️ 文件在但一条都没解出来 —— 多半是格式对不上，看 LineRegistry.swift")
         }
         print("状态文件：读到 \(lines.count) 条线")
+        if let packaging = PackagingProgressReader.read(at: paths.packagingProgressRoot) {
+            print("打包进度：\(packaging.status.displayName) · \(packaging.stepTitle) · \(packaging.etaText)")
+        } else {
+            print("打包进度：无")
+        }
         print(String(format: "读取耗时：%.1f ms", readMilliseconds))
         print("分组结果：")
         print("  已登记派工（活跃）：\(groups.activeRegistered.count)")
@@ -433,6 +438,7 @@ enum StatusBarSnapshotter {
         let semaphore = DispatchSemaphore(value: 0)
         var probes: [InputStatusDisplayProbe] = []
         var balances: [StatusBarBalanceItem] = []
+        let packaging = PackagingProgressReader.read(at: paths.packagingProgressRoot)
 
         Task {
             if let snapshot = try? await InputStatusClient(endpoint: paths.inputStatusURL).fetch() {
@@ -452,7 +458,11 @@ enum StatusBarSnapshotter {
         }
         semaphore.wait()
 
-        let base = SentinelStatusBarRenderer.image(probes: probes, balances: balances)
+        let base = SentinelStatusBarRenderer.image(
+            probes: probes,
+            balances: balances,
+            packaging: packaging
+        )
         let scale: CGFloat = 10
         let size = NSSize(width: base.size.width * scale, height: base.size.height * scale)
         let scaled = NSImage(size: size)

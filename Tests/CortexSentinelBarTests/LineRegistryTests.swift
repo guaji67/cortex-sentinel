@@ -470,10 +470,68 @@ final class LineRegistryTests: XCTestCase {
         XCTAssertEqual(groups.activeRegistered.map(\.line.slug), ["first", "second"])
     }
 
-    private func makeLine(slug: String, state: LineState, age: TimeInterval) -> LineStatus {
+    func testRegistryReadsClaudeEngineAndOxAlphaStatusFileWinsOverLegacyEntry() throws {
+        let data = Data(
+            """
+            [
+              {
+                "engine": "claude",
+                "slug": "riskclean-neutral",
+                "label_zh": "风险清理中立复核",
+                "dispatcher_zh": "主控对话",
+                "registered_at": 1784823993
+              },
+              {
+                "slug": "oxalpha-board",
+                "label_zh": "ox-alpha 看板",
+                "dispatcher_zh": "主控对话",
+                "registered_at": 1784823993
+              }
+            ]
+            """.utf8
+        )
+        let registry = try XCTUnwrap(CodexLineRegistryReader.decode(data))
+
+        // 登记表写 claude 就是 ox-alpha 线，认领口径也跟着变。
+        let registration = try XCTUnwrap(registry.registration(for: "riskclean-neutral"))
+        XCTAssertEqual(registration.engine, .claudeOxAlpha)
+        XCTAssertEqual(registration.engine.displayName, "ox-alpha")
+        XCTAssertEqual(
+            registration.engine.prefixedAckKey(slug: registration.slug),
+            "claude-oxalpha:riskclean-neutral"
+        )
+
+        // 登记表写了 claude、状态文件也读成 ox-alpha：两边一致。
+        XCTAssertEqual(
+            LinePresentation(
+                line: makeLine(slug: "riskclean-neutral", engine: .claudeOxAlpha, state: .running, age: 30),
+                registration: registry.registration(for: "riskclean-neutral")
+            ).engine,
+            .claudeOxAlpha
+        )
+
+        // 旧登记条目没有 engine 字段（解码成 Codex），状态文件说 ox-alpha 就得听状态文件，
+        // 否则 claude-oxalpha-*.status.json 会全部挂上 Codex 徽章。
+        XCTAssertEqual(registry.registration(for: "oxalpha-board")?.engine, .codex)
+        XCTAssertEqual(
+            LinePresentation(
+                line: makeLine(slug: "oxalpha-board", engine: .claudeOxAlpha, state: .running, age: 30),
+                registration: registry.registration(for: "oxalpha-board")
+            ).engine,
+            .claudeOxAlpha
+        )
+    }
+
+    private func makeLine(
+        slug: String,
+        engine: LineEngine = .codex,
+        state: LineState,
+        age: TimeInterval
+    ) -> LineStatus {
         LineStatus(
             sourceFile: URL(fileURLWithPath: "/tmp/\(slug).status.json"),
             slug: slug,
+            engine: engine,
             workdir: nil,
             branch: nil,
             state: state,

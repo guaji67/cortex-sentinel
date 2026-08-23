@@ -120,11 +120,13 @@ struct SentinelBoardWindow: Equatable {
 struct EngineCounts: Equatable {
     var grok: Int
     var codex: Int
+    var claudeOxAlpha: Int
     var unknown: Int
 
     init(_ items: [LinePresentation]) {
         var grok = 0
         var codex = 0
+        var claudeOxAlpha = 0
         var unknown = 0
         for item in items {
             switch item.engine {
@@ -132,18 +134,22 @@ struct EngineCounts: Equatable {
                 grok += 1
             case .codex:
                 codex += 1
+            case .claudeOxAlpha:
+                claudeOxAlpha += 1
             case .unknown:
                 unknown += 1
             }
         }
         self.grok = grok
         self.codex = codex
+        self.claudeOxAlpha = claudeOxAlpha
         self.unknown = unknown
     }
 
-    init(grok: Int = 0, codex: Int = 0, unknown: Int = 0) {
+    init(grok: Int = 0, codex: Int = 0, claudeOxAlpha: Int = 0, unknown: Int = 0) {
         self.grok = grok
         self.codex = codex
+        self.claudeOxAlpha = claudeOxAlpha
         self.unknown = unknown
     }
 }

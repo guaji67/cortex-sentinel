@@ -460,30 +460,47 @@ enum LaunchctlCommandBuilder {
 
 struct BackgroundJobsSectionView: View {
     let snapshot: BackgroundJobsSnapshot
+    /// 展开后，问题行下面那截「其余正常」的二级折叠。
     @Binding var showsHealthy: Bool
+    /// 整块展开与否。默认收起只留一行摘要，由外层持久化；故障详情只在展开后出现。
+    @Binding var isExpanded: Bool
     var now: Date = Date()
     private var presentation: BackgroundJobsPresentation { BackgroundJobsPresentation(snapshot: snapshot, now: now) }
+    /// 没有任何明细行时（无数据 / 0 个任务）就没什么可展开的，摘要行不做成按钮。
+    private var hasDetail: Bool {
+        let p = presentation
+        return !p.problemRows.isEmpty || !p.healthyRows.isEmpty
+    }
+
     var body: some View {
         let p = presentation
         return VStack(alignment: .leading, spacing: SentinelTheme.Spacing.sm) {
-            if p.hasProblems {
+            if hasDetail {
+                Button { withAnimation(.easeInOut(duration: 0.15)) { isExpanded.toggle() } } label: { summaryLine(p, discloses: true).contentShape(Rectangle()) }.buttonStyle(.plain)
+            } else {
                 summaryLine(p, discloses: false)
+            }
+            if isExpanded {
                 ForEach(p.problemRows) { problemRow($0) }
-                if !p.healthyRows.isEmpty { healthyDisclosure(p) }
-            } else if p.healthyRows.isEmpty { summaryLine(p, discloses: false) }
-            else {
-                Button { withAnimation(.easeInOut(duration: 0.15)) { showsHealthy.toggle() } } label: { summaryLine(p, discloses: true).contentShape(Rectangle()) }.buttonStyle(.plain)
-                if showsHealthy { ForEach(p.healthyRows) { healthyRow($0) } }
+                if !p.healthyRows.isEmpty {
+                    if p.hasProblems { healthyDisclosure(p) } else { ForEach(p.healthyRows) { healthyRow($0) } }
+                }
             }
         }.accessibilityIdentifier("background-jobs-section")
     }
     private func summaryLine(_ p: BackgroundJobsPresentation, discloses: Bool) -> some View {
         HStack(spacing: SentinelTheme.Spacing.md) {
-            if discloses { Image(systemName: "chevron.right").rotationEffect(.degrees(showsHealthy ? 90 : 0)).frame(width: SentinelTheme.Metrics.disclosureChevron, height: SentinelTheme.Metrics.disclosureChevron).foregroundStyle(SentinelTheme.Colors.secondaryForeground) }
-            Circle().fill(p.hasProblems ? SentinelTheme.Colors.warning : (p.healthyRows.isEmpty ? SentinelTheme.Colors.secondaryForeground : SentinelTheme.Colors.success)).frame(width: SentinelTheme.Metrics.statusDot, height: SentinelTheme.Metrics.statusDot)
-            Text(p.summaryText).font(p.hasProblems ? SentinelTheme.Fonts.rowTitle : SentinelTheme.Fonts.subtitle).foregroundStyle(p.hasProblems ? SentinelTheme.Colors.warning : SentinelTheme.Colors.secondaryForeground).fixedSize(horizontal: false, vertical: true)
+            if discloses { Image(systemName: "chevron.right").rotationEffect(.degrees(isExpanded ? 90 : 0)).frame(width: SentinelTheme.Metrics.disclosureChevron, height: SentinelTheme.Metrics.disclosureChevron).foregroundStyle(SentinelTheme.Colors.secondaryForeground) }
+            Circle().fill(summaryDotColor(p)).frame(width: SentinelTheme.Metrics.statusDot, height: SentinelTheme.Metrics.statusDot)
+            // 摘要行一律走次级前景色：橙色留给展开后的问题行，收起时不许整行糊眼。
+            Text(p.summaryText).font(SentinelTheme.Fonts.subtitle).foregroundStyle(SentinelTheme.Colors.secondaryForeground).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
-        }.accessibilityIdentifier("background-jobs-summary").accessibilityLabel(p.summaryText)
+        }.accessibilityIdentifier("background-jobs-summary").accessibilityLabel(discloses ? "\(p.summaryText)，\(isExpanded ? "已展开" : "已折叠")" : p.summaryText)
+    }
+    /// 出问题只靠这个小圆点报警，不靠整行变橙。
+    private func summaryDotColor(_ p: BackgroundJobsPresentation) -> Color {
+        if p.hasProblems { return SentinelTheme.Colors.warning }
+        return p.healthyRows.isEmpty ? SentinelTheme.Colors.secondaryForeground : SentinelTheme.Colors.success
     }
     private func problemRow(_ row: BackgroundJobRow) -> some View { VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xxs) { Text(row.name).font(SentinelTheme.Fonts.rowTitle).foregroundStyle(SentinelTheme.Colors.foreground); Text(row.detail).font(SentinelTheme.Fonts.metadata).foregroundStyle(SentinelTheme.Colors.warning).fixedSize(horizontal: false, vertical: true) }.frame(maxWidth: .infinity, alignment: .leading).sentinelRow(tone: .warning).accessibilityIdentifier("background-jobs-problem-\(row.id)") }
     private func healthyRow(_ row: BackgroundJobRow) -> some View { VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xxs) { Text(row.name).font(SentinelTheme.Fonts.body).foregroundStyle(SentinelTheme.Colors.foreground); Text(row.detail).font(SentinelTheme.Fonts.metadata).foregroundStyle(SentinelTheme.Colors.secondaryForeground).fixedSize(horizontal: false, vertical: true) }.frame(maxWidth: .infinity, alignment: .leading).sentinelRow(tone: .normal).accessibilityIdentifier("background-jobs-ok-\(row.id)") }

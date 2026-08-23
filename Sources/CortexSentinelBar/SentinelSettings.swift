@@ -103,6 +103,8 @@ enum SentinelSettingsKey {
     static let panelOpenRefreshInterval = "\(bundlePrefix).panelOpenRefreshInterval"
     static let panelClosedRefreshInterval = "\(bundlePrefix).panelClosedRefreshInterval"
     static let balanceRecheckInterval = "\(bundlePrefix).balanceRecheckInterval"
+    /// 后台任务整块展开与否。默认收起，记住用户上次的选择。
+    static let backgroundJobsExpanded = "\(bundlePrefix).backgroundJobsExpanded"
 }
 
 protocol SentinelRefreshIntervalOption: Hashable, RawRepresentable where RawValue == TimeInterval {
@@ -403,6 +405,15 @@ enum SentinelSettings {
 
     static func loginItemEnabled(defaults: UserDefaults) -> Bool {
         bool(forKey: SentinelSettingsKey.loginItemEnabled, defaults: defaults, fallback: true)
+    }
+
+    /// 默认收起：出问题时这一块会整屏铺开橙色告警，一开面板就糊眼。
+    static func backgroundJobsExpanded(defaults: UserDefaults) -> Bool {
+        bool(forKey: SentinelSettingsKey.backgroundJobsExpanded, defaults: defaults, fallback: false)
+    }
+
+    static func setBackgroundJobsExpanded(_ value: Bool, defaults: UserDefaults) {
+        defaults.set(value, forKey: SentinelSettingsKey.backgroundJobsExpanded)
     }
 
     static func setLoginItemEnabled(_ value: Bool, defaults: UserDefaults) {

@@ -17,6 +17,8 @@ final class SentinelStore: ObservableObject {
     @Published private(set) var backgroundJobRows: [BackgroundJobRow] = []
     @Published private(set) var backgroundJobMessages: [String: String] = [:]
     @Published private(set) var backgroundJobOperations: Set<String> = []
+    /// 后台任务整块是否展开。默认收起，只留一行摘要；用户点开的选择要跨次打开面板记住。
+    @Published private(set) var backgroundJobsExpanded: Bool
     @Published private(set) var unclaimedTerminals: [UnclaimedTerminalEntry] = []
     @Published private(set) var isOfficialUsageRefreshing = false
     @Published private(set) var isOfficialUsageRefreshCoolingDown = false
@@ -116,6 +118,7 @@ final class SentinelStore: ObservableObject {
         ).source
         self.watchDirectorySource = watchSource
         self.historyRetainCount = SentinelSettings.historyRetainCount(defaults: defaults)
+        self.backgroundJobsExpanded = SentinelSettings.backgroundJobsExpanded(defaults: defaults)
         self.loginItemRegistrar = loginItemRegistrar
         self.notifier = SentinelNotifier()
         self.notifier.sendHandler = notificationSendHandler
@@ -284,6 +287,11 @@ final class SentinelStore: ObservableObject {
             registrar: loginItemRegistrar
         )
         settingsModel.loginItem = loginItemSettingsPresentation
+    }
+
+    func setBackgroundJobsExpanded(_ value: Bool) {
+        SentinelSettings.setBackgroundJobsExpanded(value, defaults: defaults)
+        backgroundJobsExpanded = SentinelSettings.backgroundJobsExpanded(defaults: defaults)
     }
 
     func setHistoryRetainCount(_ value: Int) {

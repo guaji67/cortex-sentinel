@@ -23,7 +23,6 @@ cortex_repo_root="${CORTEX_REPO_ROOT:-}"
 watch_dir="${CORTEX_SENTINEL_WATCH_DIR:-}"
 watch_dir_explicit=0
 default_watch_dir="$HOME/.cortex-sentinel/logs"
-detected_cortex_logs="$HOME/Documents/Code/cortex/logs"
 if [ -n "$watch_dir" ]; then
   watch_dir_explicit=1
 fi
@@ -45,7 +44,6 @@ usage() {
 监视目录（写入 launchd）：
   CORTEX_SENTINEL_WATCH_DIR   优先，直接指向日志目录
   CORTEX_REPO_ROOT / --cortex-root   兼容旧装法，读取 <root>/logs（目录必须存在）
-  自动找到 ~/Documents/Code/cortex/logs 则用它
   都没有时创建并使用 ~/.cortex-sentinel/logs；此时不往 LaunchAgent 写 CORTEX_REPO_ROOT
   给了无效的 CORTEX_REPO_ROOT 不会失败，按上面顺序继续往下落
 
@@ -89,10 +87,6 @@ done
 if [ -z "$watch_dir" ]; then
   if [ -n "$cortex_repo_root" ] && [ -d "$cortex_repo_root/logs" ]; then
     watch_dir="$cortex_repo_root/logs"
-  elif [ -d "$detected_cortex_logs" ]; then
-    cortex_repo_root="$HOME/Documents/Code/cortex"
-    watch_dir="$detected_cortex_logs"
-    echo "检测到 Cortex 仓：$detected_cortex_logs"
   else
     cortex_repo_root=""
     watch_dir="$default_watch_dir"

@@ -21,8 +21,8 @@ Cortex 哨兵后端
 
     [[projects]]
     name = "cortex"
-    root = "/Users/falcon/Documents/Code/cortex"
-    data_root = "/Users/falcon/CortexData"
+    root = "/path/to/cortex"
+    data_root = "/path/to/cortex-data"
     dev_ports = [3000, "3401-3439"]
 
 跑法

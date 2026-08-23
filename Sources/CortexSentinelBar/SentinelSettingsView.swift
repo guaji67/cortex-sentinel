@@ -236,7 +236,7 @@ final class SentinelSettingsModel: ObservableObject {
             loginItem: loginItem,
             historyRetainCount: StatusFileRetention.defaultCap,
             preferences: preferences,
-            watchPath: "/Users/falcon/.cortex-sentinel/logs",
+            watchPath: SentinelPaths.defaultWatchDirectory.path,
             isWatchLocked: fixture == .watchLocked
         )
     }

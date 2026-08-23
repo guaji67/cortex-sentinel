@@ -11,6 +11,8 @@ final class SentinelStore: ObservableObject {
     @Published private(set) var officialUsage: OfficialUsageSnapshot = .empty
     @Published private(set) var channelStatus: ChannelStatusSnapshot = .missing
     @Published private(set) var backgroundJobs: BackgroundJobsSnapshot = .missing
+    /// Cortex 打包进度；没打包在跑时保持 nil，界面不占地方。
+    @Published private(set) var packagingProgress: PackagingProgressSnapshot?
     /// 私有腿的 launchctl 操作行；健康快照仍由 `backgroundJobs` 保留给 PR 展示模型。
     @Published private(set) var backgroundJobRows: [BackgroundJobRow] = []
     @Published private(set) var backgroundJobMessages: [String: String] = [:]
@@ -170,13 +172,20 @@ final class SentinelStore: ObservableObject {
     }
 
     var statusBarTooltip: String {
+        var sections: [String] = []
+        if packagingProgress?.isActive == true, let packagingProgress {
+            sections.append(packagingProgress.accessibilityText)
+        }
         let probes = inputStatus.displayProbes()
         let serviceText = probes.map { display in
             let latency = display.probe.latencyMilliseconds.map { " · \($0) 毫秒" } ?? ""
             return "\(display.probe.model)：\(display.state.displayName)\(latency)"
         }
         .joined(separator: "\n")
-        return serviceText.isEmpty ? "服务状态暂无数据" : serviceText
+        if !serviceText.isEmpty {
+            sections.append(serviceText)
+        }
+        return sections.isEmpty ? "服务状态暂无数据" : sections.joined(separator: "\n")
     }
 
     var watchDirectoryMissing: Bool {
@@ -184,13 +193,16 @@ final class SentinelStore: ObservableObject {
     }
 
     var statusBarAccessibilityLabel: String {
+        let packaging = packagingProgress?.isActive == true
+            ? [packagingProgress!.accessibilityText]
+            : []
         let states = inputStatus.displayProbes().map {
             "\($0.probe.model)\($0.state.displayName)"
         }
         let balances = statusBarBalances.map {
             "\($0.providerName) 余额 \($0.text)"
         }
-        return (states + balances).joined(separator: "，")
+        return (packaging + states + balances).joined(separator: "，")
     }
 
     func start() {
@@ -406,6 +418,7 @@ final class SentinelStore: ObservableObject {
         let registryURL = paths.lineRegistryURL
         let channelStatusURL = paths.channelStatusURL
         let ackURL = paths.lineTerminalAckURL
+        let packagingProgressRoot = paths.packagingProgressRoot
         let lineStatusCache = lineStatusCache
         let lineRegistryCache = lineRegistryCache
         let includeOtherProcesses = isPanelPresented
@@ -418,6 +431,7 @@ final class SentinelStore: ObservableObject {
                     registryURL: registryURL,
                     channelStatusURL: channelStatusURL,
                     ackURL: ackURL,
+                    packagingProgressRoot: packagingProgressRoot,
                     lineStatusCache: lineStatusCache,
                     lineRegistryCache: lineRegistryCache,
                     includeOtherProcesses: includeOtherProcesses,
@@ -428,6 +442,14 @@ final class SentinelStore: ObservableObject {
             }
         }
         lastStatusDiskReadWasOnMainThreadForTests = snapshot.readOnMainThread
+        // 失败/完成的 progress.json 只是历史残留，界面不展示；不要把它
+        // 发布成一次状态变化，避免每轮空转给菜单栏再发一条通知。
+        let nextPackagingProgress = snapshot.packagingProgress?.isActive == true
+            ? snapshot.packagingProgress
+            : nil
+        if packagingProgress != nextPackagingProgress {
+            packagingProgress = nextPackagingProgress
+        }
         apply(
             lines: snapshot.lines,
             aio: aio,
@@ -881,6 +903,7 @@ final class SentinelStore: ObservableObject {
         channelStatus = channelStatus
         backgroundJobs = backgroundJobs
         backgroundJobRows = backgroundJobRows
+        packagingProgress = packagingProgress
         unclaimedTerminals = unclaimedTerminals
         officialUsage = officialUsage
     }

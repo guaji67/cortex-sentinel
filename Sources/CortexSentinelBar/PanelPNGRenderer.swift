@@ -666,6 +666,33 @@ private enum PanelPreviewLayout {
             "plist_status": "loaded"
           },
           {
+            "label": "com.falcon.cortex.web-guard",
+            "name": "界面守护",
+            "interval_text": "每 150 秒",
+            "last_run_text": "不到 1 分钟前",
+            "status": "ok",
+            "status_text": "正常",
+            "plist_status": "loaded"
+          },
+          {
+            "label": "com.falcon.cortex.memory-monitor",
+            "name": "内存与回收巡检",
+            "interval_text": "每 10 分钟",
+            "last_run_text": "不到 1 分钟前",
+            "status": "ok",
+            "status_text": "正常",
+            "plist_status": "loaded"
+          },
+          {
+            "label": "com.falcon.cortex.mini-mirror-sync",
+            "name": "数据镜像同步",
+            "interval_text": "每 30 分钟",
+            "last_run_text": "12 分钟前",
+            "status": "ok",
+            "status_text": "正常",
+            "plist_status": "loaded"
+          },
+          {
             "label": "com.cortex.sentinelbar",
             "name": "Cortex 哨兵",
             "interval_text": "常驻",
@@ -679,22 +706,53 @@ private enum PanelPreviewLayout {
         try writeBackgroundJobs(into: root, generatedAt: generatedAt, jobsJSON: jobs)
     }
 
+    /// COR-1862 口径：红行必须是 launchd 实际状态真坏的 job；plist 异常只做
+    /// 绿行备注（含超长细节截断），不再当问题。
     private static func writeProblemBackgroundJobs(into root: URL, generatedAt: Date) throws {
         let longDetail = String(repeating: "长", count: 50)
         let jobs = """
         [
           {
+            "label": "com.falcon.cortex.web",
+            "name": "界面常驻服务",
+            "interval_text": "常驻",
+            "last_run_text": "查不到上次运行",
+            "status": "error",
+            "status_text": "出错",
+            "reason": "常驻进程不在了，上次退出码 78",
+            "plist_status": "loaded"
+          },
+          {
             "label": "com.falcon.cortex.memory-monitor",
             "name": "内存与回收巡检",
             "interval_text": "每 10 分钟",
             "last_run_text": "14 分钟前",
+            "status": "stalled",
+            "status_text": "出错",
+            "reason": "本轮 312 秒，已超过 10 分钟间隔的一半",
+            "plist_status": "loaded"
+          },
+          {
+            "label": "com.falcon.cortex.web-guard",
+            "name": "界面守护",
+            "interval_text": "每 150 秒",
+            "last_run_text": "不到 1 分钟前",
+            "status": "ok",
+            "status_text": "正常",
+            "plist_status": "loaded"
+          },
+          {
+            "label": "com.falcon.cortex.mini-mirror-sync",
+            "name": "数据镜像同步",
+            "interval_text": "每 30 分钟",
+            "last_run_text": "12 分钟前",
             "status": "ok",
             "status_text": "正常",
             "plist_status": "unexpected_enum"
           },
           {
-            "label": "com.falcon.cortex.web",
-            "name": "界面常驻服务",
+            "label": "com.cortex.sentinelbar",
+            "name": "Cortex 哨兵",
             "interval_text": "常驻",
             "last_run_text": "正在运行",
             "status": "ok",

@@ -550,6 +550,18 @@ struct LineRelay: Decodable, Equatable {
     }
 }
 
+struct LineForceStart: Decodable, Equatable {
+    let active: Bool
+    let activatedAt: String?
+    let activatedBy: String?
+
+    enum CodingKeys: String, CodingKey {
+        case active
+        case activatedAt = "activated_at"
+        case activatedBy = "activated_by"
+    }
+}
+
 struct LineRelayProbe: Decodable, Equatable {
     let state: String?
     let checkedAt: String?
@@ -966,6 +978,7 @@ struct LineStatus: Identifiable, Equatable {
     let model: String?
     let logBytes: Int?
     let exitCode: Int?
+    let forceStart: LineForceStart?
     let relay: LineRelay?
     let relayProbe: LineRelayProbe?
     let balance: RelayBalance?
@@ -991,6 +1004,7 @@ struct LineStatus: Identifiable, Equatable {
         model: String? = nil,
         logBytes: Int? = nil,
         exitCode: Int? = nil,
+        forceStart: LineForceStart? = nil,
         relay: LineRelay?,
         relayProbe: LineRelayProbe? = nil,
         balance: RelayBalance? = nil,
@@ -1015,6 +1029,7 @@ struct LineStatus: Identifiable, Equatable {
         self.model = model
         self.logBytes = logBytes
         self.exitCode = exitCode
+        self.forceStart = forceStart
         self.relay = relay
         self.relayProbe = relayProbe
         self.balance = balance

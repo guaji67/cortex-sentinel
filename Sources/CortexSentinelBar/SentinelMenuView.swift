@@ -21,6 +21,7 @@ struct SentinelMenuView: View {
     @State private var expandedLineNotes: Set<String> = []
     @State private var settingsLine: LineStatus?
     @State private var pendingBackgroundJobConfirmation: BackgroundJob?
+    @State private var forceStartAllFeedback: String?
 
     var body: some View {
         ZStack {
@@ -733,7 +734,7 @@ struct SentinelMenuView: View {
     private var dispatchSection: some View {
         let groups = store.lineGroups
         return VStack(alignment: .leading, spacing: SentinelTheme.Spacing.sm) {
-            sectionTitle(SentinelBoardCopy.registeredSectionTitle, trailing: "\(groups.activeRegistered.count)")
+            dispatchSectionTitle(groups: groups)
 
             if store.watchDirectoryMissing {
                 missingWatchDirectoryEmptyState
@@ -818,6 +819,7 @@ struct SentinelMenuView: View {
 
             VStack(alignment: .trailing, spacing: SentinelTheme.Spacing.xs) {
                 lineStateBadge(line)
+                forceStartBadge(line)
                 if let startedAt = line.startedAt {
                     Text(SentinelTimeFormat.shortTime(startedAt))
                         .font(SentinelTheme.Fonts.rowTime)
@@ -1091,6 +1093,7 @@ struct SentinelMenuView: View {
 
             VStack(alignment: .trailing, spacing: SentinelTheme.Spacing.xs) {
                 lineStateBadge(line)
+                forceStartBadge(line)
                 SentinelLineControls(
                     line: line,
                     logsDirectory: store.paths.logsDirectory,
@@ -1363,6 +1366,50 @@ struct SentinelMenuView: View {
         }
     }
 
+    private func dispatchSectionTitle(groups: SentinelLineGroups) -> some View {
+        let candidates = SentinelForceStartAction.candidates(in: groups.activePresentations)
+        return VStack(alignment: .trailing, spacing: SentinelTheme.Spacing.xxs) {
+            HStack(spacing: SentinelTheme.Spacing.md) {
+                Text(SentinelBoardCopy.registeredSectionTitle)
+                    .font(SentinelTheme.Fonts.section)
+                    .kerning(0.5)
+                    .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                Spacer()
+                Button {
+                    let result = SentinelForceStartAction.requestAll(
+                        in: groups.activePresentations,
+                        logsDirectory: store.paths.logsDirectory
+                    )
+                    forceStartAllFeedback = result.feedbackText
+                } label: {
+                    Label("一键恢复 \(candidates.count)", systemImage: "play.fill")
+                }
+                .buttonStyle(SentinelButtonStyle(kind: .primary, compact: true))
+                .disabled(candidates.isEmpty)
+                .help("强制开始所有非终态且没有在运行的 Codex 线")
+                .accessibilityLabel("一键恢复 \(candidates.count) 条线")
+                .accessibilityIdentifier("force-start-all")
+
+                Text("\(groups.activeRegistered.count)")
+                    .sentinelBadge(
+                        foreground: SentinelTheme.Colors.secondaryForeground,
+                        background: SentinelTheme.Colors.inset
+                    )
+            }
+
+            if let forceStartAllFeedback {
+                Text(forceStartAllFeedback)
+                    .font(SentinelTheme.Fonts.metadata)
+                    .foregroundStyle(
+                        forceStartAllFeedback.contains("失败")
+                            ? SentinelTheme.Colors.warning
+                            : SentinelTheme.Colors.success
+                    )
+                    .accessibilityIdentifier("force-start-all-feedback")
+            }
+        }
+    }
+
     private func compactDiagnosticRow(title: String, status: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: SentinelTheme.Spacing.md) {
             Text(title)
@@ -1580,6 +1627,31 @@ struct SentinelMenuView: View {
                     : SentinelTheme.Colors.inset
             )
             .accessibilityLabel("引擎 \(engine.displayName)")
+    }
+
+    @ViewBuilder
+    private func forceStartBadge(_ line: LineStatus) -> some View {
+        if let text = SentinelForceStartAction.activeBadgeText(for: line) {
+            Text(text)
+                .sentinelBadge(
+                    foreground: SentinelTheme.Colors.primary,
+                    background: SentinelTheme.Colors.primarySoft
+                )
+                .help(forceStartBadgeHelp(line.forceStart))
+                .accessibilityLabel("\(line.slug) \(text)")
+                .accessibilityIdentifier("force-start-active-\(line.slug)")
+        }
+    }
+
+    private func forceStartBadgeHelp(_ forceStart: LineForceStart?) -> String {
+        var parts = ["本线已进入手动接管强制模式"]
+        if let activatedBy = forceStart?.activatedBy, !activatedBy.isEmpty {
+            parts.append("来源 \(activatedBy)")
+        }
+        if let activatedAt = forceStart?.activatedAt, !activatedAt.isEmpty {
+            parts.append("生效 \(activatedAt)")
+        }
+        return parts.joined(separator: " · ")
     }
 
     private func hostBadge(_ origin: LineHostOrigin) -> some View {

@@ -459,6 +459,7 @@ enum SentinelFileReader {
                 model: normalizedOptionalString(payload.model),
                 logBytes: payload.logBytes,
                 exitCode: payload.exitCode,
+                forceStart: payload.forceStart,
                 relay: payload.relay,
                 relayProbe: payload.relayProbe,
                 balance: payload.balance,
@@ -627,6 +628,7 @@ private struct BabysitterStatusPayload: Decodable {
     let model: String?
     let logBytes: Int?
     let exitCode: Int?
+    let forceStart: LineForceStart?
     let relay: LineRelay?
     let relayProbe: LineRelayProbe?
     let balance: RelayBalance?
@@ -649,6 +651,7 @@ private struct BabysitterStatusPayload: Decodable {
         case model
         case logBytes = "log_bytes"
         case exitCode = "exit_code"
+        case forceStart = "force_start"
         case relay
         case relayProbe = "relay_probe"
         case balance

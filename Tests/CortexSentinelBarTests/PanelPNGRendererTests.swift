@@ -107,7 +107,7 @@ final class PanelPNGRendererTests: XCTestCase {
         XCTAssertEqual(session.store.channelStatus.grok.status, .degraded)
         XCTAssertEqual(session.store.channelStatus.grok.status.displayName, "不通")
         XCTAssertEqual(session.store.channelStatus.codex.status, .unknown)
-        XCTAssertEqual(session.store.channelStatus.codex.statusText, "查不出来")
+        XCTAssertEqual(session.store.channelStatus.codex.statusText, "查不出")
         XCTAssertEqual(session.store.channelStatus.grok.evidence, "账单未付，进程秒退")
     }
 
@@ -190,7 +190,7 @@ final class PanelPNGRendererTests: XCTestCase {
             (.channelNoRecord, "还没有记录", .noRecord),
             (.channelUnreadable, "状态读不出", .unreadable),
             (.channelUnrecognized, "状态看不懂", .unrecognized),
-            (.channelUndetermined, "查不出来", .undetermined),
+            (.channelUndetermined, "查不出", .undetermined),
         ]
         for (fixture, phrase, kind) in cases {
             let session = try await PanelPreviewFactory.makeSession(fixture: fixture)

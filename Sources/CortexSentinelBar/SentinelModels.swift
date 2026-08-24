@@ -1173,18 +1173,40 @@ struct LineDispositionPresentation: Equatable {
     }
 }
 
-struct RelayAttribution: Equatable {
-    let text: String
-    let isReported: Bool
+/// 线行「通道归因」需要的 AIO 切片。故意不带 readAt / 余额数字等易变字段：
+/// 余额刷新每一轮都会换出一个新的 AIOSnapshot（哪怕只是读取时间戳变了），
+/// 线列表分区若直接读整个 aio 就会跟着余额一起失效。这个切片只在路由模式 /
+/// 网关开关 / 命中 provider / provider 名单真变时才不等，线行读它就能保持安静。
+struct RelayAttributionContext: Equatable {
+    struct ProviderRef: Equatable {
+        let baseURL: String
+        let name: String
+    }
 
-    static func resolve(line: LineStatus, aio: AIOSnapshot) -> RelayAttribution {
-        if aio.routeMode == .aggregate {
-            guard aio.gatewayEnabled else {
+    let routeMode: AIORouteMode
+    let gatewayEnabled: Bool
+    let lastHitProviderName: String?
+    let providers: [ProviderRef]
+
+    static let unconfigured = RelayAttributionContext(aio: .unconfigured)
+
+    init(aio: AIOSnapshot) {
+        routeMode = aio.routeMode
+        gatewayEnabled = aio.gatewayEnabled
+        lastHitProviderName = aio.lastHitProviderName
+        providers = aio.providers.map {
+            ProviderRef(baseURL: $0.baseURL, name: $0.name)
+        }
+    }
+
+    func resolve(line: LineStatus) -> RelayAttribution {
+        if routeMode == .aggregate {
+            guard gatewayEnabled else {
                 return RelayAttribution(text: "聚合→网关关闭", isReported: false)
             }
             return RelayAttribution(
-                text: "聚合→\(aio.lastHitProviderName ?? "未命中")",
-                isReported: aio.lastHitProviderName != nil
+                text: "聚合→\(lastHitProviderName ?? "未命中")",
+                isReported: lastHitProviderName != nil
             )
         }
 
@@ -1194,8 +1216,8 @@ struct RelayAttribution: Equatable {
             return RelayAttribution(text: "", isReported: false)
         }
 
-        if let provider = aio.providers.first(where: {
-            normalizedBaseURL($0.baseURL) == normalizedBaseURL(baseURL)
+        if let provider = providers.first(where: {
+            RelayAttribution.normalizedBaseURL($0.baseURL) == RelayAttribution.normalizedBaseURL(baseURL)
         }) {
             return RelayAttribution(text: provider.name, isReported: true)
         }
@@ -1205,6 +1227,15 @@ struct RelayAttribution: Equatable {
             text: host?.isEmpty == false ? host! : "未知出口",
             isReported: true
         )
+    }
+}
+
+struct RelayAttribution: Equatable {
+    let text: String
+    let isReported: Bool
+
+    static func resolve(line: LineStatus, aio: AIOSnapshot) -> RelayAttribution {
+        RelayAttributionContext(aio: aio).resolve(line: line)
     }
 
     static func resolve(line: LineStatus, relay: RelaySnapshot) -> RelayAttribution {
@@ -1227,7 +1258,7 @@ struct RelayAttribution: Equatable {
         )
     }
 
-    private static func normalizedBaseURL(_ value: String?) -> String? {
+    fileprivate static func normalizedBaseURL(_ value: String?) -> String? {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
               !value.isEmpty
         else {

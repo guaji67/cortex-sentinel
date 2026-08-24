@@ -1,41 +1,53 @@
 import AppKit
 import Foundation
+import Observation
 
+/// 面板数据源。2026-08-24 从 ObservableObject/@Published 迁到 @Observable：
+/// 旧形态下任何一个 @Published 变化都会给唯一的整面板 view 发 objectWillChange，
+/// 整个 1798 行的 body 重算一遍（Falcon 量到冷开 22 次、每 5 秒一次 324-389ms 主线程
+/// hang）。Observation 按「哪个 view 读了哪个属性」决定失效范围，配合面板按分区拆开，
+/// 余额回来只惊动余额那一块，线列表在他滑动时保持安静。
+@Observable
 @MainActor
-final class SentinelStore: ObservableObject {
-    @Published private(set) var lines: [LineStatus] = []
-    @Published private(set) var otherCodexProcesses: [OtherCodexProcess] = []
-    @Published private(set) var aio: AIOSnapshot = .unconfigured
-    @Published private(set) var lineRegistry: CodexLineRegistry = .empty
+final class SentinelStore {
+    private(set) var lines: [LineStatus] = []
+    private(set) var otherCodexProcesses: [OtherCodexProcess] = []
+    private(set) var aio: AIOSnapshot = .unconfigured
+    private(set) var lineRegistry: CodexLineRegistry = .empty
     /// 分组和使用者实际看板窗口随状态快照每轮计算一次；菜单 body 只读缓存。
-    @Published private(set) var lineGroups: SentinelLineGroups = .empty
-    @Published private(set) var boardWindow: SentinelBoardWindow = .empty
-    @Published private(set) var inputStatus: InputStatusSnapshot = .empty
-    @Published private(set) var officialUsage: OfficialUsageSnapshot = .empty
-    @Published private(set) var channelStatus: ChannelStatusSnapshot = .missing
-    @Published private(set) var backgroundJobs: BackgroundJobsSnapshot = .missing
+    /// 旧口径（@Published 时代）这两个派生属性从不自己发 objectWillChange；
+    /// Observation 下它们各自通知自己的读者，这正是分区隔离要的形态。
+    private(set) var lineGroups: SentinelLineGroups = .empty
+    private(set) var boardWindow: SentinelBoardWindow = .empty
+    private(set) var inputStatus: InputStatusSnapshot = .empty
+    private(set) var officialUsage: OfficialUsageSnapshot = .empty
+    private(set) var channelStatus: ChannelStatusSnapshot = .missing
+    private(set) var backgroundJobs: BackgroundJobsSnapshot = .missing
     /// Cortex 打包进度；没打包在跑时保持 nil，界面不占地方。
-    @Published private(set) var packagingProgress: PackagingProgressSnapshot?
+    private(set) var packagingProgress: PackagingProgressSnapshot?
     /// 私有腿的 launchctl 操作行；健康快照仍由 `backgroundJobs` 保留给 PR 展示模型。
-    @Published private(set) var backgroundJobRows: [BackgroundJobRow] = []
-    @Published private(set) var backgroundJobMessages: [String: String] = [:]
-    @Published private(set) var backgroundJobOperations: Set<String> = []
+    private(set) var backgroundJobRows: [BackgroundJobRow] = []
+    private(set) var backgroundJobMessages: [String: String] = [:]
+    private(set) var backgroundJobOperations: Set<String> = []
     /// 后台任务整块是否展开。默认收起，只留一行摘要；用户点开的选择要跨次打开面板记住。
-    @Published private(set) var backgroundJobsExpanded: Bool
-    @Published private(set) var unclaimedTerminals: [UnclaimedTerminalEntry] = []
+    private(set) var backgroundJobsExpanded: Bool
+    private(set) var unclaimedTerminals: [UnclaimedTerminalEntry] = []
     /// 只有他自己点刷新按钮时才为真。面板打开时的自动刷新**不点亮**它——
     /// Falcon 2026-08-24：他没点任何东西，界面就不该自己转给他看。
-    /// 这还顺带省掉两次整面板刷新：这是个 @Published，自动刷新每次进出都要
-    /// 发一次通知，正好落在他点开面板往下滑的那一两秒里。
-    @Published private(set) var isOfficialUsageRefreshing = false
-    /// 真正的并发闸，跟界面无关，所以**不是** @Published，改它不惊动面板。
-    private var officialUsageFetchInFlight = false
-    @Published private(set) var isOfficialUsageRefreshCoolingDown = false
-    @Published private(set) var loginItemPresentation: LoginItemPanelPresentation = .disabled
-    @Published private(set) var paths: SentinelPaths
-    @Published private(set) var watchDirectorySource: WatchDirectoryResolution.Source
+    private(set) var isOfficialUsageRefreshing = false
+    /// 真正的并发闸，跟界面无关；不进 Observation，改它不惊动任何 view。
+    @ObservationIgnored private var officialUsageFetchInFlight = false
+    private(set) var isOfficialUsageRefreshCoolingDown = false
+    private(set) var loginItemPresentation: LoginItemPanelPresentation = .disabled
+    private(set) var paths: SentinelPaths
+    private(set) var watchDirectorySource: WatchDirectoryResolution.Source
+    /// 本机身份缓存。原来面板 body 里每个 hostBadge 都现调 LocalHostIdentity.current()，
+    /// 一次就是一趟 NSHost.localizedName → SCPreferences 读盘解析 XML（Time Profiler
+    /// 抓到它躺在主线程 hang 窗口里）。现在开机算一次，之后每轮磁盘刷新在后台线程
+    /// 复核，变了才发布。
+    private(set) var localHost: LocalHostIdentity = .current()
     let settingsModel: SentinelSettingsModel
-    private(set) var historyRetainCount: Int
+    @ObservationIgnored private(set) var historyRetainCount: Int
 
     var isWatchDirectoryLocked: Bool {
         watchDirectorySource.isLockedByEnvironment
@@ -48,45 +60,47 @@ final class SentinelStore: ObservableObject {
         )
     }
 
-    private let defaults: UserDefaults
-    private let environment: [String: String]
-    private let notifier: SentinelNotifier
-    private let loginItemRegistrar: any LoginItemRegistrar
-    private let lineRegistryCache: CodexLineRegistryCache
-    private let lineStatusCache: LineStatusFileCache
-    private let otherCodexProcessReader: @Sendable (Set<Int>) -> [OtherCodexProcess]
-    private let now: @Sendable () -> Date
-    private let aioUsageClient: AIOUsageClient
-    private let launchctlRunner: any LaunchctlRunning
-    private let disabledJobsStore: DisabledJobsStore
-    private let fileManager: FileManager
-    private let launchctlUID: Int32
-    private var statusTimer: Timer?
-    private var aioTimer: Timer?
-    private var inputStatusTimer: Timer?
-    private var officialUsageTimer: Timer?
-    private var cleanupTimer: Timer?
-    private var aioRefreshInFlight = false
-    private var aioRefreshIncludesUsage = false
-    private var inputStatusRefreshInFlight = false
-    private var lastAIORefreshAt: Date?
-    private var lastAIOUsageRefreshAt: Date?
-    private var lastDisabledAIOUsageRefreshAt: Date?
-    private var lastInputStatusRefreshAt: Date?
-    private var lastOfficialUsageAttemptAt: Date?
-    private var lastPanelOpenFullRefreshAt: Date?
-    private var hasStarted = false
+    @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let environment: [String: String]
+    @ObservationIgnored private let notifier: SentinelNotifier
+    @ObservationIgnored private let loginItemRegistrar: any LoginItemRegistrar
+    @ObservationIgnored private let lineRegistryCache: CodexLineRegistryCache
+    @ObservationIgnored private let lineStatusCache: LineStatusFileCache
+    @ObservationIgnored private let otherCodexProcessReader: @Sendable (Set<Int>) -> [OtherCodexProcess]
+    @ObservationIgnored private let now: @Sendable () -> Date
+    @ObservationIgnored private let aioUsageClient: AIOUsageClient
+    @ObservationIgnored private let launchctlRunner: any LaunchctlRunning
+    @ObservationIgnored private let disabledJobsStore: DisabledJobsStore
+    @ObservationIgnored private let fileManager: FileManager
+    @ObservationIgnored private let launchctlUID: Int32
+    /// 滚动期间挂起后台刷新的上屏；见 ScrollPublishGate。用户手动操作不走它。
+    @ObservationIgnored let scrollPublishGate = ScrollPublishGate()
+    @ObservationIgnored private var statusTimer: Timer?
+    @ObservationIgnored private var aioTimer: Timer?
+    @ObservationIgnored private var inputStatusTimer: Timer?
+    @ObservationIgnored private var officialUsageTimer: Timer?
+    @ObservationIgnored private var cleanupTimer: Timer?
+    @ObservationIgnored private var aioRefreshInFlight = false
+    @ObservationIgnored private var aioRefreshIncludesUsage = false
+    @ObservationIgnored private var inputStatusRefreshInFlight = false
+    @ObservationIgnored private var lastAIORefreshAt: Date?
+    @ObservationIgnored private var lastAIOUsageRefreshAt: Date?
+    @ObservationIgnored private var lastDisabledAIOUsageRefreshAt: Date?
+    @ObservationIgnored private var lastInputStatusRefreshAt: Date?
+    @ObservationIgnored private var lastOfficialUsageAttemptAt: Date?
+    @ObservationIgnored private var lastPanelOpenFullRefreshAt: Date?
+    @ObservationIgnored private var hasStarted = false
     /// 磁盘读取慢时不排队；定时器或面板打开的下一轮直接跳过。
-    private var diskRefreshInFlight = false
-    private var isPanelPresented = false
-    private var pendingAIOUsageRefresh = false
-    private var relayRecoveryCoordinator = RelayRecoveryProbeCoordinator()
-    private(set) var statusDiskRefreshCountForTests = 0
-    private(set) var aioUsageRefreshCountForTests = 0
-    private(set) var inputStatusRefreshCountForTests = 0
-    private(set) var officialUsageRefreshCountForTests = 0
-    private(set) var lastStatusDiskReadWasOnMainThreadForTests = false
-    private(set) var scheduledStatusTimerInterval: TimeInterval = 0
+    @ObservationIgnored private var diskRefreshInFlight = false
+    @ObservationIgnored private var isPanelPresented = false
+    @ObservationIgnored private var pendingAIOUsageRefresh = false
+    @ObservationIgnored private var relayRecoveryCoordinator = RelayRecoveryProbeCoordinator()
+    @ObservationIgnored private(set) var statusDiskRefreshCountForTests = 0
+    @ObservationIgnored private(set) var aioUsageRefreshCountForTests = 0
+    @ObservationIgnored private(set) var inputStatusRefreshCountForTests = 0
+    @ObservationIgnored private(set) var officialUsageRefreshCountForTests = 0
+    @ObservationIgnored private(set) var lastStatusDiskReadWasOnMainThreadForTests = false
+    @ObservationIgnored private(set) var scheduledStatusTimerInterval: TimeInterval = 0
 
     init(
         paths: SentinelPaths? = nil,
@@ -443,7 +457,7 @@ final class SentinelStore: ObservableObject {
         let includeOtherProcesses = isPanelPresented
         let reader = otherCodexProcessReader
         let env = environment
-        let snapshot = await withCheckedContinuation { continuation in
+        let (snapshot, refreshedHost) = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let loaded = StatusDiskReader.load(
                     logsDirectory: logsDirectory,
@@ -457,11 +471,27 @@ final class SentinelStore: ObservableObject {
                     otherCodexProcessReader: reader,
                     environment: env
                 )
-                continuation.resume(returning: loaded)
+                // 本机身份复核也放后台线程：NSHost.localizedName 要读
+                // SystemConfiguration 的 plist，不许在主线程做。
+                continuation.resume(returning: (loaded, LocalHostIdentity.current()))
             }
         }
         diskRefreshInFlight = false
         lastStatusDiskReadWasOnMainThreadForTests = snapshot.readOnMainThread
+        scrollPublishGate.publish(surface: .statuses) { [weak self] in
+            self?.applyStatusSnapshot(snapshot, refreshedHost: refreshedHost)
+        }
+    }
+
+    /// 一轮磁盘快照的上屏动作。跨面数据（aio / inputStatus）在**执行时**从 self 读，
+    /// 不在闭包创建时捕获——滚动挂起可能让这段延后执行，捕获旧值会把别的面倒退回去。
+    private func applyStatusSnapshot(
+        _ snapshot: StatusDiskSnapshot,
+        refreshedHost: LocalHostIdentity
+    ) {
+        if localHost != refreshedHost {
+            localHost = refreshedHost
+        }
         // 失败/完成的 progress.json 只是历史残留，界面不展示；不要把它
         // 发布成一次状态变化，避免每轮空转给菜单栏再发一条通知。
         let nextPackagingProgress = snapshot.packagingProgress?.isActive == true
@@ -580,6 +610,9 @@ final class SentinelStore: ObservableObject {
         isPanelPresented = presented
         rescheduleStatusTimer()
         guard presented else {
+            // 面板一关，滚动挂起没有意义了；把攒着的上屏立即放行，
+            // 下次打开时数据是新的。
+            scrollPublishGate.flushNow()
             return
         }
         await refreshOnPanelOpenIfNeeded()
@@ -666,16 +699,21 @@ final class SentinelStore: ObservableObject {
             if self.isOfficialUsageRefreshing {
                 self.isOfficialUsageRefreshing = false
             }
-            switch result {
-            case let .success(snapshot):
-                self.setOfficialUsageIfChanged(snapshot)
-            case let .failure(error):
-                self.setOfficialUsageIfChanged(
-                    self.officialUsage.preservingLastSuccess(
-                        errorMessage: error.userMessage,
-                        failedAt: Date()
+            self.scrollPublishGate.publish(surface: .officialUsage) { [weak self] in
+                guard let self else {
+                    return
+                }
+                switch result {
+                case let .success(snapshot):
+                    self.setOfficialUsageIfChanged(snapshot)
+                case let .failure(error):
+                    self.setOfficialUsageIfChanged(
+                        self.officialUsage.preservingLastSuccess(
+                            errorMessage: error.userMessage,
+                            failedAt: Date()
+                        )
                     )
-                )
+                }
             }
         }
     }
@@ -771,6 +809,19 @@ final class SentinelStore: ObservableObject {
         if attemptedDisabledUsage {
             lastDisabledAIOUsageRefreshAt = timestamp
         }
+        scrollPublishGate.publish(surface: .aio) { [weak self] in
+            self?.applyAIOSnapshot(snapshot)
+        }
+        if pendingAIOUsageRefresh {
+            pendingAIOUsageRefresh = false
+            if isPanelPresented {
+                await refreshAIO(force: true, includeUsage: true)
+            }
+        }
+    }
+
+    /// AIO 面的上屏动作；其余面在执行时从 self 读，理由同 applyStatusSnapshot。
+    private func applyAIOSnapshot(_ snapshot: AIOSnapshot) {
         apply(
             lines: lines,
             aio: snapshot,
@@ -778,12 +829,6 @@ final class SentinelStore: ObservableObject {
             lineRegistry: lineRegistry,
             inputStatus: inputStatus
         )
-        if pendingAIOUsageRefresh {
-            pendingAIOUsageRefresh = false
-            if isPanelPresented {
-                await refreshAIO(force: true, includeUsage: true)
-            }
-        }
     }
 
     private func refreshUsageConcurrently(
@@ -829,13 +874,10 @@ final class SentinelStore: ObservableObject {
                 // 替换掉。已经有数字的行一律攒到最后一次性换：他滚动时面板不该
                 // 被连续 N 次整体刷新，那正是「滑一下卡一下」的来源。
                 if cachedUsage[providerID]?.hasDisplayableBalanceNumber != true {
-                    apply(
-                        lines: lines,
-                        aio: base.replacingUsage(cached),
-                        otherCodexProcesses: otherCodexProcesses,
-                        lineRegistry: lineRegistry,
-                        inputStatus: inputStatus
-                    )
+                    let incremental = base.replacingUsage(cached)
+                    scrollPublishGate.publish(surface: .aio) { [weak self] in
+                        self?.applyAIOSnapshot(incremental)
+                    }
                 }
             }
         }
@@ -879,20 +921,25 @@ final class SentinelStore: ObservableObject {
         }
 
         inputStatusRefreshInFlight = false
-        let snapshot: InputStatusSnapshot
-        switch result {
-        case let .success(value):
-            snapshot = value
-        case let .failure(error):
-            snapshot = inputStatus.preservingData(withError: error.userMessage)
+        scrollPublishGate.publish(surface: .inputStatus) { [weak self] in
+            guard let self else {
+                return
+            }
+            let snapshot: InputStatusSnapshot
+            switch result {
+            case let .success(value):
+                snapshot = value
+            case let .failure(error):
+                snapshot = self.inputStatus.preservingData(withError: error.userMessage)
+            }
+            self.apply(
+                lines: self.lines,
+                aio: self.aio,
+                otherCodexProcesses: self.otherCodexProcesses,
+                lineRegistry: self.lineRegistry,
+                inputStatus: snapshot
+            )
         }
-        apply(
-            lines: lines,
-            aio: aio,
-            otherCodexProcesses: otherCodexProcesses,
-            lineRegistry: lineRegistry,
-            inputStatus: snapshot
-        )
     }
 
     func openLogsDirectory() {
@@ -909,7 +956,6 @@ final class SentinelStore: ObservableObject {
         boardWindow suppliedBoardWindow: SentinelBoardWindow? = nil
     ) {
         let lineInputsChanged = self.lines != lines || self.lineRegistry != lineRegistry
-        var derivedPresentationChanged = false
         notifier.observe(
             lines: lines,
             aio: aio,
@@ -929,16 +975,15 @@ final class SentinelStore: ObservableObject {
             self.lineRegistry = lineRegistry
         }
         if let suppliedLineGroups {
+            // Observation 下派生快照的赋值只惊动读它的分区，不再需要
+            // @Published 时代「换 Published 壳不发通知 + 借同值 lines 赋值
+            // 触发 UI」那套黑招。
             if lineGroups != suppliedLineGroups {
-                // 两个派生快照跟随同一轮 lines/registry 变化，不再各自制造一条
-                // objectWillChange；真实的输入属性负责这轮 UI 失效通知。
-                _lineGroups = Published(initialValue: suppliedLineGroups)
-                derivedPresentationChanged = true
+                lineGroups = suppliedLineGroups
             }
             if let suppliedBoardWindow,
                boardWindow != suppliedBoardWindow {
-                _boardWindow = Published(initialValue: suppliedBoardWindow)
-                derivedPresentationChanged = true
+                boardWindow = suppliedBoardWindow
             }
         } else if lineInputsChanged {
             let nextLineGroups = SentinelAggregation.lineGroups(
@@ -946,19 +991,12 @@ final class SentinelStore: ObservableObject {
                 registry: lineRegistry
             )
             if lineGroups != nextLineGroups {
-                _lineGroups = Published(initialValue: nextLineGroups)
-                derivedPresentationChanged = true
+                lineGroups = nextLineGroups
             }
             let nextBoardWindow = SentinelBoardWindow.snapshot(groups: nextLineGroups)
             if boardWindow != nextBoardWindow {
-                _boardWindow = Published(initialValue: nextBoardWindow)
-                derivedPresentationChanged = true
+                boardWindow = nextBoardWindow
             }
-        }
-        // 状态文件内容没变但「活跃 / 最近完成」随时间跨阈值时，输入属性本身
-        // 不会变化；借一次同值 lines 赋值把这一轮派生快照送进面板。
-        if derivedPresentationChanged && !lineInputsChanged {
-            self.lines = lines
         }
         if self.inputStatus != inputStatus {
             self.inputStatus = inputStatus
@@ -977,21 +1015,9 @@ final class SentinelStore: ObservableObject {
         }
     }
 
-    func emitStatusRefreshPublicationsForTests() {
-        lines = lines
-        aio = aio
-        otherCodexProcesses = otherCodexProcesses
-        lineRegistry = lineRegistry
-        lineGroups = lineGroups
-        boardWindow = boardWindow
-        inputStatus = inputStatus
-        channelStatus = channelStatus
-        backgroundJobs = backgroundJobs
-        backgroundJobRows = backgroundJobRows
-        packagingProgress = packagingProgress
-        unclaimedTerminals = unclaimedTerminals
-        officialUsage = officialUsage
-    }
+    // 旧 emitStatusRefreshPublicationsForTests（把每个 @Published 原值重发一遍）
+    // 已删：实测这台 macOS 26 的 Observation 运行时对同值赋值不发通知，
+    // 它在新架构下是空操作；唯一的消费者（设置窗对照测试）已改用真实数据变化驱动。
 }
 
 enum RelayAddFailureMessage {

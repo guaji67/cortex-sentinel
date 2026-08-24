@@ -1,5 +1,5 @@
 import AppKit
-import Combine
+import Observation
 import SwiftUI
 
 @MainActor
@@ -40,7 +40,7 @@ final class SentinelStatusBarController: NSObject, NSPopoverDelegate {
     private let store: SentinelStore
     private let popover: NSPopover
     private var statusItem: NSStatusItem?
-    private var statusObservation: AnyCancellable?
+    private var statusObservationActive = false
     private var outsideClickMonitor: Any?
     private var openSettingsObserver: NSObjectProtocol?
 
@@ -83,17 +83,18 @@ final class SentinelStatusBarController: NSObject, NSPopoverDelegate {
             width: SentinelTheme.Metrics.menuWidth,
             height: SentinelTheme.Metrics.menuHeight
         )
-        popover.contentViewController = NSHostingController(
+        let hosting = NSHostingController(
             rootView: SentinelMenuView(store: store)
         )
+        // 面板尺寸由 SentinelMenuView 的固定 frame 钉死。不给 sizingOptions 留任何
+        // 选项，NSHostingView 就不会在每次内容失效后再跑 minSize → sizeThatFits
+        // 那一整套约束重算——基线 Time Profiler 里 hang 窗口的大头就是这条链
+        // （updateConstraints → minSize → 整图再求值 + NSISEngine）。
+        hosting.sizingOptions = []
+        popover.contentViewController = hosting
 
-        statusObservation = store.$inputStatus
-            .combineLatest(store.$aio, store.$packagingProgress)
-            .sink { [weak self] _, _, _ in
-                Task { @MainActor [weak self] in
-                    self?.updateStatusItem()
-                }
-            }
+        statusObservationActive = true
+        observeStatusItemInputs()
 
         updateStatusItem()
         openSettingsObserver = DistributedNotificationCenter.default().addObserver(
@@ -115,7 +116,34 @@ final class SentinelStatusBarController: NSObject, NSPopoverDelegate {
                 self.popover.performClose(nil)
             }
         }
+        store.scrollPublishGate.installLocalScrollWheelMonitor()
         store.start()
+    }
+
+    /// 状态栏那张图依赖的三个面（Input 探针 / 余额 / 打包进度）用 Observation
+    /// 盯着；变化落到主队列的下一拍再重画并重挂，同一拍内的连环写只画一次。
+    /// 旧实现是 Combine 订三个 @Published；@Observable 迁移后这里是唯一还想
+    /// 「跨属性订阅」的地方，用递归 withObservationTracking 表达。
+    private func observeStatusItemInputs() {
+        guard statusObservationActive else {
+            return
+        }
+        withObservationTracking { [weak self] in
+            guard let self else {
+                return
+            }
+            _ = self.store.inputStatus
+            _ = self.store.aio
+            _ = self.store.packagingProgress
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else {
+                    return
+                }
+                self.updateStatusItem()
+                self.observeStatusItemInputs()
+            }
+        }
     }
 
     /// 把菜单栏那块面板弹出来。已打开则不动，避免 reopen 把面板关掉。

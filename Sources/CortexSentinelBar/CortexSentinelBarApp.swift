@@ -393,11 +393,11 @@ private final class SentinelSmokePopoverController: NSObject, NSPopoverDelegate 
 }
 
 private struct CortexSentinelSmokeApp: App {
-    @StateObject private var store: SentinelStore
+    @State private var store: SentinelStore
 
     init() {
         let store = SentinelStore()
-        _store = StateObject(wrappedValue: store)
+        _store = State(wrappedValue: store)
         NSApplication.shared.setActivationPolicy(.regular)
         DispatchQueue.main.async {
             store.start()

@@ -326,6 +326,18 @@ final class SentinelSettingsTests: XCTestCase {
         )
         settingsHost.view.frame = NSRect(x: 0, y: 0, width: 460, height: 800)
         storeHost.view.frame = NSRect(x: 0, y: 0, width: 40, height: 20)
+        // @Observable 迁移后，不挂窗口的 NSHostingView 不再调度更新；
+        // 给两个宿主各配一扇不上屏的窗口，让失效能走到 body。
+        let settingsWindow = NSWindow(contentViewController: settingsHost)
+        let storeWindow = NSWindow(contentViewController: storeHost)
+        settingsWindow.isReleasedWhenClosed = false
+        storeWindow.isReleasedWhenClosed = false
+        settingsWindow.orderBack(nil)
+        storeWindow.orderBack(nil)
+        defer {
+            settingsWindow.orderOut(nil)
+            storeWindow.orderOut(nil)
+        }
         settingsHost.view.layoutSubtreeIfNeeded()
         storeHost.view.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
@@ -335,8 +347,16 @@ final class SentinelSettingsTests: XCTestCase {
         XCTAssertGreaterThan(settingsBaseline, 0)
         XCTAssertGreaterThan(storeBaseline, 0)
 
-        for _ in 0..<4 {
-            store.emitStatusRefreshPublicationsForTests()
+        // Observation 运行时对同值赋值不发通知（实测），所以这里必须
+        // 用真实的数据变化来驱动，不能再靠原地重发一遍旧值。
+        for round in 0..<4 {
+            store.apply(
+                lines: [probeLine(round: round)],
+                aio: store.aio,
+                otherCodexProcesses: store.otherCodexProcesses,
+                lineRegistry: store.lineRegistry,
+                inputStatus: store.inputStatus
+            )
         }
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
 
@@ -349,6 +369,21 @@ final class SentinelSettingsTests: XCTestCase {
             storeCounter.count,
             storeBaseline,
             "对照：订阅整个 store 的视图必须随刷新重绘"
+        )
+    }
+
+    private func probeLine(round: Int) -> LineStatus {
+        LineStatus(
+            sourceFile: URL(fileURLWithPath: "/tmp/settings-probe-\(round).status.json"),
+            slug: "settings-probe-\(round)",
+            workdir: nil,
+            branch: nil,
+            state: .running,
+            restarts: 0,
+            rolloutAgeSeconds: nil,
+            updatedAt: nil,
+            sourceModifiedAt: nil,
+            relay: nil
         )
     }
 

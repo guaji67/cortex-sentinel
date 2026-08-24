@@ -1,4 +1,3 @@
-import Combine
 import Foundation
 import SQLite3
 import XCTest
@@ -59,19 +58,23 @@ final class PanelBalanceRefreshTests: XCTestCase {
             ]
         )
         let store = makeStore(loader: loader)
-        var successCounts: [Int] = []
-        let cancellable = store.$aio.sink { snapshot in
-            let count = snapshot.providers.filter {
-                if case .success = $0.usage { return true }
-                return false
-            }.count
-            if successCounts.last != count {
-                successCounts.append(count)
-            }
-        }
+        // 逐笔发布的取值序列（willSet 旧值 + 收尾现值，等价于旧 $aio.sink 序列）。
+        let recorder = ValueSequenceRecorder(
+            reading: { [weak store] () -> Int in
+                guard let store else {
+                    return -1
+                }
+                return store.aio.providers.filter {
+                    if case .success = $0.usage { return true }
+                    return false
+                }.count
+            },
+            dedupBy: ==
+        )
 
         await store.setPanelPresented(true)
 
+        let successCounts = recorder.finish()
         XCTAssertEqual(Set(loader.recordedIDs), [1, 2, 3])
         XCTAssertEqual(loader.peakInFlight, 3)
         XCTAssertTrue(
@@ -88,7 +91,6 @@ final class PanelBalanceRefreshTests: XCTestCase {
             store.aio.providers.compactMap { $0.usage.usage?.remaining },
             [7.25, 7.25, 7.25]
         )
-        withExtendedLifetime(cancellable) {}
     }
 
     func testPanelOpenSkipsRefreshAt29SecondsAndRefreshesAt31() async throws {
@@ -193,15 +195,20 @@ final class PanelBalanceRefreshTests: XCTestCase {
             delayNanoseconds: 80_000_000
         )
         let store = makeStore(loader: loader)
-        var sawLoading = false
-        let cancellable = store.$aio.sink { snapshot in
-            if snapshot.providers.contains(where: {
-                if case .loading = $0.usage { return true }
-                return false
-            }) {
-                sawLoading = true
-            }
-        }
+        // 每笔发布都会以「下一笔的旧值」或「收尾现值」的身份被看到，
+        // 任何一次写入过 .loading 的中间态都逃不过这份序列。
+        let recorder = ValueSequenceRecorder(
+            reading: { [weak store] () -> Bool in
+                guard let store else {
+                    return false
+                }
+                return store.aio.providers.contains(where: {
+                    if case .loading = $0.usage { return true }
+                    return false
+                })
+            },
+            dedupBy: { _, _ in false }
+        )
 
         await store.setPanelPresented(true)
         try await waitUntil { loader.recordedIDs.count == 3 }
@@ -211,7 +218,7 @@ final class PanelBalanceRefreshTests: XCTestCase {
                 return false
             }
         }
-        withExtendedLifetime(cancellable) {}
+        let sawLoading = recorder.finish().contains(true)
         XCTAssertFalse(sawLoading, "刷新余额期间任何一行都不许进入查询中")
     }
 
@@ -231,19 +238,22 @@ final class PanelBalanceRefreshTests: XCTestCase {
             store.aio.providers.allSatisfy { $0.usage.hasDisplayableBalanceNumber }
         }
 
-        var sawLoading = false
-        var sawNumberDisappear = false
-        let cancellable = store.$aio.sink { snapshot in
-            if snapshot.providers.contains(where: {
-                if case .loading = $0.usage { return true }
-                return false
-            }) {
-                sawLoading = true
-            }
-            if snapshot.providers.contains(where: { !$0.usage.hasDisplayableBalanceNumber }) {
-                sawNumberDisappear = true
-            }
-        }
+        let recorder = ValueSequenceRecorder(
+            reading: { [weak store] () -> (loading: Bool, missingNumber: Bool) in
+                guard let store else {
+                    return (false, false)
+                }
+                let loading = store.aio.providers.contains(where: {
+                    if case .loading = $0.usage { return true }
+                    return false
+                })
+                let missing = store.aio.providers.contains(where: {
+                    !$0.usage.hasDisplayableBalanceNumber
+                })
+                return (loading, missing)
+            },
+            dedupBy: { _, _ in false }
+        )
 
         // 官方额度那条线自己也会发通知，先让它落定，这条测的是余额刷新那一段。
         try await Task.sleep(nanoseconds: 200_000_000)
@@ -255,7 +265,9 @@ final class PanelBalanceRefreshTests: XCTestCase {
                 bypassMinimumInterval: true
             )
         }
-        withExtendedLifetime(cancellable) {}
+        let observed = recorder.finish()
+        let sawLoading = observed.contains(where: \.loading)
+        let sawNumberDisappear = observed.contains(where: \.missingNumber)
 
         XCTAssertFalse(sawLoading, "已经有数字了，刷新不许把行变成查询中")
         XCTAssertFalse(
@@ -292,11 +304,7 @@ final class PanelBalanceRefreshTests: XCTestCase {
     }
 
     private func countPublications(_ store: SentinelStore, _ body: () async -> Void) async -> Int {
-        var count = 0
-        let cancellable = store.objectWillChange.sink { count += 1 }
-        await body()
-        withExtendedLifetime(cancellable) {}
-        return count
+        await countStoreChanges(store, during: body)
     }
 
     private func waitUntil(

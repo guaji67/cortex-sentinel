@@ -659,7 +659,7 @@ struct SentinelSettingsView: View {
 }
 
 private struct StoreObservingProbeView: View {
-    @ObservedObject var store: SentinelStore
+    var store: SentinelStore
     var bodyCounter: SentinelViewBodyCounter
 
     var body: some View {

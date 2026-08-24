@@ -1,4 +1,3 @@
-import Combine
 import Foundation
 import XCTest
 @testable import CortexSentinelBar
@@ -80,11 +79,10 @@ final class IdleRefreshCostTests: XCTestCase {
         await store.refreshStatuses()
         store.start()
         try await Task.sleep(nanoseconds: 1_200_000_000)
-        var count = 0
-        let cancellable = store.objectWillChange.sink { count += 1 }
+        let counter = StoreChangeCounter(reading: StoreSurfaces.legacyPanelRead(store))
         try await Task.sleep(nanoseconds: 60_000_000_000)
-        withExtendedLifetime(cancellable) {}
-        XCTAssertLessThan(count, 10, "面板关着静置 60 秒 objectWillChange=\(count)")
+        counter.stop()
+        XCTAssertLessThan(counter.count, 10, "面板关着静置 60 秒发布次数=\(counter.count)")
         XCTAssertEqual(reader.callCount, 0)
     }
 
@@ -219,11 +217,7 @@ final class IdleRefreshCostTests: XCTestCase {
     }
 
     private func countPublications(_ store: SentinelStore, _ body: () async -> Void) async -> Int {
-        var count = 0
-        let cancellable = store.objectWillChange.sink { count += 1 }
-        await body()
-        withExtendedLifetime(cancellable) {}
-        return count
+        await countStoreChanges(store, during: body)
     }
 
     private func write(_ name: String, _ contents: String) throws {

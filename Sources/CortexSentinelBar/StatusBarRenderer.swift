@@ -1,5 +1,13 @@
 import AppKit
 
+/// 状态栏那张图的输入快照。三个面合成一个非 Optional 值，
+/// Observation 才能稳定追上 packagingProgress 从 nil 到 running 的跳变。
+struct StatusBarRenderState: Equatable {
+    var inputStatus: InputStatusSnapshot = .empty
+    var aio: AIOSnapshot = .unconfigured
+    var packagingProgress: PackagingProgressSnapshot?
+}
+
 enum SentinelStatusBarRenderer {
     static func image(
         probes: [InputStatusDisplayProbe],

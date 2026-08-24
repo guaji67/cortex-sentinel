@@ -124,12 +124,25 @@ struct SentinelHeaderSection: View {
     }
 }
 
+/// 面板打包分区的挂载判据。分区 View 和生产路径父 body 都不在这里之外另写一套。
+@MainActor
+enum SentinelPackagingPresentation {
+    static func activeSnapshot(from store: SentinelStore) -> PackagingProgressSnapshot? {
+        guard let packaging = store.packagingProgress, packaging.isActive else {
+            return nil
+        }
+        return packaging
+    }
+}
+
 /// Cortex 打包进度：只在 running 时出现，failed/completed 残留不占地方。读：packagingProgress。
 struct SentinelPackagingSection: View {
     var store: SentinelStore
+    var bodyCounter: SentinelViewBodyCounter? = nil
 
     var body: some View {
-        if let packaging = store.packagingProgress, packaging.isActive {
+        let _ = bodyCounter?.increment()
+        if let packaging = SentinelPackagingPresentation.activeSnapshot(from: store) {
             VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xs) {
                 HStack(alignment: .firstTextBaseline, spacing: SentinelTheme.Spacing.sm) {
                     Image(systemName: "shippingbox.fill")

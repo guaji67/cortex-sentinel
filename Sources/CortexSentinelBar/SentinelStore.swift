@@ -23,7 +23,13 @@ final class SentinelStore: ObservableObject {
     /// 后台任务整块是否展开。默认收起，只留一行摘要；用户点开的选择要跨次打开面板记住。
     @Published private(set) var backgroundJobsExpanded: Bool
     @Published private(set) var unclaimedTerminals: [UnclaimedTerminalEntry] = []
+    /// 只有他自己点刷新按钮时才为真。面板打开时的自动刷新**不点亮**它——
+    /// Falcon 2026-08-24：他没点任何东西，界面就不该自己转给他看。
+    /// 这还顺带省掉两次整面板刷新：这是个 @Published，自动刷新每次进出都要
+    /// 发一次通知，正好落在他点开面板往下滑的那一两秒里。
     @Published private(set) var isOfficialUsageRefreshing = false
+    /// 真正的并发闸，跟界面无关，所以**不是** @Published，改它不惊动面板。
+    private var officialUsageFetchInFlight = false
     @Published private(set) var isOfficialUsageRefreshCoolingDown = false
     @Published private(set) var loginItemPresentation: LoginItemPanelPresentation = .disabled
     @Published private(set) var paths: SentinelPaths
@@ -617,14 +623,14 @@ final class SentinelStore: ObservableObject {
         bypassMinimumInterval: Bool = false
     ) {
         let timestamp = self.now()
-        if isOfficialUsageRefreshing {
+        if officialUsageFetchInFlight {
             return
         }
         if !bypassMinimumInterval {
             guard OfficialUsageRefreshPolicy.shouldStart(
                 reason: reason,
                 lastAttemptAt: lastOfficialUsageAttemptAt,
-                isInFlight: isOfficialUsageRefreshing,
+                isInFlight: officialUsageFetchInFlight,
                 now: timestamp,
                 panelOpenInterval: SentinelSettings.balanceRecheckInterval(defaults: defaults).rawValue
             ) else {
@@ -633,7 +639,10 @@ final class SentinelStore: ObservableObject {
         }
 
         officialUsageRefreshCountForTests += 1
-        isOfficialUsageRefreshing = true
+        officialUsageFetchInFlight = true
+        if reason == .manual {
+            isOfficialUsageRefreshing = true
+        }
         lastOfficialUsageAttemptAt = timestamp
         if reason == .manual {
             beginOfficialUsageManualCooldown()
@@ -653,7 +662,10 @@ final class SentinelStore: ObservableObject {
             guard let self else {
                 return
             }
-            self.isOfficialUsageRefreshing = false
+            self.officialUsageFetchInFlight = false
+            if self.isOfficialUsageRefreshing {
+                self.isOfficialUsageRefreshing = false
+            }
             switch result {
             case let .success(snapshot):
                 self.setOfficialUsageIfChanged(snapshot)
@@ -786,19 +798,20 @@ final class SentinelStore: ObservableObject {
             targets: targets,
             includeDisabled: includeDisabled
         )
+        // Falcon 2026-08-24 令：「查询中」这个中间态一律不许露面，查完直接换数字。
+        //
+        // 原来这里干两件事，两件都在他滚动的时候把面板搅得没法用：
+        //   1. 先把每个账号的 usage 覆盖成 .loading 再 apply 一次。后果不只是文案闪
+        //      一下——每行冒出一个转圈动画，文案从数字变成「查询中」宽度也变；更狠的是
+        //      所有账号同时没有数字，BalanceSectionPresentation 会判成 .compact，
+        //      **整个余额块从展开塌成一行**，结果回来又弹回展开。面板内容高度在他手指
+        //      滑动的过程中一缩一涨，滚动位置被反复夹回去，手感就是「滑不动、卡死」。
+        //   2. 每收到一个账号的结果就 apply 一次。N 个账号 = N+1 次整面板刷新，
+        //      全挤在他刚点开往下滑的那两秒里。
+        //
+        // 现在：查询期间原样显示上一次的数字（不写 .loading），全部回来了由调用方
+        // apply 一次。数字没变时 apply 内部的相等判断会让这一次刷新连通知都不发。
         var cached = cachedUsage
-        var loading = cached
-        for target in ordered {
-            loading[target.id] = .loading
-        }
-        apply(
-            lines: lines,
-            aio: base.replacingUsage(loading),
-            otherCodexProcesses: otherCodexProcesses,
-            lineRegistry: lineRegistry,
-            inputStatus: inputStatus
-        )
-
         await withTaskGroup(of: (Int64, AIOUsageStatus).self) { group in
             for target in ordered {
                 group.addTask {
@@ -811,13 +824,19 @@ final class SentinelStore: ObservableObject {
                     fresh: [providerID: status],
                     providers: base.providers
                 )
-                apply(
-                    lines: lines,
-                    aio: base.replacingUsage(cached),
-                    otherCodexProcesses: otherCodexProcesses,
-                    lineRegistry: lineRegistry,
-                    inputStatus: inputStatus
-                )
+                // 只有这一行本来就没数字可显示时才立刻上屏——那种情况行上写着
+                // 「等待查询」，早一点把数字填进去对他有用，而且不会有任何东西被
+                // 替换掉。已经有数字的行一律攒到最后一次性换：他滚动时面板不该
+                // 被连续 N 次整体刷新，那正是「滑一下卡一下」的来源。
+                if cachedUsage[providerID]?.hasDisplayableBalanceNumber != true {
+                    apply(
+                        lines: lines,
+                        aio: base.replacingUsage(cached),
+                        otherCodexProcesses: otherCodexProcesses,
+                        lineRegistry: lineRegistry,
+                        inputStatus: inputStatus
+                    )
+                }
             }
         }
         return base.replacingUsage(cached)

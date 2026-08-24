@@ -107,6 +107,23 @@ final class SentinelFileReaderTests: XCTestCase {
         XCTAssertEqual(line.processID, 11)
     }
 
+    func testParsesForceStartBlockForVisibleManualTakeoverMarker() {
+        let line = SentinelFileReader.parseLine(
+            data: Data(
+                #"{"state":"retrying","force_start":{"active":true,"activated_at":"2026-08-24T16:20:01+08:00","activated_by":"cortex_sentinel_panel"}}"#.utf8
+            ),
+            fallbackSlug: "manual-takeover",
+            sourceFile: URL(
+                fileURLWithPath: "/tmp/codex-babysitter-manual-takeover.status.json"
+            )
+        )
+
+        XCTAssertEqual(line.forceStart?.active, true)
+        XCTAssertEqual(line.forceStart?.activatedAt, "2026-08-24T16:20:01+08:00")
+        XCTAssertEqual(line.forceStart?.activatedBy, "cortex_sentinel_panel")
+        XCTAssertEqual(SentinelForceStartAction.activeBadgeText(for: line), "强制模式")
+    }
+
     func testClaudeOxAlphaEngineRawValuesBothMapToTheSameEngine() {
         XCTAssertEqual(LineEngine(rawValue: "claude"), .claudeOxAlpha)
         XCTAssertEqual(LineEngine(rawValue: "claude-oxalpha"), .claudeOxAlpha)

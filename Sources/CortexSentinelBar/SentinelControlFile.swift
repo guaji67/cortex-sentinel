@@ -26,6 +26,8 @@ enum SentinelControlError: LocalizedError, Equatable {
 enum SentinelControlFile {
     private static let slugPattern = try! NSRegularExpression(pattern: #"^[A-Za-z0-9._-]+$"#)
 
+    static let panelRequester = "cortex_sentinel_panel"
+
     @discardableResult
     static func requestProbe(
         slug: String,
@@ -38,6 +40,24 @@ enum SentinelControlFile {
             values: [
                 "action": "probe_now",
                 "requested_at": timestamp(now),
+            ]
+        )
+    }
+
+    @discardableResult
+    static func requestForceStart(
+        slug: String,
+        logsDirectory: URL,
+        requestedBy: String = panelRequester,
+        now: Date = Date()
+    ) throws -> URL {
+        try writeMerged(
+            slug: slug,
+            logsDirectory: logsDirectory,
+            values: [
+                "action": "force_start",
+                "requested_at": timestamp(now),
+                "requested_by": requestedBy,
             ]
         )
     }

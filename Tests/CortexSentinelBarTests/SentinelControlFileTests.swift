@@ -59,6 +59,29 @@ final class SentinelControlFileTests: XCTestCase {
         XCTAssertEqual(files, [target.lastPathComponent])
     }
 
+    func testForceStartWritesPanelRequestContractAndPreservesSettings() throws {
+        let target = try SentinelControlFile.controlURL(
+            slug: "manual-line",
+            logsDirectory: logsDirectory
+        )
+        try Data(#"{"max_restarts_override":7}"#.utf8).write(to: target)
+
+        let written = try SentinelControlFile.requestForceStart(
+            slug: "manual-line",
+            logsDirectory: logsDirectory,
+            now: date("2026-08-24T08:10:00Z")
+        )
+
+        XCTAssertEqual(written, target)
+        let payload = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: target)) as? [String: Any]
+        )
+        XCTAssertEqual(payload["action"] as? String, "force_start")
+        XCTAssertEqual(payload["requested_at"] as? String, "2026-08-24T08:10:00Z")
+        XCTAssertEqual(payload["requested_by"] as? String, "cortex_sentinel_panel")
+        XCTAssertEqual(payload["max_restarts_override"] as? Int, 7)
+    }
+
     func testSettingsAcceptContractBoundaryValues() throws {
         try SentinelControlFile.updateSettings(
             slug: "boundary.line-1",

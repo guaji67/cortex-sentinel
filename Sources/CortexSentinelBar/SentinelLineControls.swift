@@ -1,9 +1,71 @@
 import SwiftUI
 
-private enum ProbeButtonState: Equatable {
+private enum ForceStartButtonState: Equatable {
     case idle
-    case notified
+    case sent
     case failed(String)
+}
+
+struct SentinelForceStartBatchResult: Equatable {
+    let selectedCount: Int
+    let sentCount: Int
+    let failedSlugs: [String]
+
+    var feedbackText: String {
+        guard !failedSlugs.isEmpty else {
+            return "已发出 \(sentCount) 条"
+        }
+        return "已发出 \(sentCount) 条，失败 \(failedSlugs.count) 条"
+    }
+}
+
+enum SentinelForceStartAction {
+    static func isCandidate(line: LineStatus, engine: LineEngine) -> Bool {
+        engine == .codex && !line.state.isTerminal && line.state != .running
+    }
+
+    static func candidates(in presentations: [LinePresentation]) -> [LineStatus] {
+        presentations.compactMap { presentation in
+            isCandidate(line: presentation.line, engine: presentation.engine)
+                ? presentation.line
+                : nil
+        }
+    }
+
+    static func requestAll(
+        in presentations: [LinePresentation],
+        logsDirectory: URL,
+        requestedBy: String = SentinelControlFile.panelRequester,
+        now: Date = Date()
+    ) -> SentinelForceStartBatchResult {
+        let selected = candidates(in: presentations)
+        var sentCount = 0
+        var failedSlugs: [String] = []
+
+        for line in selected {
+            do {
+                try SentinelControlFile.requestForceStart(
+                    slug: line.slug,
+                    logsDirectory: logsDirectory,
+                    requestedBy: requestedBy,
+                    now: now
+                )
+                sentCount += 1
+            } catch {
+                failedSlugs.append(line.slug)
+            }
+        }
+
+        return SentinelForceStartBatchResult(
+            selectedCount: selected.count,
+            sentCount: sentCount,
+            failedSlugs: failedSlugs
+        )
+    }
+
+    static func activeBadgeText(for line: LineStatus) -> String? {
+        line.forceStart?.active == true ? "强制模式" : nil
+    }
 }
 
 struct SentinelLineControls: View {
@@ -12,7 +74,7 @@ struct SentinelLineControls: View {
     let logsDirectory: URL
     let onShowSettings: (LineStatus) -> Void
 
-    @State private var probeState: ProbeButtonState = .idle
+    @State private var forceStartState: ForceStartButtonState = .idle
 
     init(
         line: LineStatus,
@@ -30,17 +92,18 @@ struct SentinelLineControls: View {
     var body: some View {
         if SentinelBoardCopy.showsLineSettings(for: engine) {
             HStack(spacing: SentinelTheme.Spacing.xs) {
-                if line.state == .waitingRelay {
-                    Button(action: requestProbe) {
-                        probeButtonLabel
+                if SentinelForceStartAction.isCandidate(line: line, engine: engine) {
+                    Button(action: requestForceStart) {
+                        forceStartButtonLabel
                     }
                     .buttonStyle(
                         SentinelLineControlButtonStyle(
                             width: SentinelTheme.Metrics.lineControlFeedbackWidth
                         )
                     )
-                    .help(probeHelpText)
-                    .accessibilityLabel(probeAccessibilityLabel)
+                    .help(forceStartHelpText)
+                    .accessibilityLabel(forceStartAccessibilityLabel)
+                    .accessibilityIdentifier("force-start-\(line.slug)")
                 }
 
                 Button {
@@ -60,54 +123,54 @@ struct SentinelLineControls: View {
     }
 
     @ViewBuilder
-    private var probeButtonLabel: some View {
-        switch probeState {
+    private var forceStartButtonLabel: some View {
+        switch forceStartState {
         case .idle:
             Image(systemName: "play.fill")
-        case .notified:
-            Text("已通知")
+        case .sent:
+            Text("已发出")
         case .failed:
             Text("失败")
         }
     }
 
-    private var probeHelpText: String {
-        switch probeState {
+    private var forceStartHelpText: String {
+        switch forceStartState {
         case .idle:
-            return "立即重探并继续"
-        case .notified:
-            return "已通知守护立即重探"
+            return "手动接管并强制开始"
+        case .sent:
+            return "已发出强制开始请求"
         case let .failed(message):
             return message
         }
     }
 
-    private var probeAccessibilityLabel: String {
-        switch probeState {
+    private var forceStartAccessibilityLabel: String {
+        switch forceStartState {
         case .idle:
-            return "立即继续 \(line.slug)"
-        case .notified:
-            return "已通知 \(line.slug)"
+            return "强制开始 \(line.slug)"
+        case .sent:
+            return "已发出强制开始 \(line.slug)"
         case .failed:
             return "通知失败 \(line.slug)"
         }
     }
 
-    private func requestProbe() {
+    private func requestForceStart() {
         do {
-            try SentinelControlFile.requestProbe(
+            try SentinelControlFile.requestForceStart(
                 slug: line.slug,
                 logsDirectory: logsDirectory
             )
-            probeState = .notified
+            forceStartState = .sent
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.4) {
-                guard probeState == .notified else {
+                guard forceStartState == .sent else {
                     return
                 }
-                probeState = .idle
+                forceStartState = .idle
             }
         } catch {
-            probeState = .failed("通知失败：\(error.localizedDescription)")
+            forceStartState = .failed("发出失败：\(error.localizedDescription)")
         }
     }
 }

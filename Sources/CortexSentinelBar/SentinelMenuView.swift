@@ -614,9 +614,8 @@ struct SentinelMenuView: View {
                 : SentinelTheme.Colors.foreground
             return ("剩 \(percentage)%", color)
         }
-        if store.isOfficialUsageRefreshing {
-            return ("查询中", SentinelTheme.Colors.secondaryForeground)
-        }
+        // 查询期间不改文案：有旧数字就继续显示旧数字（上面那个分支已经返回了），
+        // 没有数字就一直是「等待查询」，不许中途闪成「查询中」。
         if store.officialUsage.errorMessage != nil {
             return ("暂不可用", SentinelTheme.Colors.warning)
         }
@@ -683,13 +682,9 @@ struct SentinelMenuView: View {
 
             Spacer(minLength: SentinelTheme.Spacing.md)
 
-            if case .loading = provider.usage {
-                ProgressView()
-                    .progressViewStyle(.circular)
-                    .controlSize(.small)
-                    .frame(width: 14, height: 14)
-                    .accessibilityLabel("正在刷新余额")
-            }
+            // 刷新余额时这里原来会冒一个转圈动画。Falcon 2026-08-24：
+            // 「点了往下一滑，所有查询一转，整个下滑菜单就直接卡死」——
+            // 查询期间原样显示上一次的数字，不做任何加载态提示。
 
             Text(balance.text)
                 .font(SentinelTheme.Fonts.balanceAmount)
@@ -1507,7 +1502,9 @@ struct SentinelMenuView: View {
         case .idle:
             return ("等待查询", SentinelTheme.Colors.secondaryForeground)
         case .loading:
-            return ("查询中", SentinelTheme.Colors.secondaryForeground)
+            // 已经不再写入这个状态（见 SentinelStore.refreshUsageConcurrently）。
+            // 留个兜底，但绝不再显示「查询中」。
+            return ("等待查询", SentinelTheme.Colors.secondaryForeground)
         case .failed:
             return ("余额接口暂不可达", SentinelTheme.Colors.danger)
         case .timedOut:

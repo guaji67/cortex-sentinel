@@ -184,7 +184,10 @@ final class PanelBalanceRefreshTests: XCTestCase {
         XCTAssertEqual(AIOConstants.statusRefreshInterval, 5)
     }
 
-    func testSequentialRefreshShowsLoadingBeforeEachRowSettles() async throws {
+    /// Falcon 2026-08-24 原话：「你能不能不要把查询中那个状态给我显示出来？查询完了
+    /// 直接更新数字不就好了吗」。这条替换了原来断言「刷新时要先闪一次 .loading」的
+    /// 测试——那条断言的是被他否掉的行为，不是回归。
+    func testRefreshNeverShowsLoadingState() async throws {
         let loader = RecordingUsageLoader(
             data: try fixtureData(),
             delayNanoseconds: 80_000_000
@@ -209,7 +212,63 @@ final class PanelBalanceRefreshTests: XCTestCase {
             }
         }
         withExtendedLifetime(cancellable) {}
-        XCTAssertTrue(sawLoading)
+        XCTAssertFalse(sawLoading, "刷新余额期间任何一行都不许进入查询中")
+    }
+
+    /// 他真正在骂的那个手感：面板已经有数字了，点开往下滑，刷新把整块面板连着刷好几次。
+    /// 这条把它量化——已经有数字的那一轮刷新，整面板通知次数必须收敛到 1 次以内，
+    /// 且过程中不许有任何一行把数字丢掉（丢数字会让余额块从展开塌成一行，
+    /// 面板高度一缩一涨，滚动位置被夹回去，那就是「卡死」的来源）。
+    func testRefreshWithExistingNumbersKeepsThemAndPublishesAtMostOnce() async throws {
+        let loader = RecordingUsageLoader(
+            data: try fixtureData(),
+            delayNanoseconds: 40_000_000
+        )
+        let store = makeStore(loader: loader)
+
+        await store.setPanelPresented(true)
+        try await waitUntil {
+            store.aio.providers.allSatisfy { $0.usage.hasDisplayableBalanceNumber }
+        }
+
+        var sawLoading = false
+        var sawNumberDisappear = false
+        let cancellable = store.$aio.sink { snapshot in
+            if snapshot.providers.contains(where: {
+                if case .loading = $0.usage { return true }
+                return false
+            }) {
+                sawLoading = true
+            }
+            if snapshot.providers.contains(where: { !$0.usage.hasDisplayableBalanceNumber }) {
+                sawNumberDisappear = true
+            }
+        }
+
+        // 官方额度那条线自己也会发通知，先让它落定，这条测的是余额刷新那一段。
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        let publications = await countPublications(store) {
+            await store.refreshAIO(
+                force: true,
+                includeUsage: true,
+                bypassMinimumInterval: true
+            )
+        }
+        withExtendedLifetime(cancellable) {}
+
+        XCTAssertFalse(sawLoading, "已经有数字了，刷新不许把行变成查询中")
+        XCTAssertFalse(
+            sawNumberDisappear,
+            "刷新期间每一行都得保留上一次的数字，一行都不许空出来"
+        )
+        // 实测就是 1 次（余额数字本身没变，这一次来自快照的读取时间戳）。
+        // 修之前同一段窗口是 4 次，而且那还没算被砍掉的 .loading 预刷新那一轮。
+        XCTAssertLessThanOrEqual(
+            publications,
+            1,
+            "已有数字的行必须攒到最后一次性换；实际发了 \(publications) 次整面板刷新"
+        )
     }
 
     private func makeStore(

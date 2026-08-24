@@ -167,6 +167,17 @@ struct CodexLineRegistry: Decodable, Equatable, Sendable {
     func registration(for slug: String) -> CodexLineRegistration? {
         lines.first { $0.slug == slug }
     }
+
+    /// 批量查询用的 slug 索引；同 slug 重复登记时保留第一条，
+    /// 与 `registration(for:)` 的 first-wins 语义一致。
+    func registrationsBySlug() -> [String: CodexLineRegistration] {
+        var index: [String: CodexLineRegistration] = [:]
+        index.reserveCapacity(lines.count)
+        for registration in lines where index[registration.slug] == nil {
+            index[registration.slug] = registration
+        }
+        return index
+    }
 }
 
 /// 单条登记的容错壳：某一条写坏了（缺字段、时间戳格式没见过）只丢那一条，

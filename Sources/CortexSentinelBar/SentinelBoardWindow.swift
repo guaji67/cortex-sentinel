@@ -206,6 +206,40 @@ extension SentinelLineGroups {
     }
 }
 
+extension Array where Element == LinePresentation {
+    /// 两份行列表在「界面输出」意义上是否相等：登记信息逐条相等，且各行的
+    /// LineStatus 在 rolloutAgeSeconds 档位归一化之后相等。
+    func isDisplayEquivalent(to other: [LinePresentation]) -> Bool {
+        guard count == other.count else {
+            return false
+        }
+        return zip(self, other).allSatisfy { lhs, rhs in
+            lhs.registration == rhs.registration
+                && lhs.line.displayCanonicalized() == rhs.line.displayCanonicalized()
+        }
+    }
+}
+
+extension SentinelLineGroups {
+    /// 发布门用的显示等价判断；true 表示这轮分组换上去之后面板一个像素都不会变，
+    /// 不值得为它惊动任何分区。
+    func isDisplayEquivalent(to other: SentinelLineGroups) -> Bool {
+        activeRegistered.isDisplayEquivalent(to: other.activeRegistered)
+            && activeUnregistered.isDisplayEquivalent(to: other.activeUnregistered)
+            && recentlyCompleted.isDisplayEquivalent(to: other.recentlyCompleted)
+            && history.isDisplayEquivalent(to: other.history)
+    }
+}
+
+extension SentinelBoardWindow {
+    func isDisplayEquivalent(to other: SentinelBoardWindow) -> Bool {
+        recentShown.isDisplayEquivalent(to: other.recentShown)
+            && recentUnregistered.isDisplayEquivalent(to: other.recentUnregistered)
+            && historyShown.isDisplayEquivalent(to: other.historyShown)
+            && hidden.isDisplayEquivalent(to: other.hidden)
+    }
+}
+
 struct HistoryTrimArchive: Equatable, Encodable {
     let criterion: String
     let kept: Int

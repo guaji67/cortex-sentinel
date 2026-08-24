@@ -726,6 +726,7 @@ struct SentinelDispatchSection: View {
                         onToggleNote: { toggleNote(presentation.line.id) },
                         onShowSettings: onShowSettings
                     )
+                    .equatable()
                 }
             }
 
@@ -744,6 +745,7 @@ struct SentinelDispatchSection: View {
                         isExpanded: expandedCompletedLines.contains(presentation.line.id),
                         onToggleExpanded: { toggleCompleted(presentation.line.id) }
                     )
+                    .equatable()
                 }
             }
         }
@@ -901,14 +903,17 @@ struct SentinelAutomaticSection: View {
                         onToggleNote: { toggleNote(presentation.line.id) },
                         onShowSettings: onShowSettings
                     )
+                    .equatable()
                 }
 
                 ForEach(recentUnregistered) { presentation in
                     AutomaticCompletedLineRow(line: presentation.line)
+                        .equatable()
                 }
 
                 ForEach(processes) { process in
                     AutomaticProcessRow(process: process)
+                        .equatable()
                 }
 
                 if count == 0 {
@@ -949,6 +954,7 @@ struct SentinelHistorySection: View {
                         isNoteExpanded: expandedLineNotes.contains(presentation.line.id),
                         onToggleNote: { toggleNote(presentation.line.id) }
                     )
+                    .equatable()
                 }
                 if let footerText = store.boardWindow.footerText {
                     Text(footerText)

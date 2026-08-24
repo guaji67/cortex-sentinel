@@ -1113,6 +1113,60 @@ struct LineStatus: Identifiable, Equatable {
         return rolloutAgeSeconds > SentinelAggregation.staleRolloutSeconds
     }
 
+    /// 显示等价的规范化副本：rolloutAgeSeconds 归到它的显示档位代表值。
+    ///
+    /// 心跳年龄是解析状态文件时算出来的「距今秒数」，活跃线每一轮磁盘刷新
+    /// 它必然变，于是 lines / lineGroups 的相等短路永远失败，线列表分区每
+    /// 5 秒被惊动一次——而界面上它只以三档人话出现（工作中 / N 分钟没动静 /
+    /// 卡住守护重拉中，见 LineRowStyle.rolloutPhrase），同档内的秒级抖动不改
+    /// 变任何一个像素。发布门按这个副本比较，抖动就不再变成 UI 失效。
+    ///
+    /// 档位代表值：<60s → 0；60–600s → 所在分钟的整分秒数（60, 120, ... 600），
+    /// 与 rolloutPhrase 的「N 分钟」逐档对齐；>600s → 601（同时保持
+    /// hasStaleRollout 的 >600 判定为真）。
+    func displayCanonicalized() -> LineStatus {
+        guard let age = rolloutAgeSeconds else {
+            return self
+        }
+        let bucket: Double
+        if age < 60 {
+            bucket = 0
+        } else if age <= 600 {
+            bucket = max(1, (age / 60).rounded(.down)) * 60
+        } else {
+            bucket = 601
+        }
+        guard bucket != age else {
+            return self
+        }
+        return LineStatus(
+            sourceFile: sourceFile,
+            slug: slug,
+            engine: engine,
+            workdir: workdir,
+            branch: branch,
+            state: state,
+            restarts: restarts,
+            reportsRestarts: reportsRestarts,
+            rolloutAgeSeconds: bucket,
+            updatedAt: updatedAt,
+            sourceModifiedAt: sourceModifiedAt,
+            startedAt: startedAt,
+            processID: processID,
+            model: model,
+            logBytes: logBytes,
+            exitCode: exitCode,
+            forceStart: forceStart,
+            relay: relay,
+            relayProbe: relayProbe,
+            balance: balance,
+            note: note,
+            maxRestartsOverride: maxRestartsOverride,
+            escalateAfterFailures: escalateAfterFailures,
+            updatedAtRaw: updatedAtRaw
+        )
+    }
+
     var requiresAttention: Bool {
         state.isCritical && !(state == .dead && note != nil)
     }

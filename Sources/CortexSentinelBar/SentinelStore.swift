@@ -985,25 +985,24 @@ final class SentinelStore {
             // Observation 下派生快照的赋值只惊动读它的分区，不再需要
             // @Published 时代「换 Published 壳不发通知 + 借同值 lines 赋值
             // 触发 UI」那套黑招。
-            if lineGroups != suppliedLineGroups {
-                lineGroups = suppliedLineGroups
-            }
-            if let suppliedBoardWindow,
-               boardWindow != suppliedBoardWindow {
-                boardWindow = suppliedBoardWindow
-            }
+            //
+            // 发布门用显示等价而不是逐字段相等：活跃线的 rolloutAgeSeconds
+            // 每轮磁盘刷新必变，但同一显示档位内界面一个像素都不会变；
+            // 逐字段比较会让线列表分区每 5 秒白白失效一次。raw 的 lines
+            // 属性照常更新（上面），内部消费者（通知器、dump）拿到的仍是真值。
+            applyDerivedLinePresentationsIfDisplayChanged(
+                lineGroups: suppliedLineGroups,
+                boardWindow: suppliedBoardWindow
+            )
         } else if lineInputsChanged {
             let nextLineGroups = SentinelAggregation.lineGroups(
                 lines: lines,
                 registry: lineRegistry
             )
-            if lineGroups != nextLineGroups {
-                lineGroups = nextLineGroups
-            }
-            let nextBoardWindow = SentinelBoardWindow.snapshot(groups: nextLineGroups)
-            if boardWindow != nextBoardWindow {
-                boardWindow = nextBoardWindow
-            }
+            applyDerivedLinePresentationsIfDisplayChanged(
+                lineGroups: nextLineGroups,
+                boardWindow: SentinelBoardWindow.snapshot(groups: nextLineGroups)
+            )
         }
         if self.inputStatus != inputStatus {
             self.inputStatus = inputStatus
@@ -1014,6 +1013,19 @@ final class SentinelStore {
             inputStatus: inputStatus,
             logsDirectory: paths.logsDirectory
         )
+    }
+
+    private func applyDerivedLinePresentationsIfDisplayChanged(
+        lineGroups nextLineGroups: SentinelLineGroups,
+        boardWindow nextBoardWindow: SentinelBoardWindow?
+    ) {
+        if !lineGroups.isDisplayEquivalent(to: nextLineGroups) {
+            lineGroups = nextLineGroups
+        }
+        if let nextBoardWindow,
+           !boardWindow.isDisplayEquivalent(to: nextBoardWindow) {
+            boardWindow = nextBoardWindow
+        }
     }
 
     func setOfficialUsageIfChanged(_ snapshot: OfficialUsageSnapshot) {

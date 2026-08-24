@@ -28,6 +28,14 @@ final class SentinelStore {
     private(set) var backgroundJobs: BackgroundJobsSnapshot = .missing
     /// Cortex 打包进度；没打包在跑时保持 nil，界面不占地方。
     private(set) var packagingProgress: PackagingProgressSnapshot?
+    /// 只在 running / 非 running 之间翻转。面板父 body 靠它决定要不要挂载打包分区，
+    /// 避免 LazyVStack 里 EmptyView 在隐藏 NSPopover 里丢掉从无到有的失效。
+    private(set) var packagingActive = false
+    /// 每次把面板打开加一。隐藏的 NSHostingView 不调度 Observation 更新
+    /// （设置窗对照测试已踩过）；打开时父 body 必须重新求值，按当前 store 挂载分区。
+    private(set) var panelPresentationGeneration: UInt = 0
+    /// 状态栏三个面的合成快照。控制器只观察这一份，不再自己拼 Optional 读集。
+    private(set) var statusBarRenderState = StatusBarRenderState()
     /// 私有腿的 launchctl 操作行；健康快照仍由 `backgroundJobs` 保留给 PR 展示模型。
     private(set) var backgroundJobRows: [BackgroundJobRow] = []
     private(set) var backgroundJobMessages: [String: String] = [:]
@@ -244,43 +252,25 @@ final class SentinelStore {
         }
 
         scheduleStatusTimer()
-        aioTimer = Timer.scheduledTimer(
-            withTimeInterval: AIOConstants.aioRefreshInterval,
-            repeats: true
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self else {
-                    return
-                }
-                await self.refreshAIO(force: false, includeUsage: self.isPanelPresented)
+        aioTimer = makeRepeatingTimer(interval: AIOConstants.aioRefreshInterval) { [weak self] in
+            guard let self else {
+                return
             }
+            await self.refreshAIO(force: false, includeUsage: self.isPanelPresented)
         }
-        inputStatusTimer = Timer.scheduledTimer(
-            withTimeInterval: InputStatusConstants.refreshInterval,
-            repeats: true
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                await self?.refreshInputStatus(force: false)
-            }
+        inputStatusTimer = makeRepeatingTimer(interval: InputStatusConstants.refreshInterval) { [weak self] in
+            await self?.refreshInputStatus(force: false)
         }
-        officialUsageTimer = Timer.scheduledTimer(
-            withTimeInterval: OfficialUsageConstants.automaticRefreshInterval,
-            repeats: true
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.refreshOfficialUsage(reason: .automatic)
-            }
+        officialUsageTimer = makeRepeatingTimer(
+            interval: OfficialUsageConstants.automaticRefreshInterval
+        ) { [weak self] in
+            self?.refreshOfficialUsage(reason: .automatic)
         }
 
         // v3.2 第 5 点：启动即清一次派工日志，之后每小时巡检一次。
         runLogCleanup()
-        cleanupTimer = Timer.scheduledTimer(
-            withTimeInterval: LogCleanupConstants.sweepInterval,
-            repeats: true
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.runLogCleanup()
-            }
+        cleanupTimer = makeRepeatingTimer(interval: LogCleanupConstants.sweepInterval) { [weak self] in
+            self?.runLogCleanup()
         }
     }
 
@@ -408,14 +398,24 @@ final class SentinelStore {
         statusTimer?.invalidate()
         let interval = statusPollInterval()
         scheduledStatusTimerInterval = interval
-        statusTimer = Timer.scheduledTimer(
-            withTimeInterval: interval,
-            repeats: true
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                await self?.refreshStatuses()
+        statusTimer = makeRepeatingTimer(interval: interval) { [weak self] in
+            await self?.refreshStatuses()
+        }
+    }
+
+    /// 加到 `.common` 而不是只进 default：菜单栏 tracking / NSPopover 打开时
+    /// default mode 定时器会停，关面板的心跳和打开瞬间都会漏拍。
+    private func makeRepeatingTimer(
+        interval: TimeInterval,
+        handler: @escaping @MainActor () async -> Void
+    ) -> Timer {
+        let timer = Timer(timeInterval: interval, repeats: true) { _ in
+            Task { @MainActor in
+                await handler()
             }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        return timer
     }
 
     private func runLogCleanup() {
@@ -503,6 +503,10 @@ final class SentinelStore {
         if packagingProgress != nextPackagingProgress {
             packagingProgress = nextPackagingProgress
         }
+        let nextPackagingActive = nextPackagingProgress != nil
+        if packagingActive != nextPackagingActive {
+            packagingActive = nextPackagingActive
+        }
         apply(
             lines: snapshot.lines,
             aio: aio,
@@ -526,6 +530,7 @@ final class SentinelStore {
             backgroundJobRows = nextBackgroundJobRows
         }
         refreshUnclaimed(lines: snapshot.lines, registry: snapshot.registry, ack: snapshot.ack)
+        syncStatusBarRenderState()
     }
 
     private func refreshUnclaimed(
@@ -618,6 +623,10 @@ final class SentinelStore {
             scrollPublishGate.flushNow()
             return
         }
+        panelPresentationGeneration += 1
+        // 打包进度走磁盘状态刷新，不能跟余额新鲜度闸绑在一起——闸一跳过，
+        // 打开面板也看不到正在跑的打包。
+        await refreshStatuses()
         await refreshOnPanelOpenIfNeeded()
     }
 
@@ -632,9 +641,7 @@ final class SentinelStore {
             return
         }
         lastPanelOpenFullRefreshAt = timestamp
-        // 四块数据没有依赖关系，并行等待各自的后台 I/O；每块仍只发布自己的
-        // 变化，保留余额逐 provider 回显和 Input 探针的独立生命周期。
-        async let statuses: Void = refreshStatuses()
+        // 状态文件刚在 setPanelPresented 刷过；这里只补余额和 Input。
         async let aio: Void = refreshAIO(
             force: true,
             includeUsage: true,
@@ -644,7 +651,6 @@ final class SentinelStore {
             force: true,
             bypassMinimumInterval: true
         )
-        await statuses
         await aio
         await input
         refreshOfficialUsage(reason: .panelOpen, bypassMinimumInterval: true)
@@ -1007,6 +1013,7 @@ final class SentinelStore {
         if self.inputStatus != inputStatus {
             self.inputStatus = inputStatus
         }
+        syncStatusBarRenderState()
         relayRecoveryCoordinator.requestEligibleProbes(
             lines: lines,
             aio: aio,
@@ -1031,6 +1038,17 @@ final class SentinelStore {
     func setOfficialUsageIfChanged(_ snapshot: OfficialUsageSnapshot) {
         if officialUsage != snapshot {
             officialUsage = snapshot
+        }
+    }
+
+    private func syncStatusBarRenderState() {
+        let next = StatusBarRenderState(
+            inputStatus: inputStatus,
+            aio: aio,
+            packagingProgress: packagingProgress
+        )
+        if statusBarRenderState != next {
+            statusBarRenderState = next
         }
     }
 

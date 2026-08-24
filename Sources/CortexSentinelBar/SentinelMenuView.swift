@@ -9,9 +9,8 @@ enum SentinelMenuInitialSection {
 /// 面板骨架。2026-08-24 架构改造：原来这里是一个 1798 行的 body，68 处直接读
 /// store，任何一路刷新（哪怕只是某个账号余额回来了）都让整个面板重算一遍。
 /// 现在它只搭 ScrollView 骨架和设置浮层；十个分区各自是独立 View（见
-/// SentinelMenuSections.swift），各读各的数据。**生产路径下这个 body 不读任何
-/// store 属性**——它自己永远不因数据刷新而失效；smoke 截图模式的两个钩子
-/// （滚到派工区 / 预展开第一条）按构造参数显式开启，不影响常驻面板。
+/// SentinelMenuSections.swift），各读各的数据。生产路径父 body 只读两个低频开关
+/// （packagingActive / panelPresentationGeneration），不读线列表和余额。
 struct SentinelMenuView: View {
     var store: SentinelStore
     var initialSection: SentinelMenuInitialSection = .top
@@ -23,17 +22,23 @@ struct SentinelMenuView: View {
     @State private var settingsLine: LineStatus?
 
     var body: some View {
+        // 生产路径仍不读线/余额等高频面。只读两个低频开关：
+        // packagingActive 决定要不要把打包分区挂进树；
+        // panelPresentationGeneration 在每次打开面板时强制父 body 按当前 store 重挂，
+        // 避开「隐藏 NSPopover 的 NSHostingView 丢掉 Observation 更新」。
+        let _ = store.panelPresentationGeneration
+        let packagingActive = store.packagingActive
         ZStack {
             if rendersOffscreen {
                 VStack(alignment: .leading, spacing: SentinelTheme.Spacing.section) {
-                    sectionStack
+                    sectionStack(packagingActive: packagingActive)
                 }
                 .padding(SentinelTheme.Spacing.panel)
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: SentinelTheme.Spacing.section) {
-                            sectionStack
+                            sectionStack(packagingActive: packagingActive)
                         }
                         .padding(SentinelTheme.Spacing.panel)
                     }
@@ -62,9 +67,11 @@ struct SentinelMenuView: View {
     }
 
     @ViewBuilder
-    private var sectionStack: some View {
+    private func sectionStack(packagingActive: Bool) -> some View {
         SentinelHeaderSection(store: store)
-        SentinelPackagingSection(store: store)
+        if packagingActive {
+            SentinelPackagingSection(store: store)
+        }
         SentinelChannelSection(store: store)
         SentinelServiceSection(store: store)
         SentinelBalancesSection(store: store)

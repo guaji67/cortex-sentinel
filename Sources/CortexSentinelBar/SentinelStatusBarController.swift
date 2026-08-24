@@ -120,10 +120,9 @@ final class SentinelStatusBarController: NSObject, NSPopoverDelegate {
         store.start()
     }
 
-    /// 状态栏那张图依赖的三个面（Input 探针 / 余额 / 打包进度）用 Observation
-    /// 盯着；变化落到主队列的下一拍再重画并重挂，同一拍内的连环写只画一次。
-    /// 旧实现是 Combine 订三个 @Published；@Observable 迁移后这里是唯一还想
-    /// 「跨属性订阅」的地方，用递归 withObservationTracking 表达。
+    /// 状态栏那张图只观察 `statusBarRenderState` 这一份合成快照（Input / 余额 / 打包）。
+    /// 旧实现是 Combine 订三个 @Published；@Observable 迁过来之后，Optional 的
+    /// packagingProgress 从 nil 跳到 running 在隐藏宿主里不可靠，所以改成非 Optional 结构体。
     private func observeStatusItemInputs() {
         guard statusObservationActive else {
             return
@@ -132,9 +131,7 @@ final class SentinelStatusBarController: NSObject, NSPopoverDelegate {
             guard let self else {
                 return
             }
-            _ = self.store.inputStatus
-            _ = self.store.aio
-            _ = self.store.packagingProgress
+            _ = self.store.statusBarRenderState
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else {
@@ -167,10 +164,11 @@ final class SentinelStatusBarController: NSObject, NSPopoverDelegate {
             return
         }
 
+        let paint = store.statusBarRenderState
         let image = SentinelStatusBarRenderer.image(
-            probes: store.inputStatus.displayProbes(),
-            balances: store.statusBarBalances,
-            packaging: store.packagingProgress
+            probes: paint.inputStatus.displayProbes(),
+            balances: paint.aio.statusBarBalances,
+            packaging: paint.packagingProgress
         )
         statusItem.length = image.size.width
         button.image = image

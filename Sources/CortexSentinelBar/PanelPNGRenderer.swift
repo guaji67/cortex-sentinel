@@ -17,6 +17,7 @@ enum PanelPreviewFixture: String, CaseIterable {
     case channelUnrecognized = "channel-unrecognized"
     case channelUndetermined = "channel-undetermined"
     case offHostActive = "off-host-active"
+    case packaging
 }
 
 enum PanelPNGRenderError: Error {
@@ -59,6 +60,11 @@ enum PanelPreviewFactory {
         )
         try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
         try PanelPreviewLayout.write(fixture: fixture, into: root)
+        let packRoot = root.appendingPathComponent("pack-progress", isDirectory: true)
+        try fileManager.createDirectory(at: packRoot, withIntermediateDirectories: true)
+        if fixture == .packaging {
+            try PanelPreviewLayout.writeRunningPackagingProgress(into: packRoot)
+        }
 
         let suite = "com.falcon.cortex.sentinelbar.panel-png.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite) ?? .standard
@@ -70,6 +76,7 @@ enum PanelPreviewFactory {
             environment: [
                 "CORTEX_SENTINEL_WATCH_DIR": root.path,
                 "CORTEX_DATA_ROOT": root.path,
+                "CORTEX_PACK_PROGRESS_DIR": packRoot.path,
                 "CORTEX_AIO_DB_PATH": aioDB.path,
                 "CORTEX_CODEX_CONFIG_PATH": root.appendingPathComponent("config.toml").path,
                 "CORTEX_CODEX_AUTH_PATH": root.appendingPathComponent("auth.json").path,
@@ -336,7 +343,28 @@ private enum PanelPreviewLayout {
                 codex: ChannelJSON(status: "alive", evidence: "1 条在跑", running: 1)
             )
             try writeHealthyBackgroundJobs(into: root, generatedAt: now)
+        case .packaging:
+            try writeChannel(
+                into: root,
+                generatedAt: now,
+                grok: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0),
+                codex: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0)
+            )
+            try writeHealthyBackgroundJobs(into: root, generatedAt: now)
         }
+    }
+
+    static func writeRunningPackagingProgress(into root: URL) throws {
+        let run = root.appendingPathComponent("preview-run", isDirectory: true)
+        try FileManager.default.createDirectory(at: run, withIntermediateDirectories: true)
+        try Data(
+            """
+            {"schema":"cortex.packaging-progress.v1","run_id":"preview-run","status":"running",
+             "current_step_id":"build","current_detail":"Electron 打包","updated_at":"2026-08-24T15:00:00Z",
+             "eta_label":"大约还要 12 分钟",
+             "steps":[{"id":"build","title":"构建 App 与 zip","status":"running"}]}
+            """.utf8
+        ).write(to: run.appendingPathComponent("progress.json"))
     }
 
     private static func writeRawChannel(into root: URL, json: String) throws {

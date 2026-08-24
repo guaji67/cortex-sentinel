@@ -295,7 +295,11 @@ struct LineNoteSectionView: View {
 }
 
 /// 「有登记的」活跃派工行。
-struct RegisteredLineRow: View {
+///
+/// Equatable 的比较口径 = 会影响像素的值输入（行数据按显示档位归一化，
+/// 心跳秒数的同档抖动不算变化）；两个回调闭包语义稳定，不参与比较。
+/// 分区用 `.equatable()` 包起来，让 SwiftUI 跳过没变的行。
+struct RegisteredLineRow: View, Equatable {
     let presentation: LinePresentation
     let hostOrigin: LineHostOrigin
     let attribution: RelayAttribution
@@ -303,6 +307,15 @@ struct RegisteredLineRow: View {
     let isNoteExpanded: Bool
     let onToggleNote: () -> Void
     let onShowSettings: (LineStatus) -> Void
+
+    static func == (lhs: RegisteredLineRow, rhs: RegisteredLineRow) -> Bool {
+        lhs.presentation.registration == rhs.presentation.registration
+            && lhs.presentation.line.displayCanonicalized() == rhs.presentation.line.displayCanonicalized()
+            && lhs.hostOrigin == rhs.hostOrigin
+            && lhs.attribution == rhs.attribution
+            && lhs.logsDirectory == rhs.logsDirectory
+            && lhs.isNoteExpanded == rhs.isNoteExpanded
+    }
 
     var body: some View {
         let line = presentation.line
@@ -388,12 +401,20 @@ struct RegisteredLineRow: View {
 
 /// 「最近完成」一行；v3.2 第 4 点：整行可点，展开显示来源对话 / 标识 /
 /// 启动→完成 / 重拉次数 / 通道归因。
-struct CompletedLineRow: View {
+struct CompletedLineRow: View, Equatable {
     let presentation: LinePresentation
     let hostOrigin: LineHostOrigin
     let attribution: RelayAttribution
     let isExpanded: Bool
     let onToggleExpanded: () -> Void
+
+    static func == (lhs: CompletedLineRow, rhs: CompletedLineRow) -> Bool {
+        lhs.presentation.registration == rhs.presentation.registration
+            && lhs.presentation.line.displayCanonicalized() == rhs.presentation.line.displayCanonicalized()
+            && lhs.hostOrigin == rhs.hostOrigin
+            && lhs.attribution == rhs.attribution
+            && lhs.isExpanded == rhs.isExpanded
+    }
 
     var body: some View {
         let line = presentation.line
@@ -502,13 +523,20 @@ struct CompletedLineRow: View {
 }
 
 /// 自动识别（未登记且活跃）的行。
-struct AutomaticLineRow: View {
+struct AutomaticLineRow: View, Equatable {
     let line: LineStatus
     let attribution: RelayAttribution
     let logsDirectory: URL
     let isNoteExpanded: Bool
     let onToggleNote: () -> Void
     let onShowSettings: (LineStatus) -> Void
+
+    static func == (lhs: AutomaticLineRow, rhs: AutomaticLineRow) -> Bool {
+        lhs.line.displayCanonicalized() == rhs.line.displayCanonicalized()
+            && lhs.attribution == rhs.attribution
+            && lhs.logsDirectory == rhs.logsDirectory
+            && lhs.isNoteExpanded == rhs.isNoteExpanded
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: SentinelTheme.Spacing.md) {
@@ -575,8 +603,12 @@ struct AutomaticLineRow: View {
 }
 
 /// 自动识别里已经终态的行。
-struct AutomaticCompletedLineRow: View {
+struct AutomaticCompletedLineRow: View, Equatable {
     let line: LineStatus
+
+    static func == (lhs: AutomaticCompletedLineRow, rhs: AutomaticCompletedLineRow) -> Bool {
+        lhs.line.displayCanonicalized() == rhs.line.displayCanonicalized()
+    }
 
     var body: some View {
         HStack(alignment: .center, spacing: SentinelTheme.Spacing.md) {
@@ -619,7 +651,7 @@ struct AutomaticCompletedLineRow: View {
 }
 
 /// 没有状态文件、只从进程表看见的 Codex 进程行。
-struct AutomaticProcessRow: View {
+struct AutomaticProcessRow: View, Equatable {
     let process: OtherCodexProcess
 
     var body: some View {
@@ -657,11 +689,18 @@ struct AutomaticProcessRow: View {
 }
 
 /// 历史区的一行。
-struct HistoryLineRow: View {
+struct HistoryLineRow: View, Equatable {
     let presentation: LinePresentation
     let hostOrigin: LineHostOrigin
     let isNoteExpanded: Bool
     let onToggleNote: () -> Void
+
+    static func == (lhs: HistoryLineRow, rhs: HistoryLineRow) -> Bool {
+        lhs.presentation.registration == rhs.presentation.registration
+            && lhs.presentation.line.displayCanonicalized() == rhs.presentation.line.displayCanonicalized()
+            && lhs.hostOrigin == rhs.hostOrigin
+            && lhs.isNoteExpanded == rhs.isNoteExpanded
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xs) {

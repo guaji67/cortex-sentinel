@@ -6,10 +6,19 @@ import Foundation
 /// 不写 `codex-line-registry.json`。磁盘上状态文件条数由 `StatusFileRetention` /
 /// `StatusFileCleaner` 另管，不在这里删。
 struct SentinelBoardWindow: Equatable {
+    static let empty = SentinelBoardWindow(
+        recentShown: [],
+        recentUnregistered: [],
+        historyShown: [],
+        hidden: []
+    )
+
     static let historyDisplayCap = 500
     static let recencyCriterion = "按状态文件 mtime 倒序（无 mtime 则 updated_at，再无则登记时间）；最近完成最多 8 条，历史最多 500 条"
 
     let recentShown: [LinePresentation]
+    /// 最近完成但未登记的线；面板自动识别区直接复用这一轮排序结果。
+    let recentUnregistered: [LinePresentation]
     let historyShown: [LinePresentation]
     let hidden: [LinePresentation]
 
@@ -43,17 +52,22 @@ struct SentinelBoardWindow: Equatable {
     ) -> SentinelBoardWindow {
         let recentRegistered = groups.recentlyCompleted.filter { $0.registration != nil }
         let recentSorted = newestFirst(recentRegistered)
+        let recentUnregistered = newestFirst(
+            groups.recentlyCompleted.filter { $0.registration == nil }
+        )
         let split = SentinelAggregation.splitRecentDisplay(recentSorted, cap: recentCap)
         let historyPool = newestFirst(split.overflow + groups.history)
         if historyPool.count <= historyCap {
             return SentinelBoardWindow(
                 recentShown: split.shown,
+                recentUnregistered: recentUnregistered,
                 historyShown: historyPool,
                 hidden: []
             )
         }
         return SentinelBoardWindow(
             recentShown: split.shown,
+            recentUnregistered: recentUnregistered,
             historyShown: Array(historyPool.prefix(historyCap)),
             hidden: Array(historyPool.dropFirst(historyCap))
         )

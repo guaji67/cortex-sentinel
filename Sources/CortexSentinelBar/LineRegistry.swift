@@ -296,6 +296,13 @@ struct LinePresentation: Equatable, Identifiable {
 }
 
 struct SentinelLineGroups: Equatable {
+    static let empty = SentinelLineGroups(
+        activeRegistered: [],
+        activeUnregistered: [],
+        recentlyCompleted: [],
+        history: []
+    )
+
     let activeRegistered: [LinePresentation]
     let activeUnregistered: [LinePresentation]
     let recentlyCompleted: [LinePresentation]

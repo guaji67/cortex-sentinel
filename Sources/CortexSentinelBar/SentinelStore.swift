@@ -7,6 +7,9 @@ final class SentinelStore: ObservableObject {
     @Published private(set) var otherCodexProcesses: [OtherCodexProcess] = []
     @Published private(set) var aio: AIOSnapshot = .unconfigured
     @Published private(set) var lineRegistry: CodexLineRegistry = .empty
+    /// 分组和使用者实际看板窗口随状态快照每轮计算一次；菜单 body 只读缓存。
+    @Published private(set) var lineGroups: SentinelLineGroups = .empty
+    @Published private(set) var boardWindow: SentinelBoardWindow = .empty
     @Published private(set) var inputStatus: InputStatusSnapshot = .empty
     @Published private(set) var officialUsage: OfficialUsageSnapshot = .empty
     @Published private(set) var channelStatus: ChannelStatusSnapshot = .missing
@@ -67,6 +70,8 @@ final class SentinelStore: ObservableObject {
     private var lastOfficialUsageAttemptAt: Date?
     private var lastPanelOpenFullRefreshAt: Date?
     private var hasStarted = false
+    /// 磁盘读取慢时不排队；定时器或面板打开的下一轮直接跳过。
+    private var diskRefreshInFlight = false
     private var isPanelPresented = false
     private var pendingAIOUsageRefresh = false
     private var relayRecoveryCoordinator = RelayRecoveryProbeCoordinator()
@@ -164,10 +169,6 @@ final class SentinelStore: ObservableObject {
 
     var sortedLines: [LineStatus] {
         SentinelAggregation.sortedLines(lines)
-    }
-
-    var lineGroups: SentinelLineGroups {
-        SentinelAggregation.lineGroups(lines: lines, registry: lineRegistry)
     }
 
     var statusBarBalances: [StatusBarBalanceItem] {
@@ -421,6 +422,10 @@ final class SentinelStore: ObservableObject {
     }
 
     func refreshStatuses() async {
+        guard !diskRefreshInFlight else {
+            return
+        }
+        diskRefreshInFlight = true
         statusDiskRefreshCountForTests += 1
         let logsDirectory = paths.logsDirectory
         let registryURL = paths.lineRegistryURL
@@ -449,6 +454,7 @@ final class SentinelStore: ObservableObject {
                 continuation.resume(returning: loaded)
             }
         }
+        diskRefreshInFlight = false
         lastStatusDiskReadWasOnMainThreadForTests = snapshot.readOnMainThread
         // 失败/完成的 progress.json 只是历史残留，界面不展示；不要把它
         // 发布成一次状态变化，避免每轮空转给菜单栏再发一条通知。
@@ -463,7 +469,9 @@ final class SentinelStore: ObservableObject {
             aio: aio,
             otherCodexProcesses: snapshot.otherCodexProcesses ?? otherCodexProcesses,
             lineRegistry: snapshot.registry,
-            inputStatus: inputStatus
+            inputStatus: inputStatus,
+            lineGroups: snapshot.lineGroups,
+            boardWindow: snapshot.boardWindow
         )
         if channelStatus != snapshot.channelStatus {
             channelStatus = snapshot.channelStatus
@@ -582,9 +590,21 @@ final class SentinelStore: ObservableObject {
             return
         }
         lastPanelOpenFullRefreshAt = timestamp
-        await refreshStatuses()
-        await refreshAIO(force: true, includeUsage: true, bypassMinimumInterval: true)
-        await refreshInputStatus(force: true, bypassMinimumInterval: true)
+        // 四块数据没有依赖关系，并行等待各自的后台 I/O；每块仍只发布自己的
+        // 变化，保留余额逐 provider 回显和 Input 探针的独立生命周期。
+        async let statuses: Void = refreshStatuses()
+        async let aio: Void = refreshAIO(
+            force: true,
+            includeUsage: true,
+            bypassMinimumInterval: true
+        )
+        async let input: Void = refreshInputStatus(
+            force: true,
+            bypassMinimumInterval: true
+        )
+        await statuses
+        await aio
+        await input
         refreshOfficialUsage(reason: .panelOpen, bypassMinimumInterval: true)
     }
 
@@ -865,8 +885,12 @@ final class SentinelStore: ObservableObject {
         aio: AIOSnapshot,
         otherCodexProcesses: [OtherCodexProcess],
         lineRegistry: CodexLineRegistry,
-        inputStatus: InputStatusSnapshot
+        inputStatus: InputStatusSnapshot,
+        lineGroups suppliedLineGroups: SentinelLineGroups? = nil,
+        boardWindow suppliedBoardWindow: SentinelBoardWindow? = nil
     ) {
+        let lineInputsChanged = self.lines != lines || self.lineRegistry != lineRegistry
+        var derivedPresentationChanged = false
         notifier.observe(
             lines: lines,
             aio: aio,
@@ -884,6 +908,38 @@ final class SentinelStore: ObservableObject {
         }
         if self.lineRegistry != lineRegistry {
             self.lineRegistry = lineRegistry
+        }
+        if let suppliedLineGroups {
+            if lineGroups != suppliedLineGroups {
+                // 两个派生快照跟随同一轮 lines/registry 变化，不再各自制造一条
+                // objectWillChange；真实的输入属性负责这轮 UI 失效通知。
+                _lineGroups = Published(initialValue: suppliedLineGroups)
+                derivedPresentationChanged = true
+            }
+            if let suppliedBoardWindow,
+               boardWindow != suppliedBoardWindow {
+                _boardWindow = Published(initialValue: suppliedBoardWindow)
+                derivedPresentationChanged = true
+            }
+        } else if lineInputsChanged {
+            let nextLineGroups = SentinelAggregation.lineGroups(
+                lines: lines,
+                registry: lineRegistry
+            )
+            if lineGroups != nextLineGroups {
+                _lineGroups = Published(initialValue: nextLineGroups)
+                derivedPresentationChanged = true
+            }
+            let nextBoardWindow = SentinelBoardWindow.snapshot(groups: nextLineGroups)
+            if boardWindow != nextBoardWindow {
+                _boardWindow = Published(initialValue: nextBoardWindow)
+                derivedPresentationChanged = true
+            }
+        }
+        // 状态文件内容没变但「活跃 / 最近完成」随时间跨阈值时，输入属性本身
+        // 不会变化；借一次同值 lines 赋值把这一轮派生快照送进面板。
+        if derivedPresentationChanged && !lineInputsChanged {
+            self.lines = lines
         }
         if self.inputStatus != inputStatus {
             self.inputStatus = inputStatus
@@ -907,6 +963,8 @@ final class SentinelStore: ObservableObject {
         aio = aio
         otherCodexProcesses = otherCodexProcesses
         lineRegistry = lineRegistry
+        lineGroups = lineGroups
+        boardWindow = boardWindow
         inputStatus = inputStatus
         channelStatus = channelStatus
         backgroundJobs = backgroundJobs

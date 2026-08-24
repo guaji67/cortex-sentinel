@@ -1429,7 +1429,7 @@ struct SentinelMenuView: View {
     }
 
     private var boardWindow: SentinelBoardWindow {
-        SentinelBoardWindow.snapshot(groups: store.lineGroups)
+        store.boardWindow
     }
 
     private var recentRegisteredCount: Int {
@@ -1437,9 +1437,7 @@ struct SentinelMenuView: View {
     }
 
     private var recentUnregisteredLines: [LinePresentation] {
-        SentinelBoardWindow.newestFirst(
-            store.lineGroups.recentlyCompleted.filter { $0.registration == nil }
-        )
+        store.boardWindow.recentUnregistered
     }
 
     private var balanceCountText: String {

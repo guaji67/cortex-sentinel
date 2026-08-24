@@ -134,6 +134,25 @@ final class StackedRefreshGateTests: XCTestCase {
         XCTAssertEqual(store.otherCodexProcesses, reader.processes)
     }
 
+    func testOverlappingDiskRefreshSkipsTheSecondRead() async throws {
+        let reader = SlowProcessReader(delayNanoseconds: 150_000_000)
+        let store = makeStore(slowProcessReader: reader)
+        let opening = Task { @MainActor in
+            await store.setPanelPresented(true)
+        }
+
+        try await waitUntil { reader.callCount == 1 }
+        XCTAssertEqual(store.statusDiskRefreshCountForTests, 1)
+
+        // 面板打开的那一轮仍在读磁盘；这次调用直接跳过，避免再拉起一轮
+        // status 文件 + ps/lsof 读取。
+        await store.refreshStatuses()
+        XCTAssertEqual(store.statusDiskRefreshCountForTests, 1)
+
+        await opening.value
+        XCTAssertEqual(reader.callCount, 1)
+    }
+
     // 6. 连续两轮完全没有任何文件变化 → 界面刷新信号 0，通知也是 0
     func testTwoUnchangedRefreshesEmitZeroPublicationsAndZeroNotifications() async throws {
         let box = NotificationBox()
@@ -204,7 +223,8 @@ final class StackedRefreshGateTests: XCTestCase {
     private func makeStore(
         processReader: RecordingProcessReader = RecordingProcessReader(),
         cache: LineStatusFileCache = LineStatusFileCache(),
-        notificationBox: NotificationBox? = nil
+        notificationBox: NotificationBox? = nil,
+        processReaderOverride: (@Sendable (Set<Int>) -> [OtherCodexProcess])? = nil
     ) -> SentinelStore {
         SentinelStore(
             defaults: defaults,
@@ -216,11 +236,17 @@ final class StackedRefreshGateTests: XCTestCase {
                 "CORTEX_AIO_DB_PATH": root.appendingPathComponent("missing-aio.db").path,
             ],
             lineStatusCache: cache,
-            otherCodexProcessReader: { ids in processReader.read(ids) },
+            otherCodexProcessReader: { ids in
+                processReaderOverride?(ids) ?? processReader.read(ids)
+            },
             notificationSendHandler: notificationBox.map { box in
                 { draft in box.drafts.append(draft) }
             }
         )
+    }
+
+    private func makeStore(slowProcessReader: SlowProcessReader) -> SentinelStore {
+        makeStore(processReaderOverride: { ids in slowProcessReader.read(ids) })
     }
 
     private func countPublications(_ store: SentinelStore, _ body: () async -> Void) async -> Int {
@@ -229,6 +255,20 @@ final class StackedRefreshGateTests: XCTestCase {
         await body()
         withExtendedLifetime(cancellable) {}
         return count
+    }
+
+    private func waitUntil(
+        timeout: TimeInterval = 1,
+        _ condition: @escaping () -> Bool
+    ) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() {
+                return
+            }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTFail("timed out waiting for condition")
     }
 
     private func writeStatus(_ state: LifecycleState) throws {
@@ -294,6 +334,31 @@ private final class RecordingProcessReader: @unchecked Sendable {
         _ = ids
         callCount += 1
         return processes
+    }
+}
+
+private final class SlowProcessReader: @unchecked Sendable {
+    private let delayNanoseconds: UInt64
+    private let lock = NSLock()
+    private var recordedCallCount = 0
+
+    var callCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedCallCount
+    }
+
+    init(delayNanoseconds: UInt64) {
+        self.delayNanoseconds = delayNanoseconds
+    }
+
+    func read(_ ids: Set<Int>) -> [OtherCodexProcess] {
+        _ = ids
+        lock.lock()
+        recordedCallCount += 1
+        lock.unlock()
+        Thread.sleep(forTimeInterval: Double(delayNanoseconds) / 1_000_000_000)
+        return []
     }
 }
 

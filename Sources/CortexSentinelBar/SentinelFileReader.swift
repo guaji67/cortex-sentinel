@@ -681,6 +681,9 @@ enum SentinelDateParser {
 struct StatusDiskSnapshot {
     var lines: [LineStatus]
     var registry: CodexLineRegistry
+    /// 分组和看板窗口与同一轮磁盘数据绑定，避免菜单 body 在滚动时重复 map/sort。
+    var lineGroups: SentinelLineGroups
+    var boardWindow: SentinelBoardWindow
     var channelStatus: ChannelStatusSnapshot
     var backgroundJobs: BackgroundJobsSnapshot
     var packagingProgress: PackagingProgressSnapshot?
@@ -708,6 +711,7 @@ enum StatusDiskReader {
             cache: lineStatusCache
         )
         let registry = lineRegistryCache.read(at: registryURL)
+        let lineGroups = SentinelAggregation.lineGroups(lines: lines, registry: registry)
         let channelStatus = SentinelFileReader.readChannelStatus(at: channelStatusURL)
         let backgroundJobsURL = SentinelPaths.backgroundJobsHealthURL(
             logsDirectory: logsDirectory,
@@ -732,6 +736,8 @@ enum StatusDiskReader {
         return StatusDiskSnapshot(
             lines: lines,
             registry: registry,
+            lineGroups: lineGroups,
+            boardWindow: SentinelBoardWindow.snapshot(groups: lineGroups),
             channelStatus: channelStatus,
             backgroundJobs: backgroundJobs,
             packagingProgress: packagingProgress,

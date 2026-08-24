@@ -124,7 +124,7 @@ final class EmptyDiagnosticSectionTests: XCTestCase {
     func testMissingAIOWithoutNumbersCollapsesToQueryingNotUnread() {
         XCTAssertEqual(
             BalanceSectionPresentation.resolve(official: .empty, aio: .unconfigured),
-            .compact(statusText: "查询中")
+            .compact(statusText: BalanceSectionPresentation.queryingStatusText)
         )
         XCTAssertNotEqual(
             BalanceSectionPresentation.resolve(official: .empty, aio: .unconfigured),
@@ -179,7 +179,7 @@ final class EmptyDiagnosticSectionTests: XCTestCase {
         )
         XCTAssertEqual(
             BalanceSectionPresentation.resolve(official: .empty, aio: aio),
-            .compact(statusText: "查询中")
+            .compact(statusText: BalanceSectionPresentation.queryingStatusText)
         )
     }
 
@@ -200,7 +200,7 @@ final class EmptyDiagnosticSectionTests: XCTestCase {
             official: session.store.officialUsage,
             aio: session.store.aio
         )
-        XCTAssertEqual(balance, .compact(statusText: "查询中"))
+        XCTAssertEqual(balance, .compact(statusText: BalanceSectionPresentation.queryingStatusText))
         XCTAssertNotEqual(balance, .unread)
     }
 

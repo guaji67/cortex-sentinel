@@ -458,7 +458,9 @@ enum BalanceSectionPresentation: Equatable {
     case unread
     case expanded
 
-    static let queryingStatusText = "查询中"
+    /// 一个账号的数字都还没有时，余额块收成一行显示这句。
+    /// Falcon 2026-08-24 令：面板上不许再出现「查询中」，这是最后一处。
+    static let queryingStatusText = "等待查询"
     static let unreadTitle = "余额读不到"
     static let unreadDetail = "只影响余额这一块，任务状态不受影响。"
 

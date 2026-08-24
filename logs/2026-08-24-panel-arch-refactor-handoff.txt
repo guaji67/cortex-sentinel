@@ -1,0 +1,74 @@
+你来接手 Cortex 哨兵（macOS 菜单栏 app）的面板卡顿问题。这是我（Falcon）本人在用的东西，卡了一整天没修好，前面那个窗口只在治症状，现在换你从架构层解决。
+
+仓库：/Users/falcon/Documents/Code/cortex-sentinel-public
+（这是独立的 GitHub 仓库 guaji67/cortex-sentinel，不是 cortex 主仓。正在跑的 /Applications/Cortex哨兵.app 就是从这个仓构建的，另一个叫 cortex-sentinel 的旧仓已经过时，别去动它。）
+
+## 我要什么
+
+我点开菜单栏面板，然后想上下滑。现在只要它在刷新，我一滑就卡。
+
+我的原话是：前后端渲染能不能分离？前端在刷新的时候我想上下滑，它就会卡。
+
+刷新本身要保留，我要的是刷新不许影响我滑动。数据在后台更新是它的事，我的手指在滑是我的事，这两件事不该互相打架。
+
+## 已经量出来的事实（直接用，别重新量一遍）
+
+我用一个临时探针跑过真实数据（他机器上 logs 目录有 502 个 .status.json），数字如下：
+
+1. 打开面板这一下，整个面板被判定失效 22 次。拆开看：aio=15，lines / lineRegistry / inputStatus / channelStatus / backgroundJobs / backgroundJobRows / unclaimedTerminals 各 1。那 15 次是各个账号的余额结果一个个回来，每回来一个就整块刷一次。
+2. 余额数字已经缓存之后再打开，是 3 次（aio / inputStatus / officialUsage 各 1）。
+3. 面板真正要渲染的行很少：活跃已登记 0、最近展示 8、活跃未登记 0。所以不是行多。
+4. 把 502 条状态重新分组一轮要 72.73 毫秒。这一步目前在后台线程做（Task.detached），但它是每 5 秒一轮的固定成本。
+5. 面板开着的时候，每 5 秒重读一次整个 logs 目录（AIOConstants.statusRefreshInterval = 5）。
+6. 代码里没有任何地方感知滚动状态，刷新完全不看用户此刻在不在滑。
+
+## 架构层的病（我判断是这个，但你可以推翻，推翻要给证据）
+
+SentinelStore 是一个 ObservableObject，上面挂了 23 个 @Published。
+SentinelMenuView 是一个 struct，body 1798 行，里面 68 处直接读 store，所有分区（线列表、余额、通道、后台任务、Input 服务）全在同一个 view 的 body 里。
+
+这两件事叠加的后果是：任何一路刷新——哪怕只是某个账号余额回来了——都会让整个面板的 body 重算一遍。它们之间没有任何隔离。这就是我说的前后端渲染没分离。
+
+平台目标是 macOS 14（Package.swift 写死 .macOS(.v14)），也就是说 Observation 框架（@Observable）是可用的，但现在整个仓一处都没用。
+
+注意一个坑：光把 SentinelStore 换成 @Observable 不够。Observation 是按「这个 view 读了哪些属性」来决定要不要重算的，而现在只有一个 view 把 23 个属性全读了，换了照样全量失效。必须先把 SentinelMenuView 按分区拆成各自独立的 View struct，每个只读自己那一块，Observation 才有意义。
+
+## 前面那个窗口已经改过的，别重复做也别回滚
+
+已经提交在 main 上（1834068 和 3b1e241），改动本身是对的，只是不够：
+
+- 刷新余额时不再把各账号 usage 覆盖成 .loading。原来会导致所有行同时没数字，于是 BalanceSectionPresentation 判成 compact，整个余额块从展开塌成一行，结果回来又弹回展开——面板内容高度在滑动过程中一缩一涨，滚动位置被 ScrollView 反复夹回去。这一条是真因之一，已修。
+- 每行的转圈动画删了，「查询中」这三个字整个面板不再出现（他明确要求：查询期间原样显示上一次的数字，查完直接换数字）。
+- 已有数字的行，结果攒到最后一次性 apply；只有本来就没数字的行才逐条上屏（那 15 次就是这么来的，冷启动第一次填数）。
+- 官方额度的刷新转圈只在他自己点按钮时才转，自动刷新不转，并发闸改成非 @Published。
+
+Tests/CortexSentinelBarTests/PanelBalanceRefreshTests.swift 里有一条 testRefreshWithExistingNumbersKeepsThemAndPublishesAtMostOnce，测的就是「已有数字后再刷新一轮，整面板通知次数 ≤ 1」。别把它删了，你可以往严格改。
+
+## 你要交付的
+
+自己判断怎么做最好，下面是方向不是清单：
+
+- 把面板按分区拆成独立 View，各自只订阅自己需要的数据
+- 上 @Observable 或者把 store 拆成几个小 store，让余额刷新不再惊动线列表
+- 行视图做成独立 View + Equatable 值模型，让 SwiftUI 能跳过没变的行
+- body 里还在跑的 O(n) 聚合（localActivePresentations / activeHostOriginCounts / localActiveEngineCounts，以及每行都调一次的 LocalHostIdentity.current()）搬出去预算好
+- 考虑滚动期间挂起发布，滚完再合并上屏
+
+## 验收（这条最重要，前面就是栽在这里）
+
+编译过、测试绿，都不算修好。这个东西住在他每天在用的那个 app 里，判据只有一个：他点开面板、手指往下滑，不卡。
+
+所以你必须：
+
+1. 用 Instruments（Time Profiler + SwiftUI 模板）在真机上量一次 body 重算的耗时和掉帧，改完再量一次，两组数字都给出来
+2. 把「打开面板一次，整面板失效几次」做成可回归的测试。冷开现在是 22，热开是 3，改完给新数字
+3. 真构建、真安装、真自己点开面板滑一遍。安装走 bash scripts/install-app.sh --cortex-root /Users/falcon/Documents/Code/cortex（会保留他的监视目录设置）
+4. swift test 要过，当前基线 331 tests / 0 failures
+
+## 红线
+
+- 别 kill 他正在跑的哨兵进程，要关只能按你自己记下来的 pid，绝对不许 pkill -f 或 killall 按名字匹配
+- 装机就用上面那条 install-app.sh，别自己拼一套
+- 不许动 cortex 主仓（/Users/falcon/Documents/Code/cortex），这条线只在 cortex-sentinel-public 里
+- 禁建远端仓库、禁加 remote、禁 force push；提交带明确路径，别裸 git commit
+- 时间戳一律 TZ=Asia/Shanghai date

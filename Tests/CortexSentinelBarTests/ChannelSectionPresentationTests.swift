@@ -190,7 +190,7 @@ final class ChannelSectionPresentationTests: XCTestCase {
         )
         XCTAssertEqual(
             presentation.render.primaryRow,
-            ["Codex 查不出来", "Grok 查不出来", "ox-alpha 还没有记录"]
+            ["Codex 查不出", "Grok 查不出", "ox-alpha 还没有记录"]
         )
         XCTAssertEqual(presentation.render.problemLines, [])
         XCTAssertEqual(snapshot.grok.unknownKind, .undetermined)
@@ -263,7 +263,7 @@ final class ChannelSectionPresentationTests: XCTestCase {
         XCTAssertEqual(
             presentation.render,
             ChannelSectionPresentation.Render(
-                primaryRow: ["Codex 通 1 条", "Grok 查不出来", "ox-alpha 通 6 条"],
+                primaryRow: ["Codex 通 1 条", "Grok 查不出", "ox-alpha 通 6 条"],
                 problemLines: []
             )
         )

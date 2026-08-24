@@ -1214,7 +1214,7 @@ final class SentinelFileReaderTests: XCTestCase {
                 codex: undetermined.codex,
                 liveCounts: EngineCounts()
             ).render.primaryRow,
-            ["Codex 查不出来", "Grok 查不出来"]
+            ["Codex 查不出", "Grok 查不出"]
         )
     }
 

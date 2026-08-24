@@ -60,7 +60,7 @@ enum ChannelUnknownKind: Equatable {
         case .unrecognized:
             return "状态看不懂"
         case .undetermined:
-            return "查不出来"
+            return "查不出"
         }
     }
 }

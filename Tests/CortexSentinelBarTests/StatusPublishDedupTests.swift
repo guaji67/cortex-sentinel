@@ -1,4 +1,3 @@
-import Combine
 import Foundation
 import XCTest
 @testable import CortexSentinelBar
@@ -257,11 +256,7 @@ final class StatusPublishDedupTests: XCTestCase {
     }
 
     private func countPublications(_ store: SentinelStore, _ body: () async -> Void) async -> Int {
-        var count = 0
-        let cancellable = store.objectWillChange.sink { count += 1 }
-        await body()
-        withExtendedLifetime(cancellable) {}
-        return count
+        await countStoreChanges(store, during: body)
     }
 
     private func write(_ name: String, _ contents: String) throws {

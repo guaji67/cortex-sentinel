@@ -7,7 +7,7 @@ enum SentinelMenuInitialSection {
 }
 
 struct SentinelMenuView: View {
-    @ObservedObject var store: SentinelStore
+    var store: SentinelStore
     var initialSection: SentinelMenuInitialSection = .top
     /// 仅截图 smoke 用：预展开第一条最近完成，便于给第 4 点留证；菜单栏常驻默认 false。
     var autoExpandFirstCompleted = false
@@ -1458,7 +1458,9 @@ struct SentinelMenuView: View {
     }
 
     private var localHost: LocalHostIdentity {
-        .current()
+        // 缓存值。绝不在 body 里调 LocalHostIdentity.current()：那一趟要走
+        // NSHost.localizedName → SCPreferences 读盘解析，基线里躺在主线程 hang 窗口。
+        store.localHost
     }
 
     private var localActiveLineCount: Int {

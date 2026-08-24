@@ -19,6 +19,9 @@ final class SentinelStore {
     /// Observation 下它们各自通知自己的读者，这正是分区隔离要的形态。
     private(set) var lineGroups: SentinelLineGroups = .empty
     private(set) var boardWindow: SentinelBoardWindow = .empty
+    /// 线行通道归因用的 AIO 切片；只在路由/网关/命中/名单真变时更新，
+    /// 让线列表分区不用跟着余额刷新（readAt 每轮都变）一起失效。
+    private(set) var relayAttribution: RelayAttributionContext = .unconfigured
     private(set) var inputStatus: InputStatusSnapshot = .empty
     private(set) var officialUsage: OfficialUsageSnapshot = .empty
     private(set) var channelStatus: ChannelStatusSnapshot = .missing
@@ -967,6 +970,10 @@ final class SentinelStore {
         }
         if self.aio != aio {
             self.aio = aio
+            let nextAttribution = RelayAttributionContext(aio: aio)
+            if relayAttribution != nextAttribution {
+                relayAttribution = nextAttribution
+            }
         }
         if self.otherCodexProcesses != otherCodexProcesses {
             self.otherCodexProcesses = otherCodexProcesses

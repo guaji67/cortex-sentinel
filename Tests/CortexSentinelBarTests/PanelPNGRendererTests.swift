@@ -44,6 +44,7 @@ final class PanelPNGRendererTests: XCTestCase {
                 "channel-unrecognized",
                 "channel-undetermined",
                 "off-host-active",
+                "packaging",
             ]
         )
         XCTAssertNil(PanelPreviewFixture(rawValue: "unknown"))

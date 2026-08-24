@@ -134,7 +134,8 @@ final class PanelBalanceRefreshTests: XCTestCase {
         await store.setPanelPresented(false)
         clock.now = clock.now.addingTimeInterval(29)
         await store.setPanelPresented(true)
-        XCTAssertEqual(store.statusDiskRefreshCountForTests, afterFirst.status)
+        // 磁盘状态（含打包）每次打开都刷，不跟余额 30 秒闸绑死。
+        XCTAssertEqual(store.statusDiskRefreshCountForTests, afterFirst.status + 1)
         XCTAssertEqual(store.aioUsageRefreshCountForTests, afterFirst.usage)
         XCTAssertEqual(store.inputStatusRefreshCountForTests, afterFirst.input)
         XCTAssertEqual(store.officialUsageRefreshCountForTests, afterFirst.official)
@@ -142,7 +143,7 @@ final class PanelBalanceRefreshTests: XCTestCase {
         await store.setPanelPresented(false)
         clock.now = Date(timeIntervalSince1970: 1_000).addingTimeInterval(31)
         await store.setPanelPresented(true)
-        XCTAssertEqual(store.statusDiskRefreshCountForTests, afterFirst.status + 1)
+        XCTAssertEqual(store.statusDiskRefreshCountForTests, afterFirst.status + 2)
         XCTAssertEqual(store.aioUsageRefreshCountForTests, afterFirst.usage + 1)
         XCTAssertEqual(store.inputStatusRefreshCountForTests, afterFirst.input + 1)
         XCTAssertEqual(store.officialUsageRefreshCountForTests, afterFirst.official + 1)

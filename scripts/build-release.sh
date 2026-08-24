@@ -7,7 +7,7 @@ package_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 app_dir="$package_dir/.build/CortexSentinelBar.app"
 binary_path="$app_dir/Contents/MacOS/CortexSentinelBar"
 dist_dir="$package_dir/dist"
-version="${RELEASE_VERSION:-0.1.1}"
+version="${RELEASE_VERSION:-0.1.2}"
 build_number="${RELEASE_BUILD_NUMBER:-$(TZ=Asia/Shanghai date +%Y%m%d)}"
 identity="Developer ID Application: Xiang Yu (M3JSCZ5X23)"
 signing_keychain="$HOME/.cortex-build/devid.keychain-db"
@@ -83,6 +83,12 @@ cp "$package_dir/Resources/AppIcon.icns" "$app_dir/Contents/Resources/AppIcon.ic
 # 所有 app 内容就绪后、Developer ID 签名之前写入，签名才会覆盖安装器清单。
 bash "$package_dir/scripts/write-installer-manifest.sh" \
   "$app_dir" "$package_dir/scripts/install-app.sh"
+head_commit="$(git -C "$package_dir" rev-parse HEAD)"
+manifest_commit="$(plutil -extract commit raw -o - "$app_dir/Contents/Resources/installer-manifest.json")"
+if [ "$manifest_commit" != "$head_commit" ]; then
+  echo "失败：安装器清单 commit=$manifest_commit，期望 $head_commit" >&2
+  exit 1
+fi
 
 if ! lipo -archs "$binary_path" | tr ' ' '\n' | grep -qx arm64; then
   echo "失败：正式 app 不包含 arm64" >&2
@@ -165,6 +171,16 @@ if [ "$mounted_installer_sha256" != "$mounted_script_sha256" ]; then
   echo "失败：DMG 内 installer hash 与安装器脚本不匹配：app=${mounted_installer_sha256}，脚本=${mounted_script_sha256}" >&2
   exit 1
 fi
+mounted_commit="$(plutil -extract commit raw -o - "$mounted_app/Contents/Resources/installer-manifest.json")"
+if [ "$mounted_commit" != "$head_commit" ]; then
+  echo "失败：DMG 内清单 commit=$mounted_commit，期望 $head_commit" >&2
+  exit 1
+fi
+mounted_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$mounted_app/Contents/Info.plist")"
+if [ "$mounted_version" != "$version" ]; then
+  echo "失败：DMG 内 CFBundleShortVersionString=$mounted_version，期望 $version" >&2
+  exit 1
+fi
 if [ ! -L "$mount_dir/Applications" ] || [ "$(readlink "$mount_dir/Applications")" != "/Applications" ]; then
   echo "失败：DMG 内 Applications 快捷方式不正确" >&2
   exit 1
@@ -176,9 +192,26 @@ mounted=0
   cd "$dist_dir"
   shasum -a 256 "$(basename "$dmg_path")" > "$(basename "$dmg_path").sha256"
 )
+dmg_sha256="$(awk '{print $1}' "$dmg_path.sha256")"
+dist_manifest="$dist_dir/Cortex哨兵-$version.manifest.json"
+cat > "$dist_manifest" <<EOF
+{
+  "repository": "$(git -C "$package_dir" remote get-url origin)",
+  "commit": "$head_commit",
+  "version": "$version",
+  "build": "$build_number",
+  "architecture": "arm64",
+  "signature": "developer-id",
+  "notarized": true,
+  "generated_at": "$(TZ=Asia/Shanghai date +%Y-%m-%dT%H:%M:%S%z)",
+  "dmg_sha256": "$dmg_sha256"
+}
+EOF
 
 echo "== 发布产物 =="
 echo "version=$version"
 echo "build=$build_number"
+echo "commit=$head_commit"
 echo "dmg=$dmg_path"
-echo "sha256=$(awk '{print $1}' "$dmg_path.sha256")"
+echo "sha256=$dmg_sha256"
+echo "manifest=$dist_manifest"

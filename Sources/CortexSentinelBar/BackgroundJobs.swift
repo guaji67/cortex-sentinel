@@ -459,31 +459,32 @@ enum LaunchctlCommandBuilder {
 }
 
 struct BackgroundJobsSectionView: View {
-    let snapshot: BackgroundJobsSnapshot
+    /// The parent owns the observation of the store and hands this view a
+    /// value-only presentation.  Rebuilding the `BackgroundJobsPresentation`
+    /// from inside `body` made every hidden-popover transaction walk the whole
+    /// jobs list again.
+    let presentation: BackgroundJobsPresentation
     /// 展开后，问题行下面那截「其余正常」的二级折叠。
     @Binding var showsHealthy: Bool
     /// 整块展开与否。默认收起只留一行摘要，由外层持久化；故障详情只在展开后出现。
-    @Binding var isExpanded: Bool
-    var now: Date = Date()
-    private var presentation: BackgroundJobsPresentation { BackgroundJobsPresentation(snapshot: snapshot, now: now) }
+    let isExpanded: Bool
+    let onToggleExpanded: () -> Void
     /// 没有任何明细行时（无数据 / 0 个任务）就没什么可展开的，摘要行不做成按钮。
     private var hasDetail: Bool {
-        let p = presentation
-        return !p.problemRows.isEmpty || !p.healthyRows.isEmpty
+        !presentation.problemRows.isEmpty || !presentation.healthyRows.isEmpty
     }
 
     var body: some View {
-        let p = presentation
         return VStack(alignment: .leading, spacing: SentinelTheme.Spacing.sm) {
             if hasDetail {
-                Button { withAnimation(.easeInOut(duration: 0.15)) { isExpanded.toggle() } } label: { summaryLine(p, discloses: true).contentShape(Rectangle()) }.buttonStyle(.plain)
+                Button { withAnimation(.easeInOut(duration: 0.15)) { onToggleExpanded() } } label: { summaryLine(presentation, discloses: true).contentShape(Rectangle()) }.buttonStyle(.plain)
             } else {
-                summaryLine(p, discloses: false)
+                summaryLine(presentation, discloses: false)
             }
             if isExpanded {
-                ForEach(p.problemRows) { problemRow($0) }
-                if !p.healthyRows.isEmpty {
-                    if p.hasProblems { healthyDisclosure(p) } else { ForEach(p.healthyRows) { healthyRow($0) } }
+                ForEach(presentation.problemRows) { problemRow($0) }
+                if !presentation.healthyRows.isEmpty {
+                    if presentation.hasProblems { healthyDisclosure(presentation) } else { ForEach(presentation.healthyRows) { healthyRow($0) } }
                 }
             }
         }.accessibilityIdentifier("background-jobs-section")

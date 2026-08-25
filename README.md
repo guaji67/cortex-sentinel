@@ -22,6 +22,14 @@ bash scripts/install-app.sh
 
 本机需要能跑 `swift`。
 
+安装器还会在 `/Applications` 放置独立的 `重启 Cortex 哨兵.command`。窗口卡住、
+在“强制退出应用程序”里看不到时，直接双击它即可；命令行等价入口是：
+
+```bash
+bash scripts/sentinel-ctl.sh status
+bash scripts/sentinel-ctl.sh restart
+```
+
 ### 后端
 
 `backend/` 是 Python 后端，负责盯线、通道和机器健康。它只需要系统自带的 Python 3.9+，不需要虚拟环境或 `pip`。从仓库根目录运行：

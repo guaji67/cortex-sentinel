@@ -50,6 +50,7 @@ ln -s /Applications "$volume_dir/Applications"
 mkdir -p "$volume_dir/scripts"
 cp "$package_dir/Install-Cortex-Sentinel.command" "$volume_dir/Install-Cortex-Sentinel.command"
 cp "$package_dir/scripts/install-app.sh" "$volume_dir/scripts/install-app.sh"
+cp "$package_dir/scripts/restart-sentinel.command" "$volume_dir/scripts/restart-sentinel.command"
 
 binary_sha256="$(shasum -a 256 "$source_app/Contents/MacOS/CortexSentinelBar" | awk '{print $1}')"
 installer_sha256="$(shasum -a 256 "$package_dir/scripts/install-app.sh" | awk '{print $1}')"

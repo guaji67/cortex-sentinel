@@ -14,6 +14,7 @@ fi
 package_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 app_dest="/Applications/Cortex哨兵.app"
 app_executable="$app_dest/Contents/MacOS/CortexSentinelBar"
+restart_command_dest="/Applications/重启 Cortex 哨兵.command"
 service_label="com.cortex.sentinelbar"
 plist="$HOME/Library/LaunchAgents/$service_label.plist"
 uid="$(id -u)"
@@ -348,6 +349,10 @@ else
 fi
 codesign --verify --deep --strict "$app_source"
 verify_installer_integrity "$app_source"
+if [ ! -x "$app_source/Contents/Resources/sentinel-ctl.sh" ]; then
+  echo "失败：app 内缺少哨兵重启脚本：$app_source/Contents/Resources/sentinel-ctl.sh" >&2
+  exit 1
+fi
 if ! lipo -archs "$app_source/Contents/MacOS/CortexSentinelBar" | tr ' ' '\n' | grep -qx arm64; then
   echo "失败：预构建 app 不包含 arm64" >&2
   exit 1
@@ -356,6 +361,7 @@ fi
 backup_dir="$HOME/Library/Application Support/Cortex/SentinelInstallBackups/$(date +%Y%m%d-%H%M%S)"
 had_app=0
 had_plist=0
+had_restart_command=0
 mkdir -p "$backup_dir"
 if [ -d "$app_dest" ]; then
   ditto "$app_dest" "$backup_dir/Cortex哨兵.app"
@@ -364,6 +370,10 @@ fi
 if [ -f "$plist" ]; then
   cp -p "$plist" "$backup_dir/$service_label.plist"
   had_plist=1
+fi
+if [ -f "$restart_command_dest" ]; then
+  cp -p "$restart_command_dest" "$backup_dir/restart-sentinel.command"
+  had_restart_command=1
 fi
 echo "== 回滚备份：$backup_dir =="
 
@@ -381,6 +391,11 @@ rollback_on_error() {
     cp -p "$backup_dir/$service_label.plist" "$plist"
   else
     trash_existing_path "$plist" "sentinel-plist-failed"
+  fi
+  if [ "$had_restart_command" -eq 1 ]; then
+    cp -p "$backup_dir/restart-sentinel.command" "$restart_command_dest"
+  else
+    rm -f "$restart_command_dest"
   fi
   if [ "$had_app" -eq 1 ] && [ "$had_plist" -eq 1 ]; then
     launchctl bootstrap "gui/$uid" "$plist" 2>/dev/null || true
@@ -403,6 +418,9 @@ trash_existing_path "$app_dest" "sentinel-install-replaced"
 ditto "$app_source" "$app_dest"
 codesign --verify --deep --strict "$app_dest"
 "$lsregister" -f "$app_dest"
+cp "$package_dir/scripts/restart-sentinel.command" "$restart_command_dest"
+chmod 0755 "$restart_command_dest"
+echo "== 已安装独立重启入口：$restart_command_dest =="
 
 echo "== 生成自启配置并重新托管 =="
 write_launch_agent

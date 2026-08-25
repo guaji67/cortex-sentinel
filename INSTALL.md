@@ -76,6 +76,13 @@ Finder 里也可以双击 `Install-Cortex-Sentinel.command`；若同目录没有
 
 安装器会：构建（或使用 `--app-source` 指定的预构建包）→ 备份当前安装 → 停掉旧的 launchd 托管 → 清掉迁移残留登录项 → 把 app 放到 `/Applications/Cortex哨兵.app` → 写 launchd plist → 重新托管 → 断言只有一个实例 → 跑一次 `--dump-state`。中途失败会把上一版 app 和 plist 装回去。
 
+安装完成后还会放一个独立的 `/Applications/重启 Cortex 哨兵.command`。哨兵窗口卡住、在“强制退出应用程序”里看不到时，直接双击这个入口即可；它只对 `com.cortex.sentinelbar` 执行 `launchctl kickstart -k`，并等待真实新进程出现后再报告成功。命令行等价入口：
+
+```bash
+bash scripts/sentinel-ctl.sh status
+bash scripts/sentinel-ctl.sh restart
+```
+
 更新版本也用这一条，不要手动 `pkill`。plist 开了 KeepAlive：进程被杀后会马上拉起，若那时文件还没覆盖完，跑起来的仍是旧二进制。
 
 自启配置在 `~/Library/LaunchAgents/com.cortex.sentinelbar.plist`（RunAtLoad + KeepAlive）。入口：启动台、应用程序文件夹，或 Spotlight 搜 Cortex。

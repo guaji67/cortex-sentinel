@@ -1004,12 +1004,12 @@ struct SentinelBackgroundJobsPanelSection: View {
         VStack(alignment: .leading, spacing: SentinelTheme.Spacing.sm) {
             // PR 腿的健康快照折叠展示保留；私有腿的 launchctl 控制行另列在下方。
             BackgroundJobsSectionView(
-                snapshot: store.backgroundJobs,
+                presentation: BackgroundJobsPresentation(snapshot: store.backgroundJobs),
                 showsHealthy: $showsHealthy,
-                isExpanded: Binding(
-                    get: { store.backgroundJobsExpanded },
-                    set: { store.setBackgroundJobsExpanded($0) }
-                )
+                isExpanded: store.backgroundJobsExpanded,
+                onToggleExpanded: {
+                    store.setBackgroundJobsExpanded(!store.backgroundJobsExpanded)
+                }
             )
             // 操作行跟着整块一起收：收起时只留摘要那一行。
             if store.backgroundJobsExpanded, !store.backgroundJobRows.isEmpty {

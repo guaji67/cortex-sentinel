@@ -42,6 +42,8 @@
 
 附：`testOpeningPanelStillPicksUpPackagingWhenBalanceRefreshIsSkipped`、`testObservationLoopFiresForPackagingNilToRunning`、`testHostedMenuMountsPackagingSectionOnNilToRunning`。截图 fixture：`--panel-fixture packaging`。
 
+打包读取端的 `isActive` 与主仓 `scripts/packaging_progress.py:148` 的 `progress_run_is_active()` 共用四道判活闸：状态为 `running`、`pid` 仍存活、当前进程启动标识与 `process_started_at` 一致、`updated_at` 距当前不超过主仓 `RUNNING_STALE_AFTER_SECONDS` 的 30 分钟窗口。缺任一条件，Store 丢弃该快照，菜单栏和状态栏都不显示「打包中」。启动标识在 macOS 上等价执行 `ps -p <pid> -o lstart=`；`kill(pid, 0)` 返回权限拒绝时按进程仍存活处理。窗口常量锚定主仓 `scripts/packaging_progress.py:61`，Swift 测试有契约断言和同一组跨语言 fixture。
+
 ## 维护规矩
 
 1. 改状态栏或面板任一分区，先过本文对应行，再补或改守卫。

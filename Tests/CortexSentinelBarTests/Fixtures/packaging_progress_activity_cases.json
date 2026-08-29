@@ -1,0 +1,66 @@
+[
+  {
+    "name": "dead_pid",
+    "payload": {
+      "schema": "cortex.packaging-progress.v1",
+      "run_id": "fixture-dead",
+      "entry": "release_app",
+      "status": "running",
+      "pid": 42,
+      "process_started_at": "boot-42",
+      "updated_at": "2026-08-28T00:00:00Z"
+    },
+    "now": "2026-08-28T00:00:00Z",
+    "pid_alive": false,
+    "observed_process_started_at": "boot-42",
+    "expected": false
+  },
+  {
+    "name": "pid_reuse",
+    "payload": {
+      "schema": "cortex.packaging-progress.v1",
+      "run_id": "fixture-reused",
+      "entry": "release_app",
+      "status": "running",
+      "pid": 42,
+      "process_started_at": "old-boot-42",
+      "updated_at": "2026-08-28T00:00:00Z"
+    },
+    "now": "2026-08-28T00:00:00Z",
+    "pid_alive": true,
+    "observed_process_started_at": "new-boot-42",
+    "expected": false
+  },
+  {
+    "name": "stale_updated_at",
+    "payload": {
+      "schema": "cortex.packaging-progress.v1",
+      "run_id": "fixture-stale",
+      "entry": "release_app",
+      "status": "running",
+      "pid": 42,
+      "process_started_at": "boot-42",
+      "updated_at": "2026-08-27T23:20:00Z"
+    },
+    "now": "2026-08-28T00:00:00Z",
+    "pid_alive": true,
+    "observed_process_started_at": "boot-42",
+    "expected": false
+  },
+  {
+    "name": "live",
+    "payload": {
+      "schema": "cortex.packaging-progress.v1",
+      "run_id": "fixture-live",
+      "entry": "release_app",
+      "status": "running",
+      "pid": 42,
+      "process_started_at": "boot-42",
+      "updated_at": "2026-08-28T00:00:00Z"
+    },
+    "now": "2026-08-28T00:00:00Z",
+    "pid_alive": true,
+    "observed_process_started_at": "boot-42",
+    "expected": true
+  }
+]

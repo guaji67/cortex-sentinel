@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// Cortex 打包进度（cortex.packaging-progress.v1）。
@@ -61,6 +62,8 @@ struct PackagingProgressSnapshot: Decodable, Equatable {
     let runID: String?
     let entry: String?
     let status: PackagingProgressStatus
+    let processID: Int?
+    let processStartedAt: String?
     let currentStepID: String?
     let currentDetail: String?
     let error: String?
@@ -77,6 +80,10 @@ struct PackagingProgressSnapshot: Decodable, Equatable {
         case runID = "run_id"
         case entry
         case status
+        case processID = "pid"
+        case processStartedAt = "process_started_at"
+        case pidStartedAt = "pid_started_at"
+        case processStartTime = "process_start_time"
         case currentStepID = "current_step_id"
         case currentDetail = "current_detail"
         case error
@@ -97,6 +104,23 @@ struct PackagingProgressSnapshot: Decodable, Equatable {
         status = PackagingProgressStatus(
             rawValue: try container.decodeIfPresent(String.self, forKey: .status)
         )
+        if let pid = try container.decodeIfPresent(Int.self, forKey: .processID) {
+            processID = pid
+        } else if let rawPID = try container.decodeIfPresent(String.self, forKey: .processID) {
+            processID = Int(rawPID.trimmingCharacters(in: .whitespacesAndNewlines))
+        } else {
+            processID = nil
+        }
+        let processStartCandidates = [
+            try container.decodeIfPresent(String.self, forKey: .processStartedAt),
+            try container.decodeIfPresent(String.self, forKey: .pidStartedAt),
+            try container.decodeIfPresent(String.self, forKey: .processStartTime),
+        ]
+        if let processStart = processStartCandidates.first(where: { $0 != nil }), let processStart {
+            processStartedAt = processStart.trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            processStartedAt = nil
+        }
         currentStepID = try container.decodeIfPresent(String.self, forKey: .currentStepID)
         currentDetail = try container.decodeIfPresent(String.self, forKey: .currentDetail)
         error = try container.decodeIfPresent(String.self, forKey: .error)
@@ -111,9 +135,34 @@ struct PackagingProgressSnapshot: Decodable, Equatable {
         steps = try container.decodeIfPresent([PackagingProgressStep].self, forKey: .steps) ?? []
     }
 
-    /// 只有 running 才算活跃；failed / completed 的残留文件不该占着界面。
+    /// 只有通过与 Python 正本相同的四道判活闸才算活跃；过期残留不占界面。
     var isActive: Bool {
-        status.isRunning
+        isActive(using: .live)
+    }
+
+    func isActive(
+        using probe: PackagingProgressActivityProbe,
+        now: Date = Date(),
+        staleAfterSeconds: TimeInterval = PackagingProgressActivity.runningStaleAfterSeconds
+    ) -> Bool {
+        guard status.isRunning,
+              let processID,
+              processID > 0,
+              probe.pidAlive(processID),
+              let expectedStartedAt = processStartedAt,
+              !expectedStartedAt.isEmpty,
+              probe.processStartedAt(processID).trimmingCharacters(in: .whitespacesAndNewlines)
+                == expectedStartedAt.trimmingCharacters(in: .whitespacesAndNewlines),
+              let updatedAt
+        else {
+            return false
+        }
+
+        // 与 scripts/packaging_progress.py:148-196 保持一致：正本只用 updated_at
+        // 判 heartbeat 窗口。heartbeat_at 目前不是生产写入字段，不能在 Swift 侧
+        // 偷换成另一套规则，否则两边会对同一份记录给出不同结论。
+        return now.timeIntervalSince(updatedAt)
+            <= max(0, staleAfterSeconds)
     }
 
     var stepTitle: String {
@@ -154,6 +203,53 @@ struct PackagingProgressSnapshot: Decodable, Equatable {
         }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+/// 打包进度判活所需的系统探针。测试可注入闭包，生产读取使用 macOS 实际进程表。
+struct PackagingProgressActivityProbe {
+    let pidAlive: (Int) -> Bool
+    let processStartedAt: (Int) -> String
+
+    static let live = PackagingProgressActivityProbe(
+        pidAlive: PackagingProgressActivity.isPIDAlive,
+        processStartedAt: PackagingProgressActivity.processStartedAt
+    )
+}
+
+enum PackagingProgressActivity {
+    /// 单一窗口常量的来源是主仓 Python 正本 `scripts/packaging_progress.py:61`。
+    /// 若 Python 正本调整该值，必须同步这里并由单元测试的契约断言拦住漂移。
+    static let runningStaleAfterSeconds: TimeInterval = 30 * 60
+
+    static func isPIDAlive(_ pid: Int) -> Bool {
+        guard pid > 0, pid <= Int(Int32.max) else { return false }
+        if Darwin.kill(Int32(pid), 0) == 0 {
+            return true
+        }
+        // 与 Python `_pid_alive` 一致：权限被拒也说明该 PID 仍存在。
+        return errno == EPERM
+    }
+
+    static func processStartedAt(_ pid: Int) -> String {
+        guard pid > 0 else { return "" }
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = ["-p", String(pid), "-o", "lstart="]
+        process.standardOutput = output
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return ""
+        }
+        guard process.terminationStatus == 0 else { return "" }
+        return String(
+            data: output.fileHandleForReading.readDataToEndOfFile(),
+            encoding: .utf8
+        )?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 }
 

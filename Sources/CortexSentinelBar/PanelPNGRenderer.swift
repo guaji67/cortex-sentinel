@@ -18,10 +18,20 @@ enum PanelPreviewFixture: String, CaseIterable {
     case channelUndetermined = "channel-undetermined"
     case offHostActive = "off-host-active"
     case packaging
+    case packagingDeadPID = "packaging-dead-pid"
+    case packagingPIDReuse = "packaging-pid-reuse"
+    case packagingStale = "packaging-stale"
 }
 
 enum PanelPNGRenderError: Error {
     case emptyImage
+}
+
+enum PackagingPreviewMode {
+    case live
+    case deadPID
+    case pidReuse
+    case stale
 }
 
 /// 给 `--render-panel-png` 用的离屏会话：临时监视目录 + 不扫本机进程表。
@@ -62,8 +72,17 @@ enum PanelPreviewFactory {
         try PanelPreviewLayout.write(fixture: fixture, into: root)
         let packRoot = root.appendingPathComponent("pack-progress", isDirectory: true)
         try fileManager.createDirectory(at: packRoot, withIntermediateDirectories: true)
-        if fixture == .packaging {
-            try PanelPreviewLayout.writeRunningPackagingProgress(into: packRoot)
+        switch fixture {
+        case .packaging:
+            try PanelPreviewLayout.writePackagingProgress(into: packRoot, mode: .live)
+        case .packagingDeadPID:
+            try PanelPreviewLayout.writePackagingProgress(into: packRoot, mode: .deadPID)
+        case .packagingPIDReuse:
+            try PanelPreviewLayout.writePackagingProgress(into: packRoot, mode: .pidReuse)
+        case .packagingStale:
+            try PanelPreviewLayout.writePackagingProgress(into: packRoot, mode: .stale)
+        default:
+            break
         }
 
         let suite = "com.falcon.cortex.sentinelbar.panel-png.\(UUID().uuidString)"
@@ -343,7 +362,7 @@ private enum PanelPreviewLayout {
                 codex: ChannelJSON(status: "alive", evidence: "1 条在跑", running: 1)
             )
             try writeHealthyBackgroundJobs(into: root, generatedAt: now)
-        case .packaging:
+        case .packaging, .packagingDeadPID, .packagingPIDReuse, .packagingStale:
             try writeChannel(
                 into: root,
                 generatedAt: now,
@@ -354,18 +373,39 @@ private enum PanelPreviewLayout {
         }
     }
 
-    static func writeRunningPackagingProgress(into root: URL) throws {
+    static func writePackagingProgress(into root: URL, mode: PackagingPreviewMode) throws {
         let run = root.appendingPathComponent("preview-run", isDirectory: true)
         try FileManager.default.createDirectory(at: run, withIntermediateDirectories: true)
         let pid = Int(ProcessInfo.processInfo.processIdentifier)
         let processStartedAt = PackagingProgressActivity.processStartedAt(pid)
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let payloadPID: Int
+        let payloadStartedAt: String
+        let payloadUpdatedAt: Date
+        switch mode {
+        case .live:
+            payloadPID = pid
+            payloadStartedAt = processStartedAt
+            payloadUpdatedAt = Date()
+        case .deadPID:
+            payloadPID = 2_147_483_647
+            payloadStartedAt = "dead-fixture-process"
+            payloadUpdatedAt = Date()
+        case .pidReuse:
+            payloadPID = pid
+            payloadStartedAt = "old-fixture-process"
+            payloadUpdatedAt = Date()
+        case .stale:
+            payloadPID = pid
+            payloadStartedAt = processStartedAt
+            payloadUpdatedAt = Date().addingTimeInterval(-31 * 60)
+        }
         try Data(
             """
             {"schema":"cortex.packaging-progress.v1","run_id":"preview-run","status":"running",
-             "pid":\(pid),"process_started_at":"\(processStartedAt)",
-             "current_step_id":"build","current_detail":"Electron 打包","updated_at":"\(formatter.string(from: Date()))",
+             "pid":\(payloadPID),"process_started_at":"\(payloadStartedAt)",
+             "current_step_id":"build","current_detail":"Electron 打包","updated_at":"\(formatter.string(from: payloadUpdatedAt))",
              "eta_label":"大约还要 12 分钟",
              "steps":[{"id":"build","title":"构建 App 与 zip","status":"running"}]}
             """.utf8

@@ -45,6 +45,9 @@ final class PanelPNGRendererTests: XCTestCase {
                 "channel-undetermined",
                 "off-host-active",
                 "packaging",
+                "packaging-dead-pid",
+                "packaging-pid-reuse",
+                "packaging-stale",
             ]
         )
         XCTAssertNil(PanelPreviewFixture(rawValue: "unknown"))
@@ -122,6 +125,28 @@ final class PanelPNGRendererTests: XCTestCase {
         XCTAssertFalse(packaging.processStartedAt?.isEmpty ?? true)
         XCTAssertTrue(packaging.isActive)
         XCTAssertTrue(session.store.packagingActive)
+    }
+
+    func testPackagingBadFixturesAreHiddenByActivityGates() async throws {
+        for fixture in [
+            PanelPreviewFixture.packagingDeadPID,
+            PanelPreviewFixture.packagingPIDReuse,
+            PanelPreviewFixture.packagingStale,
+        ] {
+            let session = try await PanelPreviewFactory.makeSession(fixture: fixture)
+            defer { session.tearDown() }
+
+            let packaging = try XCTUnwrap(
+                PackagingProgressReader.read(
+                    at: session.root.appendingPathComponent("pack-progress")
+                ),
+                fixture.rawValue
+            )
+            XCTAssertEqual(packaging.status, .running, fixture.rawValue)
+            XCTAssertFalse(packaging.isActive, fixture.rawValue)
+            XCTAssertNil(session.store.packagingProgress, fixture.rawValue)
+            XCTAssertFalse(session.store.packagingActive, fixture.rawValue)
+        }
     }
 
     func testBgjobsProblemsFixtureExpandsTwoProblems() async throws {

@@ -217,10 +217,15 @@ final class PackagingDisplayRegressionTests: XCTestCase {
     private func writeRunningProgress() throws {
         let run = progressRoot.appendingPathComponent("run-1", isDirectory: true)
         try fileManager.createDirectory(at: run, withIntermediateDirectories: true)
+        let pid = Int(ProcessInfo.processInfo.processIdentifier)
+        let processStartedAt = PackagingProgressActivity.processStartedAt(pid)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         try Data(
             """
             {"schema":"cortex.packaging-progress.v1","run_id":"run-1","status":"running",
-             "current_step_id":"build","current_detail":"打包中","updated_at":"2026-08-24T15:00:00Z",
+             "pid":\(pid),"process_started_at":"\(processStartedAt)",
+             "current_step_id":"build","current_detail":"打包中","updated_at":"\(formatter.string(from: Date()))",
              "eta_label":"大约还要 9 分钟",
              "steps":[{"id":"build","title":"构建 App 与 zip","status":"running"}]}
             """.utf8

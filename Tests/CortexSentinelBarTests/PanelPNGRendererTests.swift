@@ -112,6 +112,18 @@ final class PanelPNGRendererTests: XCTestCase {
         XCTAssertEqual(session.store.channelStatus.grok.evidence, "账单未付，进程秒退")
     }
 
+    func testPackagingFixtureCarriesLiveActivityIdentity() async throws {
+        let session = try await PanelPreviewFactory.makeSession(fixture: .packaging)
+        defer { session.tearDown() }
+
+        let packaging = try XCTUnwrap(session.store.packagingProgress)
+        XCTAssertEqual(packaging.status, .running)
+        XCTAssertEqual(packaging.processID, Int(ProcessInfo.processInfo.processIdentifier))
+        XCTAssertFalse(packaging.processStartedAt?.isEmpty ?? true)
+        XCTAssertTrue(packaging.isActive)
+        XCTAssertTrue(session.store.packagingActive)
+    }
+
     func testBgjobsProblemsFixtureExpandsTwoProblems() async throws {
         let session = try await PanelPreviewFactory.makeSession(fixture: .bgjobsProblems)
         defer { session.tearDown() }

@@ -481,7 +481,7 @@ struct SentinelBalancesSection: View {
                 // 三组余额：小灰标签 + 大数字，各组按剩余独立变色——
                 // 哪组快用完一眼扫出来，而不是整行一个颜色糊在一起。
                 HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
-                    cursorUsageSegment("模式", snapshot.autoPercentUsed)
+                    cursorUsageSegment("Grok", snapshot.autoPercentUsed)
                     cursorUsageDivider
                     cursorUsageSegment("API", snapshot.apiPercentUsed)
                     cursorUsageDivider
@@ -556,7 +556,7 @@ struct SentinelBalancesSection: View {
     }
 
     private func cursorUsageTooltip(_ snapshot: CursorUsageSnapshot) -> String {
-        var parts = ["Cursor 订阅 · 剩余百分比（模式 / API / Grok Bot）"]
+        var parts = ["Cursor 订阅 · 剩余百分比（Grok / API / Bot）"]
         if let resetDate = snapshot.botResetDate {
             let formatter = DateFormatter()
             formatter.locale = Locale(identifier: "zh_CN")

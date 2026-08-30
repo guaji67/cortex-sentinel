@@ -431,7 +431,127 @@ struct SentinelBalancesSection: View {
                     }
                 }
             }
+
+            cursorUsageRow
         }
+    }
+
+    /// Cursor 订阅余额：三组（模式 / API / Bot）排成一行，只报剩余百分比。
+    /// 本机没装或没登录 Cursor 时不占位。
+    @ViewBuilder private var cursorUsageRow: some View {
+        let snapshot = store.cursorUsage
+        switch snapshot.sourceState {
+        case .unconfigured:
+            EmptyView()
+        case .invalid:
+            HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
+                Circle()
+                    .fill(SentinelTheme.Colors.secondaryForeground)
+                    .frame(
+                        width: SentinelTheme.Metrics.balanceDot,
+                        height: SentinelTheme.Metrics.balanceDot
+                    )
+                Text("Cursor")
+                    .font(SentinelTheme.Fonts.balanceName)
+                    .foregroundStyle(SentinelTheme.Colors.foreground)
+                    .lineLimit(1)
+                Spacer(minLength: SentinelTheme.Spacing.xs)
+                Text(snapshot.errorMessage ?? "暂不可用")
+                    .font(SentinelTheme.Fonts.balanceMeta)
+                    .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .frame(height: 38)
+            .contentShape(Rectangle())
+        case .available:
+            HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
+                Circle()
+                    .fill(cursorUsageStatusColor(snapshot))
+                    .frame(
+                        width: SentinelTheme.Metrics.balanceDot,
+                        height: SentinelTheme.Metrics.balanceDot
+                    )
+                Text("Cursor")
+                    .font(SentinelTheme.Fonts.balanceName)
+                    .foregroundStyle(SentinelTheme.Colors.foreground)
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                Spacer(minLength: SentinelTheme.Spacing.xs)
+                HStack(spacing: SentinelTheme.Spacing.sm) {
+                    cursorUsageSegment("模式", snapshot.autoPercentUsed, snapshot)
+                    cursorUsageSegment("API", snapshot.apiPercentUsed, snapshot)
+                    cursorUsageSegment("Bot", snapshot.totalPercentUsed, snapshot)
+                }
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(2)
+            }
+            .frame(height: 38)
+            .contentShape(Rectangle())
+            .help(cursorUsageTooltip(snapshot))
+        }
+    }
+
+    private func cursorUsageSegment(
+        _ label: String,
+        _ percentUsed: Double?,
+        _ snapshot: CursorUsageSnapshot
+    ) -> some View {
+        let text: String
+        let color: Color
+        if let percentUsed {
+            let remaining = min(100, max(0, 100 - percentUsed))
+            let rounded = remaining.rounded() == remaining
+                ? String(Int(remaining))
+                : String(format: "%.1f", remaining)
+            text = "\(label) 剩\(rounded)%"
+            color = cursorUsageColor(snapshot)
+        } else {
+            text = "\(label) —"
+            color = SentinelTheme.Colors.secondaryForeground
+        }
+        return Text(text)
+            .font(SentinelTheme.Fonts.balanceAmount)
+            .foregroundStyle(color)
+            .lineLimit(1)
+    }
+
+    private func cursorUsageColor(_ snapshot: CursorUsageSnapshot) -> Color {
+        func isLow(_ used: Double?) -> Bool {
+            guard let used else {
+                return false
+            }
+            return (100 - used) <= 100 - AIOConstants.quotaWarningThreshold
+        }
+        if snapshot.stale || isLow(snapshot.autoPercentUsed)
+            || isLow(snapshot.apiPercentUsed) || isLow(snapshot.totalPercentUsed) {
+            return SentinelTheme.Colors.warning
+        }
+        return SentinelTheme.Colors.foreground
+    }
+
+    private func cursorUsageStatusColor(_ snapshot: CursorUsageSnapshot) -> Color {
+        if snapshot.stale {
+            return SentinelTheme.Colors.warning
+        }
+        let hasLow = [snapshot.autoPercentUsed, snapshot.apiPercentUsed, snapshot.totalPercentUsed]
+            .compactMap { $0 }
+            .contains { (100 - $0) <= 100 - AIOConstants.quotaWarningThreshold }
+        return hasLow ? SentinelTheme.Colors.warning : SentinelTheme.Colors.success
+    }
+
+    private func cursorUsageTooltip(_ snapshot: CursorUsageSnapshot) -> String {
+        var parts = ["Cursor 订阅 · 剩余百分比（模式 / API / Bot）"]
+        if let checkedAt = snapshot.checkedAt {
+            parts.append("\(SentinelTimeFormat.clockTime(checkedAt)) 更新")
+        }
+        if snapshot.stale {
+            parts.append("已过期")
+        }
+        if let errorMessage = snapshot.errorMessage {
+            parts.append(errorMessage)
+        }
+        return parts.joined(separator: " · ")
     }
 
     private var unreadSection: some View {

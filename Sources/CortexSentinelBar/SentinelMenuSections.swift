@@ -481,7 +481,7 @@ struct SentinelBalancesSection: View {
                 HStack(spacing: SentinelTheme.Spacing.sm) {
                     cursorUsageSegment("模式", snapshot.autoPercentUsed, snapshot)
                     cursorUsageSegment("API", snapshot.apiPercentUsed, snapshot)
-                    cursorUsageSegment("Bot", snapshot.totalPercentUsed, snapshot)
+                    cursorUsageSegment("Bot", snapshot.botPercentUsed, snapshot)
                 }
                 .fixedSize(horizontal: true, vertical: false)
                 .layoutPriority(2)
@@ -524,7 +524,7 @@ struct SentinelBalancesSection: View {
             return (100 - used) <= 100 - AIOConstants.quotaWarningThreshold
         }
         if snapshot.stale || isLow(snapshot.autoPercentUsed)
-            || isLow(snapshot.apiPercentUsed) || isLow(snapshot.totalPercentUsed) {
+            || isLow(snapshot.apiPercentUsed) || isLow(snapshot.botPercentUsed) {
             return SentinelTheme.Colors.warning
         }
         return SentinelTheme.Colors.foreground
@@ -534,14 +534,20 @@ struct SentinelBalancesSection: View {
         if snapshot.stale {
             return SentinelTheme.Colors.warning
         }
-        let hasLow = [snapshot.autoPercentUsed, snapshot.apiPercentUsed, snapshot.totalPercentUsed]
+        let hasLow = [snapshot.autoPercentUsed, snapshot.apiPercentUsed, snapshot.botPercentUsed]
             .compactMap { $0 }
             .contains { (100 - $0) <= 100 - AIOConstants.quotaWarningThreshold }
         return hasLow ? SentinelTheme.Colors.warning : SentinelTheme.Colors.success
     }
 
     private func cursorUsageTooltip(_ snapshot: CursorUsageSnapshot) -> String {
-        var parts = ["Cursor 订阅 · 剩余百分比（模式 / API / Bot）"]
+        var parts = ["Cursor 订阅 · 剩余百分比（模式 / API / Grok Bot）"]
+        if let resetDate = snapshot.botResetDate {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "zh_CN")
+            formatter.dateFormat = "M/d HH:mm"
+            parts.append("Bot \(formatter.string(from: resetDate)) 重置")
+        }
         if let checkedAt = snapshot.checkedAt {
             parts.append("\(SentinelTimeFormat.clockTime(checkedAt)) 更新")
         }

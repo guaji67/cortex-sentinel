@@ -1,9 +1,12 @@
 import Foundation
 import SQLite3
 
-/// Cursor 订阅余额。读本机 Cursor 的登录态（state.vscdb 里的 accessToken），
-/// 再调官方 DashboardService 拿三组用量百分比（模式 / API / 总池）。
-/// 布局上跟中转账号不同：三组排成一行，只显示剩余百分比数字。
+/// Cursor 订阅余额。读本机 Cursor 的登录态（state.vscdb 里的 access/refresh token），
+/// 拉两组官方接口：
+///   - GetCurrentPeriodUsage → 模式（auto）/ API 两组已用百分比
+///   - GetSandUsageStatus    → Grok Bot 周额度的已用百分比（和总池无关，Falcon 2026-08-31 确认）
+/// accessToken 会被服务端提前吊销（中转池轮换账号），遇到 401 用 refreshToken 换新再重试；
+/// /oauth/token 的 refresh token 可重复使用，Cursor 自己也这么刷（同一个 token 同时存两列）。
 struct CursorUsageSnapshot: Equatable, Sendable {
     enum SourceState: Equatable, Sendable {
         /// 本机没装 Cursor 或没登录过；余额区不占位。
@@ -16,7 +19,8 @@ struct CursorUsageSnapshot: Equatable, Sendable {
     /// 各分组「已用」百分比（0-100）；剩余 = 100 - 已用。
     let autoPercentUsed: Double?
     let apiPercentUsed: Double?
-    let totalPercentUsed: Double?
+    let botPercentUsed: Double?
+    let botResetDate: Date?
     let checkedAt: Date?
     let stale: Bool
     let errorMessage: String?
@@ -25,14 +29,15 @@ struct CursorUsageSnapshot: Equatable, Sendable {
         sourceState: .unconfigured,
         autoPercentUsed: nil,
         apiPercentUsed: nil,
-        totalPercentUsed: nil,
+        botPercentUsed: nil,
+        botResetDate: nil,
         checkedAt: nil,
         stale: false,
         errorMessage: nil
     )
 
     var hasDisplayableNumber: Bool {
-        autoPercentUsed != nil || apiPercentUsed != nil || totalPercentUsed != nil
+        autoPercentUsed != nil || apiPercentUsed != nil || botPercentUsed != nil
     }
 
     func preservingLastSuccess(errorMessage: String) -> CursorUsageSnapshot {
@@ -40,7 +45,8 @@ struct CursorUsageSnapshot: Equatable, Sendable {
             sourceState: sourceState == .unconfigured ? .invalid : sourceState,
             autoPercentUsed: autoPercentUsed,
             apiPercentUsed: apiPercentUsed,
-            totalPercentUsed: totalPercentUsed,
+            botPercentUsed: botPercentUsed,
+            botResetDate: botResetDate,
             checkedAt: checkedAt,
             stale: true,
             errorMessage: errorMessage
@@ -75,9 +81,17 @@ enum CursorUsageReaderError: Error, Equatable {
 }
 
 enum CursorUsageConstants {
-    static let endpoint = URL(
+    static let usageEndpoint = URL(
         string: "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage"
     )!
+    static let sandUsageEndpoint = URL(
+        string: "https://api2.cursor.sh/aiserver.v1.DashboardService/GetSandUsageStatus"
+    )!
+    static let oauthTokenEndpoint = URL(
+        string: "https://api2.cursor.sh/oauth/token"
+    )!
+    /// Cursor 桌面端内置的 OAuth client id（workbench 里 Prod 档的 authClientId）。
+    static let oauthClientID = "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB"
     /// 官方刷新间隔跟 GPT 官方额度保持同一档（余额属于慢变量）。
     static let automaticRefreshInterval: TimeInterval = 10 * 60
     static let manualRefreshThrottle: TimeInterval = 5
@@ -90,10 +104,15 @@ enum CursorUsageConstants {
     }
 }
 
-/// 只读打开 Cursor 的 state.vscdb 取 accessToken。Cursor 运行中库会忙，
+struct CursorAuthTokens: Equatable, Sendable {
+    let accessToken: String
+    let refreshToken: String
+}
+
+/// 只读打开 Cursor 的 state.vscdb 取登录态。Cursor 运行中库会忙，
 /// 读不到就当未登录处理，不重试拖慢余额刷新。
 enum CursorAuthTokenReader {
-    static func readToken(databaseURL: URL = CursorUsageConstants.databaseURL) throws -> String {
+    static func read(databaseURL: URL = CursorUsageConstants.databaseURL) throws -> CursorAuthTokens {
         guard FileManager.default.fileExists(atPath: databaseURL.path) else {
             throw CursorUsageReaderError.cursorMissing
         }
@@ -113,7 +132,10 @@ enum CursorAuthTokenReader {
         sqlite3_busy_timeout(handle, CursorUsageConstants.databaseBusyTimeoutMilliseconds)
 
         var statement: OpaquePointer?
-        let sql = "SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken' LIMIT 1"
+        let sql = """
+            SELECT key, value FROM ItemTable
+            WHERE key IN ('cursorAuth/accessToken', 'cursorAuth/refreshToken')
+            """
         guard SQLITE_OK == sql.withCString({
             sqlite3_prepare_v2(handle, $0, -1, &statement, nil)
         }), let statement else {
@@ -122,17 +144,34 @@ enum CursorAuthTokenReader {
         defer {
             sqlite3_finalize(statement)
         }
-        guard sqlite3_step(statement) == SQLITE_ROW,
-              sqlite3_column_type(statement, 0) != SQLITE_NULL,
-              let value = sqlite3_column_text(statement, 0)
+        var values: [String: String] = [:]
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let key = columnText(statement, 0), let value = columnText(statement, 1) else {
+                continue
+            }
+            values[key] = value
+        }
+        let accessToken = (values["cursorAuth/accessToken"] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !accessToken.isEmpty else {
+            throw CursorUsageReaderError.tokenMissing
+        }
+        let refreshToken = (values["cursorAuth/refreshToken"] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return CursorAuthTokens(
+            accessToken: accessToken,
+            // 旧登录态可能只有 access 一列；那时无法自助续期，只能报过期。
+            refreshToken: refreshToken.isEmpty ? accessToken : refreshToken
+        )
+    }
+
+    private static func columnText(_ statement: OpaquePointer, _ column: Int32) -> String? {
+        guard sqlite3_column_type(statement, column) != SQLITE_NULL,
+              let value = sqlite3_column_text(statement, column)
         else {
-            throw CursorUsageReaderError.tokenMissing
+            return nil
         }
-        let token = String(cString: value).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !token.isEmpty else {
-            throw CursorUsageReaderError.tokenMissing
-        }
-        return token
+        return String(cString: value)
     }
 }
 
@@ -144,9 +183,35 @@ private struct CursorCurrentPeriodUsageResponse: Decodable {
         let apiPercentUsed: Double?
         let totalPercentUsed: Double?
     }
+}
+
+private struct CursorSandUsageResponse: Decodable {
+    let usagePercent: Double?
+    let nextResetTimestampUtc: String?
+    let grokPlanLabel: String?
+
+    /// "2026-09-06T16:02:29.110Z"
+    var resetDate: Date? {
+        guard let nextResetTimestampUtc else {
+            return nil
+        }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: nextResetTimestampUtc) {
+            return date
+        }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: nextResetTimestampUtc)
+    }
+}
+
+private struct CursorOAuthTokenResponse: Decodable {
+    let accessToken: String?
+    let shouldLogout: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case planUsage = "planUsage"
+        case accessToken = "access_token"
+        case shouldLogout
     }
 }
 
@@ -158,32 +223,105 @@ extension URLSession: CursorUsageRequestLoading {}
 
 struct CursorUsageClient: Sendable {
     private let databaseURL: URL
-    private let endpoint: URL
+    private let usageEndpoint: URL
+    private let sandUsageEndpoint: URL
+    private let oauthTokenEndpoint: URL
+    private let oauthClientID: String
     private let requestLoader: any CursorUsageRequestLoading
-    private let tokenReader: @Sendable (URL) throws -> String
+    private let tokenReader: @Sendable (URL) throws -> CursorAuthTokens
 
     init(
         databaseURL: URL = CursorUsageConstants.databaseURL,
-        endpoint: URL = CursorUsageConstants.endpoint,
+        usageEndpoint: URL = CursorUsageConstants.usageEndpoint,
+        sandUsageEndpoint: URL = CursorUsageConstants.sandUsageEndpoint,
+        oauthTokenEndpoint: URL = CursorUsageConstants.oauthTokenEndpoint,
+        oauthClientID: String = CursorUsageConstants.oauthClientID,
         requestLoader: any CursorUsageRequestLoading = URLSession.shared,
-        tokenReader: @escaping @Sendable (URL) throws -> String = { try CursorAuthTokenReader.readToken(databaseURL: $0) }
+        tokenReader: @escaping @Sendable (URL) throws -> CursorAuthTokens = {
+            try CursorAuthTokenReader.read(databaseURL: $0)
+        }
     ) {
         self.databaseURL = databaseURL
-        self.endpoint = endpoint
+        self.usageEndpoint = usageEndpoint
+        self.sandUsageEndpoint = sandUsageEndpoint
+        self.oauthTokenEndpoint = oauthTokenEndpoint
+        self.oauthClientID = oauthClientID
         self.requestLoader = requestLoader
         self.tokenReader = tokenReader
     }
 
     func fetch() async throws -> CursorUsageSnapshot {
-        let token: String
+        var tokens = try tokenReader(databaseURL)
         do {
-            token = try tokenReader(databaseURL)
-        } catch let error as CursorUsageReaderError {
-            throw error
-        } catch {
-            throw CursorUsageReaderError.tokenMissing
+            let snapshot = try await fetchUsage(tokens: tokens)
+            return snapshot
+        } catch let error as CursorUsageReaderError where error == .unauthorized {
+            // accessToken 被服务端吊销（中转池轮换账号时会发生）：用 refreshToken
+            // 换一张新的再试一次。refresh token 可重复使用，Cursor 自己也是这么刷的。
+            tokens = try await refreshTokens(tokens)
+            return try await fetchUsage(tokens: tokens)
         }
+    }
 
+    private func fetchUsage(tokens: CursorAuthTokens) async throws -> CursorUsageSnapshot {
+        async let plan = fetchUsageJSON(endpoint: usageEndpoint, token: tokens.accessToken)
+        async let sand = fetchUsageJSON(endpoint: sandUsageEndpoint, token: tokens.accessToken)
+        let planPayload = try await decode(plan, as: CursorCurrentPeriodUsageResponse.self)
+        let sandPayload = try await decode(sand, as: CursorSandUsageResponse.self)
+
+        guard let usage = planPayload.planUsage, usage.autoPercentUsed != nil
+            || usage.apiPercentUsed != nil || usage.totalPercentUsed != nil
+        else {
+            throw CursorUsageReaderError.invalidResponse
+        }
+        return CursorUsageSnapshot(
+            sourceState: .available,
+            autoPercentUsed: usage.autoPercentUsed,
+            apiPercentUsed: usage.apiPercentUsed,
+            botPercentUsed: sandPayload.usagePercent,
+            botResetDate: sandPayload.resetDate,
+            checkedAt: Date(),
+            stale: false,
+            errorMessage: nil
+        )
+    }
+
+    private func refreshTokens(_ tokens: CursorAuthTokens) async throws -> CursorAuthTokens {
+        var request = URLRequest(url: oauthTokenEndpoint)
+        request.httpMethod = "POST"
+        request.timeoutInterval = CursorUsageConstants.requestTimeout
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = Data(
+            """
+            {"grant_type":"refresh_token","client_id":"\(oauthClientID)","refresh_token":"\(tokens.refreshToken)"}
+            """.utf8
+        )
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await requestLoader.data(for: request)
+        } catch let error as URLError where error.code == .timedOut {
+            throw CursorUsageReaderError.timedOut
+        } catch {
+            throw CursorUsageReaderError.network
+        }
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200..<300).contains(httpResponse.statusCode)
+        else {
+            throw CursorUsageReaderError.unauthorized
+        }
+        guard let payload = try? JSONDecoder().decode(CursorOAuthTokenResponse.self, from: data),
+              let accessToken = payload.accessToken,
+              !accessToken.isEmpty,
+              payload.shouldLogout != true
+        else {
+            throw CursorUsageReaderError.unauthorized
+        }
+        return CursorAuthTokens(accessToken: accessToken, refreshToken: tokens.refreshToken)
+    }
+
+    private func fetchUsageJSON(endpoint: URL, token: String) async throws -> Data {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.timeoutInterval = CursorUsageConstants.requestTimeout
@@ -201,30 +339,22 @@ struct CursorUsageClient: Sendable {
         } catch {
             throw CursorUsageReaderError.network
         }
-
         guard let httpResponse = response as? HTTPURLResponse else {
             throw CursorUsageReaderError.invalidResponse
         }
         if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
             throw CursorUsageReaderError.unauthorized
         }
-        guard (200..<300).contains(httpResponse.statusCode),
-              let payload = try? JSONDecoder().decode(
-                  CursorCurrentPeriodUsageResponse.self,
-                  from: data
-              ),
-              let usage = payload.planUsage
-        else {
+        guard (200..<300).contains(httpResponse.statusCode) else {
             throw CursorUsageReaderError.invalidResponse
         }
-        return CursorUsageSnapshot(
-            sourceState: .available,
-            autoPercentUsed: usage.autoPercentUsed,
-            apiPercentUsed: usage.apiPercentUsed,
-            totalPercentUsed: usage.totalPercentUsed,
-            checkedAt: Date(),
-            stale: false,
-            errorMessage: nil
-        )
+        return data
+    }
+
+    private func decode<T: Decodable>(_ data: Data, as type: T.Type) async throws -> T {
+        guard let payload = try? JSONDecoder().decode(T.self, from: data) else {
+            throw CursorUsageReaderError.invalidResponse
+        }
+        return payload
     }
 }

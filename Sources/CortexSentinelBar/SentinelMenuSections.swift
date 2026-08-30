@@ -478,10 +478,14 @@ struct SentinelBalancesSection: View {
                     .lineLimit(1)
                     .layoutPriority(1)
                 Spacer(minLength: SentinelTheme.Spacing.xs)
-                HStack(spacing: SentinelTheme.Spacing.sm) {
-                    cursorUsageSegment("模式", snapshot.autoPercentUsed, snapshot)
-                    cursorUsageSegment("API", snapshot.apiPercentUsed, snapshot)
-                    cursorUsageSegment("Bot", snapshot.botPercentUsed, snapshot)
+                // 三组余额：小灰标签 + 大数字，各组按剩余独立变色——
+                // 哪组快用完一眼扫出来，而不是整行一个颜色糊在一起。
+                HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
+                    cursorUsageSegment("模式", snapshot.autoPercentUsed)
+                    cursorUsageDivider
+                    cursorUsageSegment("API", snapshot.apiPercentUsed)
+                    cursorUsageDivider
+                    cursorUsageSegment("Bot", snapshot.botPercentUsed)
                 }
                 .fixedSize(horizontal: true, vertical: false)
                 .layoutPriority(2)
@@ -492,39 +496,50 @@ struct SentinelBalancesSection: View {
         }
     }
 
-    private func cursorUsageSegment(
-        _ label: String,
-        _ percentUsed: Double?,
-        _ snapshot: CursorUsageSnapshot
-    ) -> some View {
-        let text: String
-        let color: Color
-        if let percentUsed {
-            let remaining = min(100, max(0, 100 - percentUsed))
-            let rounded = remaining.rounded() == remaining
-                ? String(Int(remaining))
-                : String(format: "%.1f", remaining)
-            text = "\(label) 剩\(rounded)%"
-            color = cursorUsageColor(snapshot)
-        } else {
-            text = "\(label) —"
-            color = SentinelTheme.Colors.secondaryForeground
-        }
-        return Text(text)
-            .font(SentinelTheme.Fonts.balanceAmount)
-            .foregroundStyle(color)
-            .lineLimit(1)
+    private var cursorUsageDivider: some View {
+        Circle()
+            .fill(SentinelTheme.Colors.secondaryForeground.opacity(0.45))
+            .frame(width: 2.5, height: 2.5)
     }
 
-    private func cursorUsageColor(_ snapshot: CursorUsageSnapshot) -> Color {
-        func isLow(_ used: Double?) -> Bool {
-            guard let used else {
-                return false
+    private func cursorUsageSegment(
+        _ label: String,
+        _ percentUsed: Double?
+    ) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 3) {
+            Text(label)
+                .font(SentinelTheme.Fonts.balanceAmount)
+                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                .lineLimit(1)
+            if let percentUsed {
+                let remaining = min(100, max(0, 100 - percentUsed))
+                Text(cursorUsageRemainingText(remaining))
+                    .font(SentinelTheme.Fonts.balanceAmount)
+                    .foregroundStyle(cursorUsageRemainingColor(remaining))
+                    .monospacedDigit()
+                    .lineLimit(1)
+            } else {
+                Text("—")
+                    .font(SentinelTheme.Fonts.balanceAmount)
+                    .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                    .lineLimit(1)
             }
-            return (100 - used) <= 100 - AIOConstants.quotaWarningThreshold
         }
-        if snapshot.stale || isLow(snapshot.autoPercentUsed)
-            || isLow(snapshot.apiPercentUsed) || isLow(snapshot.botPercentUsed) {
+    }
+
+    private func cursorUsageRemainingText(_ remaining: Double) -> String {
+        let rounded = remaining.rounded() == remaining
+            ? String(Int(remaining))
+            : String(format: "%.1f", remaining)
+        return "\(rounded)%"
+    }
+
+    /// 剩得越少越红：0 附近红，低档黄，其余正常白。与中转余额同一套档位。
+    private func cursorUsageRemainingColor(_ remaining: Double) -> Color {
+        if remaining <= 0.05 {
+            return SentinelTheme.Colors.danger
+        }
+        if remaining <= 100 - AIOConstants.quotaWarningThreshold {
             return SentinelTheme.Colors.warning
         }
         return SentinelTheme.Colors.foreground

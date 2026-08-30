@@ -24,6 +24,8 @@ final class SentinelStore {
     private(set) var relayAttribution: RelayAttributionContext = .unconfigured
     private(set) var inputStatus: InputStatusSnapshot = .empty
     private(set) var officialUsage: OfficialUsageSnapshot = .empty
+    /// Cursor 订阅余额（模式/API/Bot 三组一行显示）；跟随官方额度同一套刷新时机。
+    private(set) var cursorUsage: CursorUsageSnapshot = .empty
     private(set) var channelStatus: ChannelStatusSnapshot = .missing
     private(set) var backgroundJobs: BackgroundJobsSnapshot = .missing
     /// Cortex 打包进度；没打包在跑时保持 nil，界面不占地方。
@@ -48,6 +50,8 @@ final class SentinelStore {
     private(set) var isOfficialUsageRefreshing = false
     /// 真正的并发闸，跟界面无关；不进 Observation，改它不惊动任何 view。
     @ObservationIgnored private var officialUsageFetchInFlight = false
+    @ObservationIgnored private var cursorUsageFetchInFlight = false
+    @ObservationIgnored private var lastCursorUsageAttemptAt: Date?
     private(set) var isOfficialUsageRefreshCoolingDown = false
     private(set) var loginItemPresentation: LoginItemPanelPresentation = .disabled
     private(set) var paths: SentinelPaths
@@ -265,6 +269,7 @@ final class SentinelStore {
             interval: OfficialUsageConstants.automaticRefreshInterval
         ) { [weak self] in
             self?.refreshOfficialUsage(reason: .automatic)
+            self?.refreshCursorUsage()
         }
 
         // v3.2 第 5 点：启动即清一次派工日志，之后每小时巡检一次。
@@ -442,6 +447,7 @@ final class SentinelStore {
         await refreshAIO(force: true, includeUsage: false)
         await refreshInputStatus(force: true)
         refreshOfficialUsage(reason: .startup)
+        refreshCursorUsage()
     }
 
     func refreshStatuses() async {
@@ -654,10 +660,73 @@ final class SentinelStore {
         await aio
         await input
         refreshOfficialUsage(reason: .panelOpen, bypassMinimumInterval: true)
+        refreshCursorUsage(bypassMinimumInterval: true)
     }
 
     func refreshOfficialUsageManually() {
         refreshOfficialUsage(reason: .manual)
+        refreshCursorUsage()
+    }
+
+    /// Cursor 余额跟着官方额度走同一套时机（启动 / 定时 / 开面板 / 手动点刷新），
+    /// 不单独发按钮，失败也不打扰——上一轮的数字原样留着。
+    private func refreshCursorUsage(bypassMinimumInterval: Bool = false) {
+        let timestamp = self.now()
+        guard !cursorUsageFetchInFlight else {
+            return
+        }
+        if !bypassMinimumInterval, let lastCursorUsageAttemptAt {
+            let minimumInterval: TimeInterval
+            if isPanelPresented {
+                minimumInterval = SentinelSettings.balanceRecheckInterval(defaults: defaults).rawValue
+            } else {
+                minimumInterval = CursorUsageConstants.automaticRefreshInterval
+            }
+            guard timestamp.timeIntervalSince(lastCursorUsageAttemptAt) >= minimumInterval else {
+                return
+            }
+        }
+        cursorUsageFetchInFlight = true
+        lastCursorUsageAttemptAt = timestamp
+        let client = CursorUsageClient()
+
+        Task { @MainActor [weak self] in
+            let result: Result<CursorUsageSnapshot, CursorUsageReaderError>
+            do {
+                result = .success(try await client.fetch())
+            } catch let error as CursorUsageReaderError {
+                result = .failure(error)
+            } catch {
+                result = .failure(.network)
+            }
+
+            guard let self else {
+                return
+            }
+            self.cursorUsageFetchInFlight = false
+            self.scrollPublishGate.publish(surface: .officialUsage) { [weak self] in
+                guard let self else {
+                    return
+                }
+                let snapshot: CursorUsageSnapshot
+                switch result {
+                case let .success(value):
+                    snapshot = value
+                case let .failure(error):
+                    // 本机没装/没登录 Cursor 就保持空快照，界面不占位。
+                    if self.cursorUsage.sourceState == .unconfigured
+                        && !self.cursorUsage.hasDisplayableNumber {
+                        return
+                    }
+                    snapshot = self.cursorUsage.preservingLastSuccess(
+                        errorMessage: error.userMessage
+                    )
+                }
+                if self.cursorUsage != snapshot {
+                    self.cursorUsage = snapshot
+                }
+            }
+        }
     }
 
     private func refreshOfficialUsage(

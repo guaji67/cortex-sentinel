@@ -37,7 +37,8 @@ enum SentinelSingletonGuard {
     static func enforce(
         applications: [SentinelRunningApplication]? = nil,
         currentProcessIdentifier: Int32 = ProcessInfo.processInfo.processIdentifier,
-        alert: @MainActor @escaping (String) -> Void = presentDuplicateAlert
+        alert: @MainActor @escaping (String) -> Void = presentDuplicateAlert,
+        recheckDelay: TimeInterval = 2.0
     ) -> Bool {
         let candidates = applications ?? liveApplications()
         guard hasExistingInstance(
@@ -45,6 +46,19 @@ enum SentinelSingletonGuard {
             currentProcessIdentifier: currentProcessIdentifier
         ) else {
             return true
+        }
+        // 首查命中可能是竞态而不是真重复：安装/KeepAlive 重启时旧实例正在退出但仍在
+        // 进程表；--dump-state 这类短命同名探测进程也可能恰好共存。等它们死透后重查
+        // 一次，仍然命中才是真的已有实例。注入 applications 的测试路径不走重查。
+        if applications == nil {
+            Thread.sleep(forTimeInterval: recheckDelay)
+            let second = liveApplications()
+            guard hasExistingInstance(
+                applications: second,
+                currentProcessIdentifier: currentProcessIdentifier
+            ) else {
+                return true
+            }
         }
         alert(duplicateMessage)
         return false
@@ -121,6 +135,11 @@ enum SentinelSingletonGuard {
         alert.window.center()
         alert.window.level = .floating
         alert.window.makeKeyAndOrderFront(nil)
+        // LaunchAgent 无人值守场景没人来点「好」，模态框会让被拦实例永远挂着占位；
+        // 10 秒后自动退出模态，提示已通过 stderr 落日志。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+            NSApplication.shared.abortModal()
+        }
         alert.runModal()
     }
 }

@@ -284,27 +284,9 @@ final class SentinelStore {
     }
 
     func setLoginItemEnabled(_ enabled: Bool) {
-        let signals = LaunchdSupervisionProbe.collectFromCurrentProcess().signals
-        if signals.isLaunchdManaged {
-            loginItemPresentation = .systemManaged
-            settingsModel.loginItem = loginItemSettingsPresentation
-            return
-        }
+        // COR-2550：开机注册唯一由 LaunchAgent 安装器负责，app 侧只保留用户偏好。
         SentinelSettings.setLoginItemEnabled(enabled, defaults: defaults)
-        let plan = LoginItemReconciler.plan(
-            signals: signals,
-            status: loginItemRegistrar.status,
-            wantsEnabled: enabled
-        )
-        guard LoginItemRuntime.shouldReconcileOnLaunch() else {
-            loginItemPresentation = plan.presentation
-            settingsModel.loginItem = loginItemSettingsPresentation
-            return
-        }
-        loginItemPresentation = LoginItemReconciler.apply(
-            plan: plan,
-            registrar: loginItemRegistrar
-        )
+        loginItemPresentation = .systemManaged
         settingsModel.loginItem = loginItemSettingsPresentation
     }
 
@@ -371,19 +353,7 @@ final class SentinelStore {
 
     private func reconcileLoginItem() {
         let details = LaunchdSupervisionProbe.collectFromCurrentProcess()
-        let plan = LoginItemReconciler.plan(
-            signals: details.signals,
-            status: loginItemRegistrar.status,
-            wantsEnabled: SentinelSettings.loginItemEnabled(defaults: defaults)
-        )
-        guard LoginItemRuntime.shouldReconcileOnLaunch() else {
-            loginItemPresentation = plan.presentation
-            return
-        }
-        loginItemPresentation = LoginItemReconciler.apply(
-            plan: plan,
-            registrar: loginItemRegistrar
-        )
+        loginItemPresentation = details.signals.isLaunchdManaged ? .systemManaged : .disabled
     }
 
     func statusPollInterval() -> TimeInterval {

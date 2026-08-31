@@ -3,8 +3,7 @@ import Darwin
 import Foundation
 import ServiceManagement
 
-/// 开机自启：拖拽安装的用户靠 `SMAppService` 登录项；Falcon 本机那份靠 launchd。
-/// 两条路不能同时管同一个二进制，否则 KeepAlive 再加登录项会起两个实例。
+/// 开机自启唯一由安装器写入 LaunchAgent；app 只读取托管状态，不注册登录项。
 ///
 /// 「是不是 launchd 托管」用三个独立信号，**至少两个为真**才判定托管：
 ///   1. `~/Library/LaunchAgents/com.cortex.sentinelbar.plist` 存在、Label 对得上、
@@ -159,11 +158,11 @@ struct SMAppServiceLoginItemRegistrar: LoginItemRegistrar {
     }
 
     func register() throws {
-        try SMAppService.mainApp.register()
+        // COR-2550：保留协议供旧测试/诊断编译，产品路径不再调用 SMAppService。
     }
 
     func unregister() throws {
-        try SMAppService.mainApp.unregister()
+        // COR-2550：登录项清理由 install-app.sh / uninstall-app.sh 按路径完成。
     }
 }
 
@@ -238,8 +237,7 @@ enum LoginItemRuntime {
         "--open-settings",
     ]
 
-    /// 只有菜单栏常驻进程才允许调用 `register()`。
-    /// CLI / smoke / XCTest 只读状态，避免在开发机上留下登录项或弹出系统通知。
+    /// CLI / smoke / XCTest 以及菜单栏常驻都不注册登录项；唯一注册路是安装器。
     static func shouldReconcileOnLaunch(
         arguments: [String] = ProcessInfo.processInfo.arguments,
         environment: [String: String] = ProcessInfo.processInfo.environment
@@ -248,7 +246,7 @@ enum LoginItemRuntime {
             || environment["XCTestSessionIdentifier"] != nil {
             return false
         }
-        return !arguments.contains(where: { diagnosticArguments.contains($0) })
+        return false
     }
 }
 

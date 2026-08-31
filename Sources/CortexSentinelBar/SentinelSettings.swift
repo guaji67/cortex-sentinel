@@ -321,18 +321,11 @@ struct LoginItemSettingsPresentation: Equatable {
     var isControlEnabled: Bool
     var trailingHint: String?
 
-    static func make(signals: LaunchdSupervisionSignals, wantsEnabled: Bool) -> LoginItemSettingsPresentation {
-        if signals.isLaunchdManaged {
-            return LoginItemSettingsPresentation(
-                isOn: true,
-                isControlEnabled: false,
-                trailingHint: SentinelSettingsCopy.loginItemManagedHint
-            )
-        }
+    static func make(signals: LaunchdSupervisionSignals, wantsEnabled _: Bool) -> LoginItemSettingsPresentation {
         return LoginItemSettingsPresentation(
-            isOn: wantsEnabled,
-            isControlEnabled: true,
-            trailingHint: nil
+            isOn: signals.isLaunchdManaged,
+            isControlEnabled: false,
+            trailingHint: SentinelSettingsCopy.loginItemManagedHint
         )
     }
 }

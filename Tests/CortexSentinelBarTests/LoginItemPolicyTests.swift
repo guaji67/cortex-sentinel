@@ -167,7 +167,7 @@ final class LoginItemPolicyTests: XCTestCase {
                 environment: ["XCTestConfigurationFilePath": "/tmp/xctest"]
             )
         )
-        XCTAssertTrue(
+        XCTAssertFalse(
             LoginItemRuntime.shouldReconcileOnLaunch(
                 arguments: ["/Applications/Cortex哨兵.app/Contents/MacOS/CortexSentinelBar"],
                 environment: [:]
@@ -317,8 +317,8 @@ final class LoginItemPolicyTests: XCTestCase {
         XCTAssertEqual(locked.trailingHint, "由系统服务托管，改这里没用")
 
         let free = LoginItemSettingsPresentation.make(signals: .none, wantsEnabled: false)
-        XCTAssertTrue(free.isControlEnabled)
-        XCTAssertNil(free.trailingHint)
+        XCTAssertFalse(free.isControlEnabled)
+        XCTAssertEqual(free.trailingHint, SentinelSettingsCopy.loginItemManagedHint)
         XCTAssertFalse(free.isOn)
     }
 }

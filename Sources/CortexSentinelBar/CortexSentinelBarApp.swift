@@ -68,6 +68,9 @@ enum CortexSentinelBarMain {
         } else if arguments.contains(smokeWindowArgument) {
             CortexSentinelSmokeApp.main()
         } else {
+            guard SentinelSingletonGuard.enforce() else {
+                return
+            }
             runMenuBarApplication()
         }
     }
@@ -288,16 +291,10 @@ enum CortexSentinelBarMain {
     private static func printLoginItemDiagnostics() {
         let details = LaunchdSupervisionProbe.collectFromCurrentProcess()
         let status = SMAppServiceLoginItemRegistrar().status
-        let defaults = SentinelSettings.resolvedDefaults()
-        let plan = LoginItemReconciler.plan(
-            signals: details.signals,
-            status: status,
-            wantsEnabled: SentinelSettings.loginItemEnabled(defaults: defaults)
-        )
         for line in LoginItemDiagnostics.dumpLines(
             details: details,
             loginItemStatus: status,
-            menuBarWouldRegister: plan.action == .register
+            menuBarWouldRegister: false
         ) {
             print(line)
         }

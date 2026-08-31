@@ -30,6 +30,7 @@ if [ -n "$watch_dir" ]; then
 fi
 skip_login_item_cleanup=0
 print_watch_plan=0
+dry_run=0
 used_fallback_watch=0
 if [ -n "${SSH_CONNECTION:-}" ]; then
   skip_login_item_cleanup=1
@@ -42,6 +43,7 @@ usage() {
   bash scripts/install-app.sh --app-source /path/to/Cortex哨兵.app
   bash scripts/install-app.sh --app-source /path/to/Cortex哨兵.app --cortex-root /path/to/cortex
   bash scripts/install-app.sh --app-source /path/to/Cortex哨兵.app --skip-login-item-cleanup
+  bash scripts/install-app.sh --dry-run
   bash scripts/install-app.sh --verify-installer-integrity --app-source /path/to/Cortex哨兵.app
 
 监视目录（写入 launchd）：
@@ -77,6 +79,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --print-watch-plan)
       print_watch_plan=1
+      shift
+      ;;
+    --dry-run)
+      dry_run=1
       shift
       ;;
     -h|--help)
@@ -149,6 +155,14 @@ fi
 
 if [ -n "$cortex_repo_root" ] && [ ! -d "$cortex_repo_root" ]; then
   cortex_repo_root=""
+fi
+
+if [ "$dry_run" -eq 1 ]; then
+  echo "registration_route=LaunchAgent:$plist"
+  echo "app_self_registration=disabled (SMAppService 不调用 register/unregister)"
+  echo "historical_login_item_cleanup=delete login items whose path contains /.build/ and CortexSentinelBar.app"
+  echo "cleanup_scope=install/uninstall script only; no current machine state changed"
+  exit 0
 fi
 
 mkdir -p "$watch_dir"
@@ -266,6 +280,26 @@ APPLESCRIPT
   if [ "$removed" -gt 0 ]; then
     echo "已删除旧登录项：$app_path ($removed 条)"
   fi
+}
+
+remove_historical_build_login_items() {
+  if [ "$skip_login_item_cleanup" -eq 1 ]; then
+    return 0
+  fi
+
+  osascript <<'APPLESCRIPT'
+tell application "System Events"
+  repeat with staleItem in every login item
+    try
+      set candidatePath to POSIX path of (staleItem as alias)
+      if candidatePath contains "/.build/" and candidatePath contains "CortexSentinelBar.app" then
+        delete staleItem
+        log "deleted CortexSentinelBar build login item: " & candidatePath
+      end if
+    end try
+  end repeat
+end tell
+APPLESCRIPT
 }
 
 cleanup_legacy_app() {
@@ -407,6 +441,7 @@ trap rollback_on_error EXIT
 echo "== 停止正式托管并清理迁移残留 =="
 launchctl bootout "gui/$uid/$service_label" 2>/dev/null || true
 sleep 2
+remove_historical_build_login_items
 for legacy_app_path in "${legacy_app_paths[@]}"; do
   cleanup_legacy_app "$legacy_app_path"
   archive_legacy_app "$legacy_app_path"

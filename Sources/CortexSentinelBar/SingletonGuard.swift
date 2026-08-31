@@ -95,8 +95,12 @@ enum SentinelSingletonGuard {
         guard (try? process.run()) != nil else {
             return []
         }
+        // 必须先读到 EOF 再 waitUntilExit：ps 输出超过管道缓冲区（本机几百个进程时轻松超）
+        // 会写满管道阻塞，父进程若先等子进程退出就互相死锁——闸卡死在这里，菜单栏图标
+        // 永远不创建（2026-09-01 实锤，sample 栈钉在 waitUntilExit/mach_msg）。
+        let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-        guard let text = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) else {
+        guard let text = String(data: data, encoding: .utf8) else {
             return []
         }
         return text.split(separator: "\n").compactMap { line in

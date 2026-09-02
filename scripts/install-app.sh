@@ -31,9 +31,260 @@ fi
 skip_login_item_cleanup=0
 print_watch_plan=0
 dry_run=0
+cleanup_login_items_only=0
 used_fallback_watch=0
 if [ -n "${SSH_CONNECTION:-}" ]; then
   skip_login_item_cleanup=1
+fi
+
+nfc_normalize() {
+  /usr/bin/python3 -c 'import sys, unicodedata; sys.stdout.write(unicodedata.normalize("NFC", sys.argv[1]))' "$1"
+}
+
+# 登录项是否属于本哨兵：名字等于 CFBundleName / 显示名 / 包名，或路径 NFC 后等于目标。
+# 不匹配 /Applications/Cortex.app，避免误删主仓 app。
+login_item_should_remove() {
+  local item_name="$1"
+  local item_path="${2:-}"
+  local target_path="${3:-}"
+  local n_name nfc_path nfc_target
+  local display_spaced display_compact bundle_name
+
+  n_name="$(nfc_normalize "$item_name")"
+  nfc_path="$(nfc_normalize "$item_path")"
+  nfc_target="$(nfc_normalize "$target_path")"
+  display_spaced="$(nfc_normalize "Cortex 哨兵")"
+  display_compact="$(nfc_normalize "Cortex哨兵")"
+  bundle_name="$(nfc_normalize "CortexSentinelBar")"
+
+  case "$n_name" in
+    Cortex.app|Cortex)
+      return 1
+      ;;
+  esac
+  case "$nfc_path" in
+    */Cortex.app|*/Cortex.app/)
+      return 1
+      ;;
+  esac
+
+  if [ "$n_name" = "$display_compact" ] || [ "$n_name" = "$display_spaced" ] || [ "$n_name" = "$bundle_name" ]; then
+    return 0
+  fi
+  case "$n_name" in
+    *"$display_compact"*|*"$bundle_name"*)
+      return 0
+      ;;
+  esac
+  if [[ "$n_name" == *"$display_spaced"* ]]; then
+    return 0
+  fi
+
+  if [ -n "$nfc_path" ] && [ -n "$nfc_target" ] && [ "$nfc_path" = "$nfc_target" ]; then
+    return 0
+  fi
+
+  if [ -n "$nfc_path" ]; then
+    case "$nfc_path" in
+      *"$display_compact".app*|*"CortexSentinelBar.app"*)
+        case "$nfc_path" in
+          *"/.build/"*"CortexSentinelBar.app"*)
+            return 0
+            ;;
+        esac
+        if [[ "$nfc_path" == *"/Applications/Cortex"* ]] && [[ "$nfc_path" != *"Cortex.app/"* ]]; then
+          return 0
+        fi
+        if [[ "$nfc_path" == *"$display_compact"* ]]; then
+          return 0
+        fi
+        ;;
+    esac
+  fi
+
+  return 1
+}
+
+list_login_items() {
+  osascript <<'APPLESCRIPT'
+tell application "System Events"
+  set output to ""
+  if (count of login items) is 0 then return output
+  set itemNames to name of every login item
+  set itemPaths to path of every login item
+  set itemCount to count of itemNames
+  repeat with i from 1 to itemCount
+    set n to item i of itemNames as string
+    set p to ""
+    try
+      set pRaw to item i of itemPaths
+      if pRaw is not missing value then set p to pRaw as string
+    end try
+    if p is "missing value" then set p to ""
+    set output to output & n & tab & p
+    if i is not itemCount then set output to output & linefeed
+  end repeat
+end tell
+return output
+APPLESCRIPT
+}
+
+list_matching_login_items() {
+  local app_path="$1"
+  local listed name path
+  listed="$(list_login_items | tr -d '\r')"
+  [ -n "$listed" ] || return 0
+  while IFS=$'\t' read -r name path || [ -n "${name:-}" ]; do
+    [ -n "${name:-}" ] || [ -n "${path:-}" ] || continue
+    if login_item_should_remove "$name" "${path:-}" "$app_path"; then
+      printf '%s\t%s\n' "$name" "${path:-}"
+    fi
+  done <<< "$listed"
+}
+
+print_login_item_manual_commands() {
+  cat <<'EOF'
+手工删除（可抄）：
+  osascript -e 'tell application "System Events" to delete (every login item whose name contains "Cortex哨兵")'
+  osascript -e 'tell application "System Events" to delete (every login item whose name contains "CortexSentinelBar")'
+复核登录项：
+  osascript -e 'tell application "System Events" to get the name of every login item'
+  osascript -e 'tell application "System Events" to get the path of every login item'
+复核实例：
+  launchctl list | grep -E 'com\.cortex\.sentinelbar|application\.com\..*sentinelbar'
+  ps -axo pid=,command= | awk '/\/Contents\/MacOS\/CortexSentinelBar$/ { print }'
+EOF
+}
+
+delete_matching_login_items() {
+  osascript - "$@" <<'APPLESCRIPT'
+on run argv
+  set removedCount to 0
+  tell application "System Events"
+    repeat with i from (count of login items) to 1 by -1
+      set li to login item i
+      set itemName to name of li as string
+      set itemPath to ""
+      try
+        set pathRaw to path of li
+        if pathRaw is not missing value then set itemPath to pathRaw as string
+      end try
+      if itemPath is "missing value" then set itemPath to ""
+      set shouldDelete to false
+      repeat with targetName in argv
+        if itemName is (targetName as string) then set shouldDelete to true
+      end repeat
+      if itemName contains "Cortex哨兵" then set shouldDelete to true
+      if itemName contains "CortexSentinelBar" then set shouldDelete to true
+      if itemPath contains "Cortex哨兵" then set shouldDelete to true
+      if (itemPath contains "/.build/") and (itemPath contains "CortexSentinelBar.app") then set shouldDelete to true
+      if shouldDelete then
+        delete li
+        set removedCount to removedCount + 1
+      end if
+    end repeat
+  end tell
+  return removedCount
+end run
+APPLESCRIPT
+}
+
+count_sentinel_launchd_jobs() {
+  launchctl list | awk '
+    $3 == "com.cortex.sentinelbar" || $3 ~ /^application\.com\..*sentinelbar/ { count++ }
+    END { print count + 0 }
+  '
+}
+
+count_sentinel_processes() {
+  ps -axo command= | awk '/\/Contents\/MacOS\/CortexSentinelBar$/ { count++ } END { print count + 0 }'
+}
+
+print_autostart_gate_failure() {
+  echo "失败：自启未修复，不打印「已修复」。" >&2
+  print_login_item_manual_commands >&2
+}
+
+remove_login_item_for_path() {
+  local app_path="$1"
+  local listed name path
+  local -a delete_names=()
+  local removed remaining
+
+  if [ "$skip_login_item_cleanup" -eq 1 ]; then
+    return 0
+  fi
+
+  listed="$(list_login_items | tr -d '\r')" || {
+    echo "失败：无法读取登录项列表（System Events）" >&2
+    exit 1
+  }
+
+  if [ -n "$listed" ]; then
+    while IFS=$'\t' read -r name path || [ -n "${name:-}" ]; do
+      [ -n "${name:-}" ] || [ -n "${path:-}" ] || continue
+      if login_item_should_remove "$name" "${path:-}" "$app_path"; then
+        delete_names+=("$name")
+      fi
+    done <<< "$listed"
+  fi
+
+  if [ "${#delete_names[@]}" -gt 0 ]; then
+    removed="$(delete_matching_login_items "${delete_names[@]}")"
+  else
+    removed="$(delete_matching_login_items)"
+  fi
+
+  if [ "${removed:-0}" -gt 0 ]; then
+    echo "已删除旧登录项：$app_path ($removed 条，按名字+路径双判)"
+  fi
+
+  remaining="$(list_matching_login_items "$app_path")"
+  if [ -n "$remaining" ]; then
+    echo "失败：登录项仍在，未删干净：" >&2
+    echo "$remaining" >&2
+    print_login_item_manual_commands >&2
+    exit 1
+  fi
+}
+
+remove_historical_build_login_items() {
+  remove_login_item_for_path "$app_dest"
+}
+
+assert_autostart_repaired() {
+  local all_sentinel_count launch_count remaining
+  local failed=0
+
+  all_sentinel_count="$(count_sentinel_processes)"
+  launch_count="$(count_sentinel_launchd_jobs)"
+
+  if [ "$all_sentinel_count" -ne 1 ]; then
+    echo "失败：常驻实例数=${all_sentinel_count}（期望 1）" >&2
+    failed=1
+  fi
+  if [ "$launch_count" -ne 1 ]; then
+    echo "失败：launchctl 哨兵条目数=${launch_count}（期望 1，label=com.cortex.sentinelbar）" >&2
+    failed=1
+  fi
+  if [ "$skip_login_item_cleanup" -eq 0 ]; then
+    remaining="$(list_matching_login_items "$app_dest")"
+    if [ -n "$remaining" ]; then
+      echo "失败：登录项列表里还有本 app：" >&2
+      echo "$remaining" >&2
+      failed=1
+    fi
+  fi
+
+  if [ "$failed" -ne 0 ]; then
+    print_autostart_gate_failure
+    exit 1
+  fi
+}
+
+# 供 Tests/scripts/test_login_item_match.sh 只加载比对函数，不跑安装。
+if [ "${SENTINEL_LOGIN_ITEM_LIB:-0}" = "1" ]; then
+  return 0 2>/dev/null || exit 0
 fi
 
 usage() {
@@ -43,6 +294,7 @@ usage() {
   bash scripts/install-app.sh --app-source /path/to/Cortex哨兵.app
   bash scripts/install-app.sh --app-source /path/to/Cortex哨兵.app --cortex-root /path/to/cortex
   bash scripts/install-app.sh --app-source /path/to/Cortex哨兵.app --skip-login-item-cleanup
+  bash scripts/install-app.sh --cleanup-login-items-only
   bash scripts/install-app.sh --dry-run
   bash scripts/install-app.sh --verify-installer-integrity --app-source /path/to/Cortex哨兵.app
 
@@ -54,6 +306,7 @@ usage() {
 
 不传 --app-source 时从当前源码构建；DMG 分发使用预构建 app，不依赖目标机 Swift/Xcode。
 SSH/headless 环境会自动跳过可能阻塞的 System Events 查询；旧 app 仍会被归档，因此不会再次启动。
+--cleanup-login-items-only 只按名字+路径清旧登录项，不构建、不重装、不重启。
 EOF
 }
 
@@ -71,6 +324,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --skip-login-item-cleanup)
       skip_login_item_cleanup=1
+      shift
+      ;;
+    --cleanup-login-items-only)
+      cleanup_login_items_only=1
       shift
       ;;
     --verify-installer-integrity)
@@ -96,6 +353,13 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+if [ "$cleanup_login_items_only" -eq 1 ]; then
+  skip_login_item_cleanup=0
+  remove_login_item_for_path "$app_dest"
+  echo "登录项清理完成：列表里已无 Cortex哨兵 / CortexSentinelBar"
+  exit 0
+fi
 
 installer_script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 
@@ -160,7 +424,7 @@ fi
 if [ "$dry_run" -eq 1 ]; then
   echo "registration_route=LaunchAgent:$plist"
   echo "app_self_registration=disabled (SMAppService 不调用 register/unregister)"
-  echo "historical_login_item_cleanup=delete login items whose path contains /.build/ and CortexSentinelBar.app"
+  echo "historical_login_item_cleanup=delete login items whose name is Cortex哨兵/CortexSentinelBar or whose NFC path equals /Applications/Cortex哨兵.app"
   echo "cleanup_scope=install/uninstall script only; no current machine state changed"
   exit 0
 fi
@@ -252,54 +516,6 @@ stop_exact_executable() {
 
   echo "失败：旧实例未退出：$executable (pid $(echo "$remaining" | tr '\n' ' '))" >&2
   return 1
-}
-
-remove_login_item_for_path() {
-  local app_path="$1"
-  local removed
-
-  if [ "$skip_login_item_cleanup" -eq 1 ]; then
-    return 0
-  fi
-
-  removed="$(osascript - "$app_path" <<'APPLESCRIPT'
-on run argv
-  set targetPath to item 1 of argv
-  tell application "System Events"
-    set staleItems to every login item whose path is targetPath
-    set removedCount to count of staleItems
-    repeat with staleItem in staleItems
-      delete staleItem
-    end repeat
-  end tell
-  return removedCount
-end run
-APPLESCRIPT
-)"
-
-  if [ "$removed" -gt 0 ]; then
-    echo "已删除旧登录项：$app_path ($removed 条)"
-  fi
-}
-
-remove_historical_build_login_items() {
-  if [ "$skip_login_item_cleanup" -eq 1 ]; then
-    return 0
-  fi
-
-  osascript <<'APPLESCRIPT'
-tell application "System Events"
-  repeat with staleItem in every login item
-    try
-      set candidatePath to POSIX path of (staleItem as alias)
-      if candidatePath contains "/.build/" and candidatePath contains "CortexSentinelBar.app" then
-        delete staleItem
-        log "deleted CortexSentinelBar build login item: " & candidatePath
-      end if
-    end try
-  end repeat
-end tell
-APPLESCRIPT
 }
 
 cleanup_legacy_app() {
@@ -485,6 +701,8 @@ if [ "$all_sentinel_count" -ne 1 ]; then
 fi
 
 trap - EXIT
+remove_login_item_for_path "$app_dest"
+assert_autostart_repaired
 echo "== 安装完成：自启已修复，常驻实例=1 =="
 if [ "$used_fallback_watch" -eq 1 ]; then
   echo "没找到 Cortex 仓库，先盯 ~/.cortex-sentinel/logs。要换目录在设置里点「选择」。"

@@ -94,7 +94,10 @@ bash scripts/sentinel-ctl.sh restart
 ```bash
 bash scripts/install-app.sh --app-source /path/to/Cortex哨兵.app
 bash scripts/install-app.sh --cortex-root /path/to/repo
+bash scripts/install-app.sh --cleanup-login-items-only
 ```
+
+`--cleanup-login-items-only` 只按名字（Cortex哨兵 / Cortex 哨兵 / CortexSentinelBar）和 NFC 归一化路径清旧登录项，不构建、不重装。`whose path is` 对带中文的 `/Applications/Cortex哨兵.app` 会漏删。
 
 `--cortex-root` 和环境变量 `CORTEX_REPO_ROOT` 是旧装法：监视 `<该路径>/logs`。新装法用 `CORTEX_SENTINEL_WATCH_DIR` 直接指向日志目录。两者都没有时，安装器创建并使用 `~/.cortex-sentinel/logs`。
 

@@ -22,6 +22,10 @@ enum CortexSentinelBarMain {
     static let idleRefreshArgument = "--idle-refresh"
     static let smokeSettingsArgument = "--smoke-settings"
     static let openSettingsArgument = "--open-settings"
+    /// 真实 store + 真实本机环境离屏出一张面板 PNG（等余额/额度回来再渲染）。
+    /// 与 --render-panel-png 的 fixture 隔离环境相对，用于改动后的真机验收。
+    static let renderLivePanelPNGArgument = "--render-live-panel-png"
+    static let livePanelSettleSecondsArgument = "--settle-seconds"
 
     @MainActor
     static func main() async {
@@ -58,6 +62,14 @@ enum CortexSentinelBarMain {
         if let index = arguments.firstIndex(of: renderPanelPNGArgument),
            index + 1 < arguments.count {
             await runRenderPanelPNGCLI(
+                outputPath: arguments[index + 1],
+                arguments: arguments
+            )
+            return
+        }
+        if let index = arguments.firstIndex(of: renderLivePanelPNGArgument),
+           index + 1 < arguments.count {
+            await runRenderLivePanelPNGCLI(
                 outputPath: arguments[index + 1],
                 arguments: arguments
             )
@@ -164,6 +176,54 @@ enum CortexSentinelBarMain {
             FileHandle.standardError.write(Data("面板离屏渲染失败：\(error.localizedDescription)\n".utf8))
             exit(1)
         }
+    }
+
+    /// 真实环境的面板离屏验收：默认 SentinelStore（真实监视目录、真实 key 识别、
+    /// 真实余额/额度链路），start 后等 settleSeconds 让数据回来，再按
+    /// --render-panel-png 同款方式出一张 PNG。改面板后的真机检验用它，不用再抠屏幕截图。
+    @MainActor
+    private static func runRenderLivePanelPNGCLI(outputPath: String, arguments: [String]) async {
+        let settleSeconds: TimeInterval
+        if let index = arguments.firstIndex(of: livePanelSettleSecondsArgument),
+           index + 1 < arguments.count,
+           let parsed = TimeInterval(arguments[index + 1]), parsed > 0 {
+            settleSeconds = parsed
+        } else {
+            settleSeconds = 10
+        }
+        let store = SentinelStore()
+        store.start()
+        try? await Task.sleep(nanoseconds: UInt64(settleSeconds * 1_000_000_000))
+        let url = URL(fileURLWithPath: outputPath)
+        do {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            let view = SentinelMenuView(store: store, rendersOffscreen: true)
+                .frame(width: SentinelTheme.Metrics.menuWidth)
+                .fixedSize(horizontal: true, vertical: true)
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 2
+            renderer.proposedSize = ProposedViewSize(
+                width: SentinelTheme.Metrics.menuWidth,
+                height: nil
+            )
+            guard let nsImage = renderer.nsImage,
+                  let tiff = nsImage.tiffRepresentation,
+                  let bitmap = NSBitmapImageRep(data: tiff),
+                  let png = bitmap.representation(using: .png, properties: [:]),
+                  !png.isEmpty
+            else {
+                throw PanelPNGRenderError.emptyImage
+            }
+            try png.write(to: url)
+            print("written \(outputPath)")
+        } catch {
+            FileHandle.standardError.write(Data("真实面板离屏渲染失败：\(error.localizedDescription)\n".utf8))
+            exit(1)
+        }
+        exit(0)
     }
 
     /// 自检 CLI：把哨兵此刻从磁盘读到的东西原样打印出来。

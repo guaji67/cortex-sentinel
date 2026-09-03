@@ -27,38 +27,35 @@ final class GLMUsageTests: XCTestCase {
     }
 
     func testParseMapsFiveHourAndWeeklyWindows() throws {
-        let account = try GLMUsageClient.parse(
-            data: makePayload(),
-            key: "fixture-key-abcdefghijklmnop",
-            label: "pro",
-            checkedAt: checkedAt
-        )
-        XCTAssertEqual(account.level, "pro")
-        XCTAssertFalse(account.stale)
-        XCTAssertNil(account.errorMessage)
-        XCTAssertEqual(account.fiveHourWindow?.percentUsed, 19)
-        XCTAssertEqual(account.fiveHourWindow?.usedPoints, 2309)
-        XCTAssertEqual(account.fiveHourWindow?.totalPoints, 12000)
+        let part = try GLMUsageClient.parseQuotaPayload(data: makePayload())
+        XCTAssertEqual(part.level, "pro")
+        XCTAssertEqual(part.windows.fiveHour?.percentUsed, 19)
+        XCTAssertEqual(part.windows.fiveHour?.usedPoints, 2309)
+        XCTAssertEqual(part.windows.fiveHour?.totalPoints, 12000)
         XCTAssertEqual(
-            account.fiveHourWindow?.resetAt,
+            part.windows.fiveHour?.resetAt,
             Date(timeIntervalSince1970: 1_788_471_923.332)
         )
-        XCTAssertEqual(account.weeklyWindow?.percentUsed, 5)
-        XCTAssertEqual(account.weeklyWindow?.usedPoints, 3594)
-        XCTAssertEqual(account.weeklyWindow?.totalPoints, 60000)
-        XCTAssertEqual(account.hasDisplayableNumber, true)
-        XCTAssertEqual(account.displayTitle, "GLM pro")
-        XCTAssertEqual(account.remainingTexts.fiveHour, "81%")
+        XCTAssertEqual(part.windows.weekly?.percentUsed, 5)
+        XCTAssertEqual(part.windows.weekly?.usedPoints, 3594)
+        XCTAssertEqual(part.windows.weekly?.totalPoints, 60000)
+    }
+
+    func testParseBalanceReadsCashAndSpend() throws {
+        let part = try GLMUsageClient.parseBalancePayload(
+            data: Data(
+                """
+                {"code":200,"msg":"操作成功","data":{"balance":21.692944000,"rechargeAmount":200.000000,"giveAmount":0.000000,"totalSpendAmount":178.307056000,"availableBalance":21.692944000,"frozenBalance":0E-9,"isKA":false},"success":true}
+                """.utf8
+            )
+        )
+        XCTAssertEqual(part.cash, 21.692944, accuracy: 0.0001)
+        XCTAssertEqual(try XCTUnwrap(part.spend), 178.307056, accuracy: 0.0001)
     }
 
     func testParseThrowsOnGarbagePayload() {
         XCTAssertThrowsError(
-            try GLMUsageClient.parse(
-                data: Data("{}".utf8),
-                key: "fixture-key-abcdefghijklmnop",
-                label: "pro",
-                checkedAt: checkedAt
-            )
+            try GLMUsageClient.parseQuotaPayload(data: Data("{}".utf8))
         ) { error in
             XCTAssertEqual(error as? GLMUsageClientError, .invalidResponse)
         }
@@ -66,21 +63,98 @@ final class GLMUsageTests: XCTestCase {
 
     func testParseTreatsTimeLimitOnlyAsNoPlanInsteadOfError() throws {
         // lite 体验卡到期后的真实返回：只剩 MCP 包的 TIME_LIMIT，没有积分窗。
-        let account = try GLMUsageClient.parse(
+        let part = try GLMUsageClient.parseQuotaPayload(
             data: Data(
                 """
                 {"code":200,"msg":"操作成功","data":{"limits":[{"type":"TIME_LIMIT","unit":5,"number":1,"usage":100,"currentValue":10,"remaining":90,"percentage":10,"nextResetTime":1790426002997}],"level":"lite"},"success":true}
                 """.utf8
-            ),
-            key: "fixture-key-abcdefghijklmnop",
-            label: "lite",
-            checkedAt: checkedAt
+            )
         )
-        XCTAssertEqual(account.level, "lite")
-        XCTAssertNil(account.errorMessage)
-        XCTAssertFalse(account.hasDisplayableNumber)
-        XCTAssertNil(account.fiveHourWindow)
-        XCTAssertNil(account.weeklyWindow)
+        XCTAssertEqual(part.level, "lite")
+        XCTAssertNil(part.windows.fiveHour)
+        XCTAssertNil(part.windows.weekly)
+    }
+
+    /// fetch 把订阅窗和现金余额两个接口的结果拼进同一行；
+    /// 一边挂另一边照常显示，两边全挂才抛错。
+    func testFetchMergesQuotaAndBalanceIndependently() async throws {
+        let quotaBody = makePayload()
+        let balanceBody = Data(
+            """
+            {"code":200,"msg":"操作成功","data":{"balance":21.69,"availableBalance":21.69,"totalSpendAmount":178.31},"success":true}
+            """.utf8
+        )
+        let both = RoutedGLMLoader(quotaBody: quotaBody, balanceBody: balanceBody)
+        let ok = try await GLMUsageClient.fetch(
+            key: "fixture-key-abcdefghijklmnop",
+            label: "pro",
+            endpoint: quotaURL,
+            balanceEndpoint: balanceURL,
+            requestLoader: both,
+            now: checkedAt
+        )
+        XCTAssertEqual(ok.fiveHourWindow?.percentUsed, 19)
+        XCTAssertEqual(try XCTUnwrap(ok.cashBalance), 21.69, accuracy: 0.0001)
+        XCTAssertNil(ok.errorMessage)
+
+        // 只挂订阅：显示现金余额，tooltip 带订阅报错。
+        let quotaDown = RoutedGLMLoader(
+            quotaStatus: 500,
+            quotaBody: Data("{}".utf8),
+            balanceBody: balanceBody
+        )
+        let balanceOnly = try await GLMUsageClient.fetch(
+            key: "fixture-key-abcdefghijklmnop",
+            label: "pro",
+            endpoint: quotaURL,
+            balanceEndpoint: balanceURL,
+            requestLoader: quotaDown,
+            now: checkedAt
+        )
+        XCTAssertNil(balanceOnly.fiveHourWindow)
+        XCTAssertEqual(try XCTUnwrap(balanceOnly.cashBalance), 21.69, accuracy: 0.0001)
+        XCTAssertEqual(balanceOnly.errorMessage, GLMUsageClientError.invalidResponse.userMessage)
+        XCTAssertEqual(balanceOnly.hasDisplayableNumber, true)
+
+        // 全挂：抛错走 preserve。
+        let allDown = RoutedGLMLoader(quotaStatus: 500, quotaBody: Data(), balanceStatus: 500, balanceBody: Data())
+        do {
+            _ = try await GLMUsageClient.fetch(
+                key: "fixture-key-abcdefghijklmnop",
+                label: "pro",
+                endpoint: quotaURL,
+                balanceEndpoint: balanceURL,
+                requestLoader: allDown,
+                now: checkedAt
+            )
+            XCTFail("应当抛错")
+        } catch let error as GLMUsageClientError {
+            XCTAssertEqual(error, .invalidResponse)
+        }
+    }
+
+    private var quotaURL: URL { URL(string: "https://quota.example.test/limit")! }
+    private var balanceURL: URL { URL(string: "https://balance.example.test/report")! }
+
+    /// 按 URL 分发响应的假 loader，模拟两个接口各自成功/失败。
+    private struct RoutedGLMLoader: GLMUsageRequestLoading {
+        var quotaStatus = 200
+        var quotaBody: Data
+        var balanceStatus = 200
+        var balanceBody: Data
+
+        func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+            let isBalance = request.url?.host == "balance.example.test"
+            let status = isBalance ? balanceStatus : quotaStatus
+            let body = isBalance ? balanceBody : quotaBody
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: status,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (body, response)
+        }
     }
 
     func testClassifyWindowsFallsBackToPointsWhenUnitUnknown() {
@@ -172,34 +246,47 @@ final class GLMUsageTests: XCTestCase {
         XCTAssertTrue(detected.isEmpty)
     }
 
-    func testMergedSnapshotKeepsPreviousNumbersOnFailure() throws {
-        let good = try GLMUsageClient.parse(
-            data: makePayload(),
+    private func makeGoodAccount() -> GLMAccountUsage {
+        GLMAccountUsage(
             key: "fixture-key-abcdefghijklmnop",
             label: "pro",
-            checkedAt: checkedAt
+            level: "pro",
+            fiveHourWindow: GLMUsageWindow(
+                totalPoints: 12000,
+                usedPoints: 2309,
+                percentUsed: 19,
+                resetAt: Date(timeIntervalSince1970: 1_788_471_923.332)
+            ),
+            weeklyWindow: GLMUsageWindow(
+                totalPoints: 60000,
+                usedPoints: 3594,
+                percentUsed: 5,
+                resetAt: Date(timeIntervalSince1970: 1_788_977_984.998)
+            ),
+            cashBalance: nil,
+            totalSpendAmount: nil,
+            checkedAt: checkedAt,
+            stale: false,
+            errorMessage: nil
         )
-        let previous = GLMUsageSnapshot(accounts: [good], checkedAt: checkedAt)
+    }
+
+    func testMergedSnapshotKeepsPreviousNumbersOnFailure() {
+        let previous = GLMUsageSnapshot(accounts: [makeGoodAccount()], checkedAt: checkedAt)
         let failure = GLMAccountUsage.unavailable(
             key: "fixture-key-abcdefghijklmnop",
             label: "pro",
             errorMessage: GLMUsageClientError.network.userMessage
         )
         let merged = GLMUsageSnapshot.merged(previous: previous, fresh: [failure], now: checkedAt)
-        let account = try XCTUnwrap(merged.accounts.first)
-        XCTAssertEqual(account.fiveHourWindow?.percentUsed, 19)
-        XCTAssertTrue(account.stale)
-        XCTAssertEqual(account.errorMessage, GLMUsageClientError.network.userMessage)
+        let account = merged.accounts.first
+        XCTAssertEqual(account?.fiveHourWindow?.percentUsed, 19)
+        XCTAssertTrue(account?.stale ?? false)
+        XCTAssertEqual(account?.errorMessage, GLMUsageClientError.network.userMessage)
     }
 
-    func testBalanceSectionExpandsWhenGLMAccountsExist() throws {
-        let good = try GLMUsageClient.parse(
-            data: makePayload(),
-            key: "fixture-key-abcdefghijklmnop",
-            label: "pro",
-            checkedAt: checkedAt
-        )
-        let snapshot = GLMUsageSnapshot(accounts: [good], checkedAt: checkedAt)
+    func testBalanceSectionExpandsWhenGLMAccountsExist() {
+        let snapshot = GLMUsageSnapshot(accounts: [makeGoodAccount()], checkedAt: checkedAt)
         XCTAssertEqual(
             BalanceSectionPresentation.resolve(official: .empty, aio: .unconfigured, glm: snapshot),
             .expanded

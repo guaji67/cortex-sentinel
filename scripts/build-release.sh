@@ -7,7 +7,7 @@ package_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 app_dir="$package_dir/.build/CortexSentinelBar.app"
 binary_path="$app_dir/Contents/MacOS/CortexSentinelBar"
 dist_dir="$package_dir/dist"
-version="${RELEASE_VERSION:-0.1.6}"
+version="${RELEASE_VERSION:-0.1.7}"
 build_number="${RELEASE_BUILD_NUMBER:-$(TZ=Asia/Shanghai date +%Y%m%d)}"
 # 用证书 SHA-1 而不是名字：login 钥匙串里也有一份同名证书，按名字签会 ambiguous。
 identity="B1A729AA6B83EC493642AB0586D415DB0ADE9F37"

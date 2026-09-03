@@ -27,14 +27,22 @@ struct GLMAccountUsage: Equatable, Sendable, Identifiable {
     let level: String?
     let fiveHourWindow: GLMUsageWindow?
     let weeklyWindow: GLMUsageWindow?
+    /// 按量计费现金余额（元）。走 /api/paas/v4 端点的链路（ClaudeZ）烧的就是这笔。
+    let cashBalance: Double?
+    /// 现金账户累计消费（元）。
+    let totalSpendAmount: Double?
     let checkedAt: Date?
     let stale: Bool
     let errorMessage: String?
 
     var id: String { key }
 
-    var hasDisplayableNumber: Bool {
+    var hasDisplayableQuota: Bool {
         fiveHourWindow?.percentUsed != nil || weeklyWindow?.percentUsed != nil
+    }
+
+    var hasDisplayableNumber: Bool {
+        hasDisplayableQuota || cashBalance != nil
     }
 
     /// 面板行标题：pro / lite 这类短档位名接在 GLM 后面，环境变量名原样当名字。
@@ -61,6 +69,8 @@ struct GLMAccountUsage: Equatable, Sendable, Identifiable {
             level: nil,
             fiveHourWindow: nil,
             weeklyWindow: nil,
+            cashBalance: nil,
+            totalSpendAmount: nil,
             checkedAt: nil,
             stale: false,
             errorMessage: errorMessage
@@ -78,6 +88,8 @@ struct GLMAccountUsage: Equatable, Sendable, Identifiable {
             level: level ?? old.level,
             fiveHourWindow: old.fiveHourWindow,
             weeklyWindow: old.weeklyWindow,
+            cashBalance: old.cashBalance,
+            totalSpendAmount: old.totalSpendAmount,
             checkedAt: old.checkedAt,
             stale: true,
             errorMessage: errorMessage ?? old.errorMessage
@@ -130,9 +142,14 @@ enum GLMUsageClientError: Error, Equatable {
 
 enum GLMUsageConstants {
     static let endpoint = URL(string: "https://open.bigmodel.cn/api/monitor/usage/quota/limit")!
+    /// 按量计费现金余额。社区从前端抓的 biz 接口，官方没写进文档。
+    /// Coding Plan（/api/coding/paas/v4）烧订阅积分，/api/paas/v4 烧这笔现金。
+    static let balanceEndpoint = URL(string: "https://bigmodel.cn/api/biz/account/query-customer-account-report")!
     /// 余额属于慢变量，跟 Cursor / GPT 官方同一档刷新间隔。
     static let automaticRefreshInterval: TimeInterval = 10 * 60
     static let requestTimeout: TimeInterval = 15
+    /// 现金余额低于这个数（元）行点变橙提醒。
+    static let lowCashBalance: Double = 15
 }
 
 protocol GLMUsageRequestLoading: Sendable {
@@ -143,13 +160,16 @@ extension URLSession: GLMUsageRequestLoading {}
 
 struct GLMUsageClient: Sendable {
     private let endpoint: URL
+    private let balanceEndpoint: URL
     private let requestLoader: any GLMUsageRequestLoading
 
     init(
         endpoint: URL = GLMUsageConstants.endpoint,
+        balanceEndpoint: URL = GLMUsageConstants.balanceEndpoint,
         requestLoader: any GLMUsageRequestLoading = URLSession.shared
     ) {
         self.endpoint = endpoint
+        self.balanceEndpoint = balanceEndpoint
         self.requestLoader = requestLoader
     }
 
@@ -158,12 +178,13 @@ struct GLMUsageClient: Sendable {
     func fetchAll(entries: [GLMKeyEntry]) async -> [GLMAccountUsage] {
         await withTaskGroup(of: GLMAccountUsage.self) { group in
             for entry in entries {
-                group.addTask { [endpoint, requestLoader] in
+                group.addTask { [endpoint, balanceEndpoint, requestLoader] in
                     do {
                         return try await Self.fetch(
                             key: entry.key,
                             label: entry.label,
                             endpoint: endpoint,
+                            balanceEndpoint: balanceEndpoint,
                             requestLoader: requestLoader
                         )
                     } catch let error as GLMUsageClientError {
@@ -185,26 +206,109 @@ struct GLMUsageClient: Sendable {
         key: String,
         label: String,
         endpoint: URL,
+        balanceEndpoint: URL,
         requestLoader: any GLMUsageRequestLoading,
         now: Date = Date()
     ) async throws -> GLMAccountUsage {
+        // 订阅窗和现金余额是两个独立接口，一边挂不影响另一边；
+        // 全挂才把错误抛给调用方走 preserve 旧数字。
+        async let quotaOutcome = Self.fetchQuotaPart(apiKey: key, endpoint: endpoint, requestLoader: requestLoader)
+        async let balanceOutcome = Self.fetchBalancePart(apiKey: key, endpoint: balanceEndpoint, requestLoader: requestLoader)
+        let quota = await quotaOutcome
+        let balance = await balanceOutcome
+
+        var firstError: GLMUsageClientError?
+        var windows: (fiveHour: GLMUsageWindow?, weekly: GLMUsageWindow?) = (nil, nil)
+        var level: String?
+        if case let .failure(error) = quota {
+            firstError = error
+        }
+        if case let .success(part) = quota {
+            windows = part.windows
+            level = part.level
+        }
+
+        var cash: Double?
+        var spend: Double?
+        if case let .failure(error) = balance, firstError == nil {
+            firstError = error
+        }
+        if case let .success(part) = balance {
+            cash = part.cash
+            spend = part.spend
+        }
+
+        guard windows.fiveHour != nil || windows.weekly != nil || cash != nil else {
+            throw firstError ?? .invalidResponse
+        }
+        // 订阅挂了但余额活着：行上显示余额，tooltip 里带订阅的报错。
+        var errorMessage: String?
+        if windows.fiveHour == nil && windows.weekly == nil, case let .failure(error) = quota {
+            errorMessage = error.userMessage
+        }
+        return GLMAccountUsage(
+            key: key,
+            label: label,
+            level: level,
+            fiveHourWindow: windows.fiveHour,
+            weeklyWindow: windows.weekly,
+            cashBalance: cash,
+            totalSpendAmount: spend,
+            checkedAt: now,
+            stale: false,
+            errorMessage: errorMessage
+        )
+    }
+
+    typealias QuotaPart = (
+        windows: (fiveHour: GLMUsageWindow?, weekly: GLMUsageWindow?),
+        level: String?
+    )
+
+    private static func fetchQuotaPart(
+        apiKey: String,
+        endpoint: URL,
+        requestLoader: any GLMUsageRequestLoading
+    ) async -> Result<QuotaPart, GLMUsageClientError> {
+        do {
+            let data = try await authorizedGet(apiKey: apiKey, endpoint: endpoint, requestLoader: requestLoader)
+            let payload = try Self.parseQuotaPayload(data: data)
+            return .success(payload)
+        } catch let error as GLMUsageClientError {
+            return .failure(error)
+        } catch {
+            return .failure(.invalidResponse)
+        }
+    }
+
+    private static func fetchBalancePart(
+        apiKey: String,
+        endpoint: URL,
+        requestLoader: any GLMUsageRequestLoading
+    ) async -> Result<(cash: Double, spend: Double?), GLMUsageClientError> {
+        do {
+            let data = try await authorizedGet(apiKey: apiKey, endpoint: endpoint, requestLoader: requestLoader)
+            let part = try Self.parseBalancePayload(data: data)
+            return .success(part)
+        } catch let error as GLMUsageClientError {
+            return .failure(error)
+        } catch {
+            return .failure(.invalidResponse)
+        }
+    }
+
+    private static func authorizedGet(
+        apiKey: String,
+        endpoint: URL,
+        requestLoader: any GLMUsageRequestLoading
+    ) async throws -> Data {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "GET"
         request.timeoutInterval = GLMUsageConstants.requestTimeout
-        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("CortexSentinel/1.0", forHTTPHeaderField: "User-Agent")
-
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await requestLoader.data(for: request)
-        } catch let error as URLError where error.code == .timedOut {
-            throw GLMUsageClientError.timedOut
-        } catch {
-            throw GLMUsageClientError.network
-        }
-
+        let (data, response) = try await requestLoader.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw GLMUsageClientError.invalidResponse
         }
@@ -214,10 +318,10 @@ struct GLMUsageClient: Sendable {
         guard (200..<300).contains(httpResponse.statusCode) else {
             throw GLMUsageClientError.invalidResponse
         }
-        return try parse(data: data, key: key, label: label, checkedAt: now)
+        return data
     }
 
-    static func parse(data: Data, key: String, label: String, checkedAt: Date) throws -> GLMAccountUsage {
+    static func parseQuotaPayload(data: Data) throws -> QuotaPart {
         guard let payload = try? JSONDecoder().decode(GLMQuotaResponse.self, from: data),
               let limits = payload.data?.limits
         else {
@@ -226,29 +330,20 @@ struct GLMUsageClient: Sendable {
         let credits = limits.filter { $0.type == nil || $0.type == "CREDIT_LIMIT" }
         guard !credits.isEmpty else {
             // key 有效但账号没有积分窗（Coding Plan 体验卡到期就是这样，
-        // 只剩 MCP 包的 TIME_LIMIT）：不算格式变化，如实显示无订阅额度。
-            return GLMAccountUsage(
-                key: key,
-                label: label,
-                level: payload.data?.level,
-                fiveHourWindow: nil,
-                weeklyWindow: nil,
-                checkedAt: checkedAt,
-                stale: false,
-                errorMessage: nil
-            )
+            // 只剩 MCP 包的 TIME_LIMIT）：不算格式变化，如实返回无积分窗。
+            return (windows: (nil, nil), level: payload.data?.level)
         }
-        let windows = Self.classifyWindows(credits)
-        return GLMAccountUsage(
-            key: key,
-            label: label,
-            level: payload.data?.level,
-            fiveHourWindow: windows.fiveHour,
-            weeklyWindow: windows.weekly,
-            checkedAt: checkedAt,
-            stale: false,
-            errorMessage: nil
-        )
+        let classified = Self.classifyWindows(credits)
+        return (windows: classified, level: payload.data?.level)
+    }
+
+    static func parseBalancePayload(data: Data) throws -> (cash: Double, spend: Double?) {
+        guard let payload = try? JSONDecoder().decode(GLMBalanceResponse.self, from: data),
+              let cash = payload.data?.availableBalance ?? payload.data?.balance
+        else {
+            throw GLMUsageClientError.invalidResponse
+        }
+        return (cash: cash, spend: payload.data?.totalSpendAmount)
     }
 
     /// 两个窗哪个是 5 小时、哪个是周：先认官方的 unit 编号（3=小时窗、6=周窗），
@@ -268,6 +363,18 @@ struct GLMUsageClient: Sendable {
             return (nil, nil)
         }
         return (window(first), sorted.count > 1 ? window(sorted[sorted.count - 1]) : nil)
+    }
+}
+
+/// /api/biz/account/query-customer-account-report 的返回。数字是 JSON 数值
+/// 字面量（带一长串小数位），Double 直接解。
+struct GLMBalanceResponse: Decodable {
+    let data: Payload?
+
+    struct Payload: Decodable {
+        let balance: Double?
+        let availableBalance: Double?
+        let totalSpendAmount: Double?
     }
 }
 

@@ -479,6 +479,10 @@ struct SentinelBalancesSection: View {
                     cursorUsageSegment("5h", account.fiveHourWindow?.percentUsed)
                     cursorUsageDivider
                     cursorUsageSegment("周", account.weeklyWindow?.percentUsed)
+                    if account.cashBalance != nil {
+                        cursorUsageDivider
+                        glmBalanceSegment(account)
+                    }
                 }
                 .fixedSize(horizontal: true, vertical: false)
                 .layoutPriority(2)
@@ -500,6 +504,41 @@ struct SentinelBalancesSection: View {
         return "无订阅额度"
     }
 
+    /// 现金余额段：走 /api/paas/v4 按量端点的链路（ClaudeZ）烧的就是这笔。
+    /// 快见底变橙，烧穿变红。
+    @ViewBuilder
+    private func glmBalanceSegment(_ account: GLMAccountUsage) -> some View {
+        if let cash = account.cashBalance {
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
+                Text("余")
+                    .font(SentinelTheme.Fonts.balanceAmount)
+                    .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                    .lineLimit(1)
+                Text(String(format: "¥%.2f", cash))
+                    .font(SentinelTheme.Fonts.balanceAmount)
+                    .foregroundStyle(cash <= 0
+                        ? SentinelTheme.Colors.danger
+                        : cash < GLMUsageConstants.lowCashBalance
+                            ? SentinelTheme.Colors.warning
+                            : SentinelTheme.Colors.foreground)
+                    .monospacedDigit()
+                    .lineLimit(1)
+            }
+            .help(glmBalanceTooltip(account))
+        }
+    }
+
+    private func glmBalanceTooltip(_ account: GLMAccountUsage) -> String {
+        guard let cash = account.cashBalance else {
+            return ""
+        }
+        var text = "现金余额 ¥\(String(format: "%.2f", cash))（按量计费）"
+        if let spend = account.totalSpendAmount {
+            text += " · 累计消费 ¥\(String(format: "%.2f", spend))"
+        }
+        return text
+    }
+
     private func glmUsageStatusColor(_ account: GLMAccountUsage) -> Color {
         if account.stale {
             return SentinelTheme.Colors.warning
@@ -507,7 +546,8 @@ struct SentinelBalancesSection: View {
         let hasLow = [account.fiveHourWindow?.percentUsed, account.weeklyWindow?.percentUsed]
             .compactMap { $0 }
             .contains { (100 - $0) <= 100 - AIOConstants.quotaWarningThreshold }
-        if hasLow {
+        if hasLow
+            || account.cashBalance.map { $0 < GLMUsageConstants.lowCashBalance } == true {
             return SentinelTheme.Colors.warning
         }
         return account.hasDisplayableNumber

@@ -131,6 +131,27 @@ final class GLMUsageTests: XCTestCase {
         } catch let error as GLMUsageClientError {
             XCTAssertEqual(error, .invalidResponse)
         }
+
+        // 接口都通但什么数字都没有（用户加了把两头都空的 key）：
+        // 返回全空账号不抛错，界面显示「未知」。
+        let timeLimitOnly = Data(
+            """
+            {"code":200,"msg":"操作成功","data":{"limits":[{"type":"TIME_LIMIT","unit":5,"number":1,"usage":100,"currentValue":10,"percentage":10}],"level":"lite"},"success":true}
+            """.utf8
+        )
+        let noData = RoutedGLMLoader(quotaBody: timeLimitOnly, balanceStatus: 404, balanceBody: Data())
+        let unknown = try await GLMUsageClient.fetch(
+            key: "fixture-key-abcdefghijklmnop",
+            label: "pro",
+            endpoint: quotaURL,
+            balanceEndpoint: balanceURL,
+            requestLoader: noData,
+            now: checkedAt
+        )
+        XCTAssertNil(unknown.fiveHourWindow)
+        XCTAssertNil(unknown.cashBalance)
+        XCTAssertNil(unknown.errorMessage)
+        XCTAssertEqual(unknown.hasDisplayableNumber, false)
     }
 
     private var quotaURL: URL { URL(string: "https://quota.example.test/limit")! }

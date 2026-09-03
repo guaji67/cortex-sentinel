@@ -467,7 +467,7 @@ struct SentinelBalancesSection: View {
                 .layoutPriority(1)
             Spacer(minLength: SentinelTheme.Spacing.xs)
             if let failureText = glmUsageFailureText(account) {
-                // 查失败或没订阅额度就如实说一句，不摆「5h —」的空架子。
+                // 探测失败或两头都空就如实说一句，不摆「5h —」的空架子。
                 Text(failureText)
                     .font(SentinelTheme.Fonts.balanceMeta)
                     .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
@@ -475,12 +475,24 @@ struct SentinelBalancesSection: View {
                     .fixedSize(horizontal: true, vertical: false)
                     .layoutPriority(2)
             } else {
+                // 探测到什么显示什么：有订阅窗显 5h/周，有现金余额显余，
+                // 都有就并排，中间点号隔开。
+                let hasFiveHour = account.fiveHourWindow?.percentUsed != nil
+                let hasWeekly = account.weeklyWindow?.percentUsed != nil
                 HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
-                    cursorUsageSegment("5h", account.fiveHourWindow?.percentUsed)
-                    cursorUsageDivider
-                    cursorUsageSegment("周", account.weeklyWindow?.percentUsed)
-                    if account.cashBalance != nil {
+                    if hasFiveHour {
+                        cursorUsageSegment("5h", account.fiveHourWindow?.percentUsed)
+                    }
+                    if hasFiveHour, hasWeekly {
                         cursorUsageDivider
+                    }
+                    if hasWeekly {
+                        cursorUsageSegment("周", account.weeklyWindow?.percentUsed)
+                    }
+                    if account.cashBalance != nil {
+                        if hasFiveHour || hasWeekly {
+                            cursorUsageDivider
+                        }
                         glmBalanceSegment(account)
                     }
                 }
@@ -493,7 +505,7 @@ struct SentinelBalancesSection: View {
         .help(glmUsageTooltip(account))
     }
 
-    /// 无数字时的右侧文案：优先报错，其次「无订阅额度」。
+    /// 无任何可显示数字时的右侧文案：优先报错；接口通了但两头都空显示未知。
     private func glmUsageFailureText(_ account: GLMAccountUsage) -> String? {
         if account.hasDisplayableNumber {
             return nil
@@ -501,7 +513,7 @@ struct SentinelBalancesSection: View {
         if let errorMessage = account.errorMessage, !errorMessage.isEmpty {
             return errorMessage
         }
-        return "无订阅额度"
+        return "未知"
     }
 
     /// 现金余额段：走 /api/paas/v4 按量端点的链路（ClaudeZ）烧的就是这笔。

@@ -218,29 +218,36 @@ struct GLMUsageClient: Sendable {
         let balance = await balanceOutcome
 
         var firstError: GLMUsageClientError?
+        var quotaSucceeded = false
         var windows: (fiveHour: GLMUsageWindow?, weekly: GLMUsageWindow?) = (nil, nil)
         var level: String?
         if case let .failure(error) = quota {
             firstError = error
         }
         if case let .success(part) = quota {
+            quotaSucceeded = true
             windows = part.windows
             level = part.level
         }
 
         var cash: Double?
         var spend: Double?
+        var balanceSucceeded = false
         if case let .failure(error) = balance, firstError == nil {
             firstError = error
         }
         if case let .success(part) = balance {
+            balanceSucceeded = true
             cash = part.cash
             spend = part.spend
         }
 
-        guard windows.fiveHour != nil || windows.weekly != nil || cash != nil else {
+        guard quotaSucceeded || balanceSucceeded else {
+            // 两个接口都没拿到 200 才算探测失败，抛错走 preserve 旧数字。
             throw firstError ?? .invalidResponse
         }
+        // 接口通了但什么数字都没有（比如新加的 key 两头都空）：
+        // 返回全空账号，界面显示「未知」，不当成故障。
         // 订阅挂了但余额活着：行上显示余额，tooltip 里带订阅的报错。
         var errorMessage: String?
         if windows.fiveHour == nil && windows.weekly == nil, case let .failure(error) = quota {

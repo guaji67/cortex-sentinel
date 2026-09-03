@@ -23,11 +23,17 @@ final class SentinelSettingsModel: ObservableObject {
     @Published var balanceRecheckInterval: SentinelBalanceRecheckInterval
     @Published var watchPath: String
     @Published var isWatchLocked: Bool
+    /// GLM 额度监控的生效 key 列表（自动识别 ∪ 手动添加 − 已删除），
+    /// 由 store 在打开设置窗和增删后同步进来。
+    @Published var glmEntries: [GLMKeyEntry] = []
+    @Published var glmNewLabel: String = ""
+    @Published var glmNewKey: String = ""
 
     var applyLoginItem: ((Bool) -> Void)?
     var applyHistoryRetainCount: ((Int) -> Void)?
     var applyRefreshIntervals: (() -> Void)?
     var chooseWatchDirectory: (() -> Void)?
+    var applyGLMKeys: (() -> Void)?
 
     private let defaults: UserDefaults
 
@@ -196,6 +202,31 @@ final class SentinelSettingsModel: ObservableObject {
         applyRefreshIntervals?()
     }
 
+    /// 把两个输入框里的内容录成一把新 key；key 太短或已存在就不动。
+    func addGLMKeyFromFields() {
+        let key = glmNewKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard key.count >= GLMKeyConstants.minKeyLength else {
+            return
+        }
+        let label = glmNewLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        SentinelSettings.addGLMUserKey(
+            GLMKeyEntry(label: label.isEmpty ? "自定义" : label, key: key),
+            defaults: defaults
+        )
+        // 手动加回来的 key 同时从删除名单里捞回来。
+        SentinelSettings.removeGLMRemovedKey(key, defaults: defaults)
+        glmNewLabel = ""
+        glmNewKey = ""
+        applyGLMKeys?()
+    }
+
+    /// 删一把 key：手加的直接删，自动识别的进删除名单防下次启动又认回来。
+    func removeGLMKey(_ entry: GLMKeyEntry) {
+        SentinelSettings.removeGLMUserKey(entry.key, defaults: defaults)
+        SentinelSettings.addGLMRemovedKey(entry.key, defaults: defaults)
+        applyGLMKeys?()
+    }
+
     static func preview(
         fixture: SettingsPreviewFixture,
         defaults: UserDefaults = UserDefaults(suiteName: "com.falcon.cortex.sentinelbar.preview")
@@ -231,7 +262,7 @@ final class SentinelSettingsModel: ObservableObject {
             )
         }
 
-        return SentinelSettingsModel(
+        let model = SentinelSettingsModel(
             defaults: defaults,
             loginItem: loginItem,
             historyRetainCount: StatusFileRetention.defaultCap,
@@ -239,6 +270,11 @@ final class SentinelSettingsModel: ObservableObject {
             watchPath: SentinelPaths.defaultWatchDirectory.path,
             isWatchLocked: fixture == .watchLocked
         )
+        // 截图 smoke 用演示 key（假数据），让 GLM 列表行在出图里有覆盖。
+        model.glmEntries = [
+            GLMKeyEntry(label: "pro", key: "demo0000000000000000000000000000.zf4X"),
+        ]
+        return model
     }
 }
 
@@ -269,6 +305,9 @@ struct SentinelSettingsView: View {
         VStack(alignment: .leading, spacing: SentinelTheme.Spacing.panel) {
             settingsGroup(title: SentinelSettingsCopy.notifyGroupTitle) {
                 notifyGroup
+            }
+            settingsGroup(title: SentinelSettingsCopy.glmGroupTitle) {
+                glmKeyGroup
             }
             settingsGroup(title: SentinelSettingsCopy.refreshGroupTitle) {
                 refreshGroup
@@ -349,6 +388,106 @@ struct SentinelSettingsView: View {
             .disabled(!model.notifyMasterEnabled)
             .opacity(model.notifyMasterEnabled ? 1 : 0.7)
         }
+    }
+
+    private var glmKeyGroup: some View {
+        VStack(alignment: .leading, spacing: SentinelTheme.Spacing.md) {
+            if model.glmEntries.isEmpty {
+                hintText(SentinelSettingsCopy.glmEmptyHint)
+            } else {
+                VStack(alignment: .leading, spacing: SentinelTheme.Spacing.sm) {
+                    ForEach(model.glmEntries, id: \.key) { entry in
+                        HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
+                            Text(entry.label.isEmpty ? "GLM" : entry.label)
+                                .font(SentinelTheme.Fonts.rowTitle)
+                                .foregroundStyle(SentinelTheme.Colors.foreground)
+                                .lineLimit(1)
+                            Spacer(minLength: SentinelTheme.Spacing.sm)
+                            Text(entry.maskedKeyText)
+                                .font(SentinelTheme.Fonts.metadata)
+                                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                                .lineLimit(1)
+                            Button(SentinelSettingsCopy.glmDeleteButton) {
+                                model.removeGLMKey(entry)
+                            }
+                            .buttonStyle(SentinelButtonStyle(kind: .secondary, compact: true))
+                            .accessibilityIdentifier("settings-glm-delete-\(entry.label)")
+                        }
+                    }
+                }
+            }
+
+            HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
+                glmField(
+                    placeholder: SentinelSettingsCopy.glmNameFieldPlaceholder,
+                    text: $model.glmNewLabel,
+                    width: SentinelTheme.Metrics.settingsCountFieldWidth * 1.6,
+                    identifier: "settings-glm-new-label"
+                )
+                glmField(
+                    placeholder: SentinelSettingsCopy.glmKeyFieldPlaceholder,
+                    text: $model.glmNewKey,
+                    width: nil,
+                    identifier: "settings-glm-new-key"
+                )
+                Button(SentinelSettingsCopy.glmAddButton) {
+                    model.addGLMKeyFromFields()
+                }
+                .buttonStyle(SentinelButtonStyle(kind: .primary, compact: true))
+                .disabled(!canAddGLMKey)
+                .accessibilityIdentifier("settings-glm-add")
+            }
+            hintText(SentinelSettingsCopy.glmHint)
+        }
+    }
+
+    private var canAddGLMKey: Bool {
+        model.glmNewKey.trimmingCharacters(in: .whitespacesAndNewlines).count >= GLMKeyConstants.minKeyLength
+    }
+
+    private func glmField(
+        placeholder: String,
+        text: Binding<String>,
+        width: CGFloat?,
+        identifier: String
+    ) -> some View {
+        ZStack(alignment: .leading) {
+            // 离屏渲染（截图 smoke）不吃 .plain TextField，照 historyGroup
+            // 的做法用 Text 替身；真实窗口挂真输入框。
+            if text.wrappedValue.isEmpty {
+                Text(placeholder)
+                    .font(SentinelTheme.Fonts.subtitle)
+                    .foregroundStyle(SentinelTheme.Colors.secondaryForeground.opacity(0.7))
+                    .padding(.horizontal, SentinelTheme.Spacing.md)
+                    .allowsHitTesting(false)
+            } else {
+                Text(text.wrappedValue)
+                    .font(SentinelTheme.Fonts.subtitle)
+                    .foregroundStyle(SentinelTheme.Colors.foreground)
+                    .padding(.horizontal, SentinelTheme.Spacing.md)
+                    .allowsHitTesting(false)
+            }
+            if !rendersOffscreen {
+                TextField("", text: text)
+                    .font(SentinelTheme.Fonts.subtitle)
+                    .foregroundStyle(Color.clear)
+                    .textFieldStyle(.plain)
+                    .padding(.horizontal, SentinelTheme.Spacing.md)
+                    .onSubmit { model.addGLMKeyFromFields() }
+            }
+        }
+        .frame(maxWidth: width, alignment: .leading)
+        .frame(minHeight: SentinelTheme.Metrics.controlHeight)
+        .background(SentinelTheme.Colors.inset)
+        .clipShape(RoundedRectangle(cornerRadius: SentinelTheme.Radius.field))
+        .overlay(
+            RoundedRectangle(cornerRadius: SentinelTheme.Radius.field)
+                .stroke(
+                    SentinelTheme.Colors.border,
+                    lineWidth: SentinelTheme.Metrics.borderWidth
+                )
+        )
+        .accessibilityIdentifier(identifier)
     }
 
     private var refreshGroup: some View {

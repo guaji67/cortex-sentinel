@@ -46,6 +46,14 @@ enum SentinelSettingsCopy {
     static let watchLockedHint = "装的时候定好的，要换得重装。"
     static let versionPrefix = "版本"
     static let versionDevLabel = "开发版"
+
+    static let glmGroupTitle = "GLM 额度 Key"
+    static let glmAddButton = "添加"
+    static let glmDeleteButton = "删除"
+    static let glmNameFieldPlaceholder = "名称（如 pro）"
+    static let glmKeyFieldPlaceholder = "粘贴智谱 API Key"
+    static let glmEmptyHint = "还没识别到智谱 key，可以在下面手动添加。"
+    static let glmHint = "自动识别本机已有的智谱 Coding Plan key（键池、ClaudeZ 网关、环境变量）。删掉的自动识别 key 会记住，不会再回来。"
 }
 
 enum SentinelAppVersion {
@@ -105,6 +113,9 @@ enum SentinelSettingsKey {
     static let balanceRecheckInterval = "\(bundlePrefix).balanceRecheckInterval"
     /// 后台任务整块展开与否。默认收起，记住用户上次的选择。
     static let backgroundJobsExpanded = "\(bundlePrefix).backgroundJobsExpanded"
+    /// GLM 额度监控：用户手动添加的 key 列表 + 被删除的自动识别 key。
+    static let glmUserKeys = "\(bundlePrefix).glmUserKeys"
+    static let glmRemovedKeys = "\(bundlePrefix).glmRemovedKeys"
 }
 
 protocol SentinelRefreshIntervalOption: Hashable, RawRepresentable where RawValue == TimeInterval {
@@ -472,6 +483,65 @@ enum SentinelSettings {
 
     static func watchDirectoryPath(defaults: UserDefaults) -> String? {
         defaults.string(forKey: SentinelSettingsKey.watchDirectory)
+    }
+
+    // MARK: GLM 额度 key
+
+    static func glmUserKeys(defaults: UserDefaults) -> [GLMKeyEntry] {
+        decodeGLMEntries(defaults.data(forKey: SentinelSettingsKey.glmUserKeys)) ?? []
+    }
+
+    static func setGLMUserKeys(_ entries: [GLMKeyEntry], defaults: UserDefaults) {
+        defaults.set(encodeGLMEntries(entries), forKey: SentinelSettingsKey.glmUserKeys)
+    }
+
+    static func addGLMUserKey(_ entry: GLMKeyEntry, defaults: UserDefaults) {
+        var entries = glmUserKeys(defaults: defaults)
+        guard !entries.contains(where: { $0.key == entry.key }) else {
+            return
+        }
+        entries.append(entry)
+        setGLMUserKeys(entries, defaults: defaults)
+    }
+
+    static func removeGLMUserKey(_ key: String, defaults: UserDefaults) {
+        setGLMUserKeys(glmUserKeys(defaults: defaults).filter { $0.key != key }, defaults: defaults)
+    }
+
+    static func glmRemovedKeys(defaults: UserDefaults) -> Set<String> {
+        Set(decodeGLMEntries(defaults.data(forKey: SentinelSettingsKey.glmRemovedKeys))?
+            .map(\.key) ?? [])
+    }
+
+    static func addGLMRemovedKey(_ key: String, defaults: UserDefaults) {
+        var keys = glmRemovedKeys(defaults: defaults)
+        guard !keys.contains(key) else {
+            return
+        }
+        keys.insert(key)
+        defaults.set(encodeGLMEntries(keys.map { GLMKeyEntry(label: "", key: $0) }), forKey: SentinelSettingsKey.glmRemovedKeys)
+    }
+
+    static func removeGLMRemovedKey(_ key: String, defaults: UserDefaults) {
+        let keys = glmRemovedKeys(defaults: defaults)
+        guard keys.contains(key) else {
+            return
+        }
+        defaults.set(
+            encodeGLMEntries(keys.subtracting([key]).map { GLMKeyEntry(label: "", key: $0) }),
+            forKey: SentinelSettingsKey.glmRemovedKeys
+        )
+    }
+
+    private static func encodeGLMEntries(_ entries: [GLMKeyEntry]) -> Data? {
+        try? JSONEncoder().encode(entries)
+    }
+
+    private static func decodeGLMEntries(_ data: Data?) -> [GLMKeyEntry]? {
+        guard let data else {
+            return nil
+        }
+        return try? JSONDecoder().decode([GLMKeyEntry].self, from: data)
     }
 
     static func setWatchDirectory(_ url: URL, defaults: UserDefaults) {

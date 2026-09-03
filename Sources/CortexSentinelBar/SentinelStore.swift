@@ -26,6 +26,8 @@ final class SentinelStore {
     private(set) var officialUsage: OfficialUsageSnapshot = .empty
     /// Cursor 订阅余额（模式/API/Bot 三组一行显示）；跟随官方额度同一套刷新时机。
     private(set) var cursorUsage: CursorUsageSnapshot = .empty
+    /// 智谱 GLM Coding Plan 订阅额度；每把 key 一行，跟随官方额度同一套刷新时机。
+    private(set) var glmUsage: GLMUsageSnapshot = .empty
     private(set) var channelStatus: ChannelStatusSnapshot = .missing
     private(set) var backgroundJobs: BackgroundJobsSnapshot = .missing
     /// Cortex 打包进度；没打包在跑时保持 nil，界面不占地方。
@@ -52,6 +54,10 @@ final class SentinelStore {
     @ObservationIgnored private var officialUsageFetchInFlight = false
     @ObservationIgnored private var cursorUsageFetchInFlight = false
     @ObservationIgnored private var lastCursorUsageAttemptAt: Date?
+    @ObservationIgnored private var glmUsageFetchInFlight = false
+    @ObservationIgnored private var lastGLMUsageAttemptAt: Date?
+    /// 当前生效的 GLM key（自动识别 ∪ 用户添加 − 用户删除）。
+    @ObservationIgnored private var glmKeyEntries: [GLMKeyEntry] = []
     private(set) var isOfficialUsageRefreshCoolingDown = false
     private(set) var loginItemPresentation: LoginItemPanelPresentation = .disabled
     private(set) var paths: SentinelPaths
@@ -188,6 +194,9 @@ final class SentinelStore {
         settingsModel.chooseWatchDirectory = { [weak self] in
             self?.chooseWatchDirectory()
         }
+        settingsModel.applyGLMKeys = { [weak self] in
+            self?.glmKeysDidChange()
+        }
     }
 
     deinit {
@@ -270,6 +279,7 @@ final class SentinelStore {
         ) { [weak self] in
             self?.refreshOfficialUsage(reason: .automatic)
             self?.refreshCursorUsage()
+            self?.refreshGLMUsage()
         }
 
         // v3.2 第 5 点：启动即清一次派工日志，之后每小时巡检一次。
@@ -339,6 +349,7 @@ final class SentinelStore {
         settingsModel.loginItem = loginItemSettingsPresentation
         settingsModel.watchPath = paths.logsDirectory.path
         settingsModel.isWatchLocked = isWatchDirectoryLocked
+        reloadGLMKeys()
         SentinelSettingsWindowController.shared.show(model: settingsModel)
     }
 
@@ -418,6 +429,7 @@ final class SentinelStore {
         await refreshInputStatus(force: true)
         refreshOfficialUsage(reason: .startup)
         refreshCursorUsage()
+        refreshGLMUsage()
     }
 
     func refreshStatuses() async {
@@ -631,11 +643,13 @@ final class SentinelStore {
         await input
         refreshOfficialUsage(reason: .panelOpen, bypassMinimumInterval: true)
         refreshCursorUsage(bypassMinimumInterval: true)
+        refreshGLMUsage(bypassMinimumInterval: true)
     }
 
     func refreshOfficialUsageManually() {
         refreshOfficialUsage(reason: .manual)
         refreshCursorUsage()
+        refreshGLMUsage()
     }
 
     /// Cursor 余额跟着官方额度走同一套时机（启动 / 定时 / 开面板 / 手动点刷新），
@@ -697,6 +711,82 @@ final class SentinelStore {
                 }
             }
         }
+    }
+
+    /// GLM 额度跟着官方额度走同一套时机（启动 / 定时 / 开面板 / 手动点刷新）。
+    /// 一把 key 一行；没识别到任何 key 就保持空快照，界面不占位。
+    private func refreshGLMUsage(bypassMinimumInterval: Bool = false) {
+        let timestamp = self.now()
+        guard !glmUsageFetchInFlight else {
+            return
+        }
+        if !bypassMinimumInterval, let lastGLMUsageAttemptAt {
+            let minimumInterval: TimeInterval
+            if isPanelPresented {
+                minimumInterval = SentinelSettings.balanceRecheckInterval(defaults: defaults).rawValue
+            } else {
+                minimumInterval = GLMUsageConstants.automaticRefreshInterval
+            }
+            guard timestamp.timeIntervalSince(lastGLMUsageAttemptAt) >= minimumInterval else {
+                return
+            }
+        }
+        reloadGLMKeys()
+        guard !glmKeyEntries.isEmpty else {
+            lastGLMUsageAttemptAt = timestamp
+            publishGLMUsage(GLMUsageSnapshot.empty)
+            return
+        }
+        glmUsageFetchInFlight = true
+        lastGLMUsageAttemptAt = timestamp
+        let entries = glmKeyEntries
+        let client = GLMUsageClient()
+
+        Task { @MainActor [weak self] in
+            let fresh = await client.fetchAll(entries: entries)
+            guard let self else {
+                return
+            }
+            self.glmUsageFetchInFlight = false
+            self.publishGLMUsage(
+                GLMUsageSnapshot.merged(previous: self.glmUsage, fresh: fresh, now: self.now())
+            )
+        }
+    }
+
+    private func publishGLMUsage(_ snapshot: GLMUsageSnapshot) {
+        scrollPublishGate.publish(surface: .officialUsage) { [weak self] in
+            guard let self, self.glmUsage != snapshot else {
+                return
+            }
+            self.glmUsage = snapshot
+        }
+    }
+
+    /// 重新认一遍本机的 GLM key（自动识别 + 用户手加 − 用户删除），
+    /// 并把结果同步给设置窗。识别很便宜（读两三个小文件），每次刷新前都跑一遍，
+    /// 这样在设置里删/加 key 之后不用重启就生效。
+    func reloadGLMKeys() {
+        let detected = GLMKeyDetector.detect(environment: environment)
+        let user = SentinelSettings.glmUserKeys(defaults: defaults)
+        let removed = SentinelSettings.glmRemovedKeys(defaults: defaults)
+        let effective = GLMKeyStore.effectiveEntries(
+            detected: detected,
+            user: user,
+            removedKeys: removed
+        )
+        if glmKeyEntries != effective {
+            glmKeyEntries = effective
+        }
+        if settingsModel.glmEntries != effective {
+            settingsModel.glmEntries = effective
+        }
+    }
+
+    /// 设置里增删 key 后走这里：重识别 + 立刻重查一轮。
+    private func glmKeysDidChange() {
+        reloadGLMKeys()
+        refreshGLMUsage(bypassMinimumInterval: true)
     }
 
     private func refreshOfficialUsage(

@@ -181,7 +181,9 @@ struct SentinelPackagingSection: View {
     }
 }
 
-/// 通道三卡。读：channelStatus、lineGroups（本机引擎计数）、localHost。
+/// 通道两卡（Codex / Grok）。读：channelStatus、lineGroups（本机引擎计数）、localHost。
+/// 2026-09-04 Falcon 令：ox-alpha 卡从面板撤掉，只留 Codex 和 Grok；
+/// 磁盘摘要里的 claude-oxalpha 键继续解析，只是不再画卡。
 struct SentinelChannelSection: View {
     var store: SentinelStore
 
@@ -189,7 +191,6 @@ struct SentinelChannelSection: View {
         let presentation = ChannelSectionPresentation(
             grok: store.channelStatus.grok,
             codex: store.channelStatus.codex,
-            claudeOxAlpha: store.channelStatus.claudeOxAlpha,
             liveCounts: store.lineGroups.localActiveEngineCounts(localHost: store.localHost)
         )
         VStack(alignment: .leading, spacing: SentinelTheme.Spacing.sm) {
@@ -199,8 +200,6 @@ struct SentinelChannelSection: View {
                 channelItem(presentation.codex)
                 Spacer(minLength: SentinelTheme.Spacing.md)
                 channelItem(presentation.grok)
-                Spacer(minLength: SentinelTheme.Spacing.md)
-                channelItem(presentation.claudeOxAlpha)
             }
 
             ForEach(Array(presentation.problemLines.enumerated()), id: \.offset) { _, line in
@@ -397,7 +396,8 @@ struct SentinelBalancesSection: View {
     var body: some View {
         switch BalanceSectionPresentation.resolve(
             official: store.officialUsage,
-            aio: store.aio
+            aio: store.aio,
+            glm: store.glmUsage
         ) {
         case let .compact(statusText):
             SentinelSectionChrome.compactDiagnosticRow(title: "余额", status: statusText)
@@ -415,6 +415,10 @@ struct SentinelBalancesSection: View {
                 trailing: SentinelTopChannelPresentation(aio: store.aio).balanceCountText
             )
 
+            glmUsageRows
+
+            cursorUsageRow
+
             officialUsageRow
 
             switch store.aio.sourceState {
@@ -431,9 +435,130 @@ struct SentinelBalancesSection: View {
                     }
                 }
             }
-
-            cursorUsageRow
         }
+    }
+
+    /// 智谱 GLM Coding Plan 额度：每把 key 一行（5 小时窗 + 周窗两组剩余百分比），
+    /// 排在 Cursor 前面。没识别到 key 就不占位。
+    @ViewBuilder private var glmUsageRows: some View {
+        if store.glmUsage.accounts.isEmpty {
+            EmptyView()
+        } else {
+            VStack(spacing: SentinelTheme.Metrics.balanceRowSpacing) {
+                ForEach(store.glmUsage.accounts) { account in
+                    glmUsageRow(account)
+                }
+            }
+        }
+    }
+
+    private func glmUsageRow(_ account: GLMAccountUsage) -> some View {
+        HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
+            Circle()
+                .fill(glmUsageStatusColor(account))
+                .frame(
+                    width: SentinelTheme.Metrics.balanceDot,
+                    height: SentinelTheme.Metrics.balanceDot
+                )
+            Text(account.displayTitle)
+                .font(SentinelTheme.Fonts.balanceName)
+                .foregroundStyle(SentinelTheme.Colors.foreground)
+                .lineLimit(1)
+                .layoutPriority(1)
+            Spacer(minLength: SentinelTheme.Spacing.xs)
+            if let failureText = glmUsageFailureText(account) {
+                // 查失败或没订阅额度就如实说一句，不摆「5h —」的空架子。
+                Text(failureText)
+                    .font(SentinelTheme.Fonts.balanceMeta)
+                    .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(2)
+            } else {
+                HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
+                    cursorUsageSegment("5h", account.fiveHourWindow?.percentUsed)
+                    cursorUsageDivider
+                    cursorUsageSegment("周", account.weeklyWindow?.percentUsed)
+                }
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(2)
+            }
+        }
+        .frame(height: 38)
+        .contentShape(Rectangle())
+        .help(glmUsageTooltip(account))
+    }
+
+    /// 无数字时的右侧文案：优先报错，其次「无订阅额度」。
+    private func glmUsageFailureText(_ account: GLMAccountUsage) -> String? {
+        if account.hasDisplayableNumber {
+            return nil
+        }
+        if let errorMessage = account.errorMessage, !errorMessage.isEmpty {
+            return errorMessage
+        }
+        return "无订阅额度"
+    }
+
+    private func glmUsageStatusColor(_ account: GLMAccountUsage) -> Color {
+        if account.stale {
+            return SentinelTheme.Colors.warning
+        }
+        let hasLow = [account.fiveHourWindow?.percentUsed, account.weeklyWindow?.percentUsed]
+            .compactMap { $0 }
+            .contains { (100 - $0) <= 100 - AIOConstants.quotaWarningThreshold }
+        if hasLow {
+            return SentinelTheme.Colors.warning
+        }
+        return account.hasDisplayableNumber
+            ? SentinelTheme.Colors.success
+            : SentinelTheme.Colors.secondaryForeground
+    }
+
+    private func glmUsageTooltip(_ account: GLMAccountUsage) -> String {
+        var parts = ["GLM Coding Plan · \(account.displayTitle)"]
+        if let level = account.level, !level.isEmpty {
+            parts.append("档位 \(level)")
+        }
+        for (name, window) in [("5小时", account.fiveHourWindow), ("周", account.weeklyWindow)] {
+            guard let window else {
+                continue
+            }
+            var piece = "\(name) "
+            if let used = window.usedPoints, let total = window.totalPoints, total > 0 {
+                piece += "已用 \(Self.pointsText(used)) / \(Self.pointsText(total)) 积分"
+            } else if let percent = window.percentUsed {
+                piece += "已用 \(Int(percent.rounded()))%"
+            }
+            if let resetAt = window.resetAt {
+                let formatter = DateFormatter()
+                formatter.locale = Locale(identifier: "zh_CN")
+                formatter.dateFormat = "M/d HH:mm"
+                piece += "，\(formatter.string(from: resetAt)) 重置"
+            }
+            parts.append(piece)
+        }
+        if let checkedAt = account.checkedAt {
+            parts.append("\(SentinelTimeFormat.clockTime(checkedAt)) 更新")
+        }
+        if account.stale {
+            parts.append("已过期")
+        }
+        if let errorMessage = account.errorMessage {
+            parts.append(errorMessage)
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// 积分数字按官方口径缩写：2201 → 2,201；12000 → 1.2万。
+    static func pointsText(_ value: Double) -> String {
+        if value >= 10_000 {
+            let wan = value / 10_000
+            let text = wan.rounded() == wan ? String(Int(wan)) : String(format: "%.1f", wan)
+            return "\(text)万"
+        }
+        let rounded = value.rounded() == value ? String(Int(value)) : String(format: "%.1f", value)
+        return rounded
     }
 
     /// Cursor 订阅余额：三组（模式 / API / Bot）排成一行，只报剩余百分比。

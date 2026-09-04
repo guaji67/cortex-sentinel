@@ -115,15 +115,26 @@ enum PanelPreviewFactory {
 
 enum PanelPNGRenderer {
     @MainActor
-    static func render(fixture: PanelPreviewFixture, to path: String) async throws {
-        try await render(fixture: fixture, to: URL(fileURLWithPath: path))
+    static func render(
+        fixture: PanelPreviewFixture,
+        to path: String,
+        demoBalances: Bool = false
+    ) async throws {
+        try await render(fixture: fixture, to: URL(fileURLWithPath: path), demoBalances: demoBalances)
     }
 
     @MainActor
-    static func render(fixture: PanelPreviewFixture, to url: URL) async throws {
+    static func render(
+        fixture: PanelPreviewFixture,
+        to url: URL,
+        demoBalances: Bool = false
+    ) async throws {
         _ = NSApplication.shared
         let session = try await PanelPreviewFactory.makeSession(fixture: fixture)
         defer { session.tearDown() }
+        if demoBalances {
+            DemoBalancesPreview.inject(into: session.store)
+        }
 
         let view = SentinelMenuView(store: session.store, rendersOffscreen: true)
             .frame(width: SentinelTheme.Metrics.menuWidth)
@@ -147,6 +158,217 @@ enum PanelPNGRenderer {
             withIntermediateDirectories: true
         )
         try png.write(to: url)
+    }
+}
+
+/// README/截图用的演示余额：一套中性假数据（官方 / Cursor / GLM 三行 /
+/// AIO 三家中转），只进离屏渲染，不碰任何真实账号。
+/// GLM 三行刻意摆出三种探测形态：订阅+余额都有、只有余额、只有订阅。
+@MainActor
+enum DemoBalancesPreview {
+    static func inject(into store: SentinelStore) {
+        let checked = Date()
+
+        let official = OfficialUsageSnapshot(
+            planType: "plus",
+            email: nil,
+            weeklyWindow: OfficialUsageWindow(
+                usedPercentage: 39,
+                limitWindowSeconds: 604_800,
+                resetAt: checked.addingTimeInterval(3600 * 72).timeIntervalSince1970,
+                resetAfterSeconds: nil
+            ),
+            fiveHourWindow: OfficialUsageWindow(
+                usedPercentage: 12,
+                limitWindowSeconds: 5 * 3600,
+                resetAt: checked.addingTimeInterval(3600 * 2.5).timeIntervalSince1970,
+                resetAfterSeconds: nil
+            ),
+            checkedAt: checked,
+            stale: false,
+            errorMessage: nil,
+            refreshFailedAt: nil
+        )
+
+        let cursor = CursorUsageSnapshot(
+            sourceState: .available,
+            autoPercentUsed: 18,
+            apiPercentUsed: 35,
+            botPercentUsed: 10,
+            botResetDate: checked.addingTimeInterval(3600 * 40),
+            checkedAt: checked,
+            stale: false,
+            errorMessage: nil
+        )
+
+        func glmWindow(total: Double, used: Double, resetIn: TimeInterval) -> GLMUsageWindow {
+            GLMUsageWindow(
+                totalPoints: total,
+                usedPoints: used,
+                percentUsed: used / total * 100,
+                resetAt: checked.addingTimeInterval(resetIn)
+            )
+        }
+
+        let glm = GLMUsageSnapshot(
+            accounts: [
+                GLMAccountUsage(
+                    key: "demo-key-pro",
+                    label: "pro",
+                    level: "pro",
+                    fiveHourWindow: glmWindow(total: 12000, used: 2400, resetIn: 3600 * 2),
+                    weeklyWindow: glmWindow(total: 60000, used: 3000, resetIn: 3600 * 96),
+                    cashBalance: 86.4,
+                    totalSpendAmount: 113.6,
+                    checkedAt: checked,
+                    stale: false,
+                    errorMessage: nil
+                ),
+                GLMAccountUsage(
+                    key: "demo-key-lite",
+                    label: "lite",
+                    level: "lite",
+                    fiveHourWindow: nil,
+                    weeklyWindow: nil,
+                    cashBalance: 12,
+                    totalSpendAmount: 38,
+                    checkedAt: checked,
+                    stale: false,
+                    errorMessage: nil
+                ),
+                GLMAccountUsage(
+                    key: "demo-key-trial",
+                    label: "体验卡",
+                    level: nil,
+                    fiveHourWindow: glmWindow(total: 12000, used: 5400, resetIn: 3600 * 1.5),
+                    weeklyWindow: glmWindow(total: 60000, used: 42000, resetIn: 3600 * 80),
+                    cashBalance: nil,
+                    totalSpendAmount: nil,
+                    checkedAt: checked,
+                    stale: false,
+                    errorMessage: nil
+                ),
+            ],
+            checkedAt: checked
+        )
+
+        func aioProvider(
+            id: Int64,
+            name: String,
+            remaining: Double?,
+            weeklyUsed: Double?
+        ) -> AIOProvider {
+            let usage = AIOUsage(
+                remaining: remaining,
+                unit: remaining == nil ? nil : "USD",
+                planName: nil,
+                expiresAt: nil,
+                weeklyUsedPercentage: weeklyUsed,
+                weeklyResetAt: checked.addingTimeInterval(3600 * 60),
+                email: nil,
+                isValid: true
+            )
+            return AIOProvider(
+                id: id,
+                name: name,
+                baseURL: "https://relay-\(id).example.invalid",
+                enabled: true,
+                routeOrder: Int(id),
+                providerOrder: Int(id),
+                note: "",
+                circuitState: .closed,
+                failureCount: 0,
+                usage: .success(usage)
+            )
+        }
+
+        let aio = AIOSnapshot(
+            sourceState: .available,
+            gatewayEnabled: true,
+            routeMode: .aggregate,
+            providers: [
+                aioProvider(id: 1, name: "中转一号", remaining: 42.5, weeklyUsed: nil),
+                aioProvider(id: 2, name: "中转二号", remaining: 6.2, weeklyUsed: nil),
+                aioProvider(id: 3, name: "中转三号", remaining: nil, weeklyUsed: 86),
+            ],
+            lastHitProviderID: 1,
+            lastHitProviderName: "中转一号",
+            readAt: checked,
+            errorMessage: nil
+        )
+
+        store.injectPreviewData(
+            official: official,
+            cursor: cursor,
+            glm: glm,
+            aio: aio,
+            inputStatus: demoInputStatus(checked: checked)
+        )
+    }
+
+    /// Input 探针演示历史：三个模型 60 格，绝大多数绿，零星橙/红。
+    private static func demoInputStatus(checked: Date) -> InputStatusSnapshot {
+        let models = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5"]
+        var probes: [InputStatusProbe] = []
+        for (index, model) in models.enumerated() {
+            var history: [InputStatusHistoryPoint] = []
+            for step in 0..<60 {
+                // 伪随机但稳定：同一格每次出同一张图。
+                let seed = (index * 60 + step) * 2654435761 % 100
+                let latency = 180 + (index * 37 + step * 13) % 900
+                if step >= 57 {
+                    // 最右侧三格保持全绿：演示图最新状态不该看着像挂了。
+                    history.append(
+                        InputStatusHistoryPoint(
+                            timestamp: Int(checked.timeIntervalSince1970) - (60 - step) * 60,
+                            isOK: true,
+                            latencyMilliseconds: latency
+                        )
+                    )
+                } else if seed < 92 {
+                    history.append(
+                        InputStatusHistoryPoint(
+                            timestamp: Int(checked.timeIntervalSince1970) - (60 - step) * 60,
+                            isOK: true,
+                            latencyMilliseconds: latency
+                        )
+                    )
+                } else if seed < 97 {
+                    history.append(
+                        InputStatusHistoryPoint(
+                            timestamp: Int(checked.timeIntervalSince1970) - (60 - step) * 60,
+                            isOK: true,
+                            latencyMilliseconds: 3400 + step * 7
+                        )
+                    )
+                } else {
+                    history.append(
+                        InputStatusHistoryPoint(
+                            timestamp: Int(checked.timeIntervalSince1970) - (60 - step) * 60,
+                            isOK: false,
+                            latencyMilliseconds: nil,
+                            error: "upstream timeout"
+                        )
+                    )
+                }
+            }
+            probes.append(
+                InputStatusProbe(
+                    model: model,
+                    uptimePercentage: 99.2 - Double(index) * 1.4,
+                    isOK: true,
+                    latencyMilliseconds: 240 + index * 110,
+                    history: history
+                )
+            )
+        }
+        return InputStatusSnapshot(
+            allOK: true,
+            probes: probes,
+            readAt: checked,
+            generatedAt: checked,
+            errorMessage: nil
+        )
     }
 }
 

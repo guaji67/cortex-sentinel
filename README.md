@@ -4,6 +4,15 @@ macOS 菜单栏应用。给需要盯着 AI 编码任务是否还在跑、中转�
 
 Swift + SwiftUI 写成，单二进制，没有第三方依赖。
 
+<p align="center">
+  <img src="screenshots/panel.png" width="400" alt="哨兵面板：通道、Input 服务探针、GLM 订阅额度与现金余额、Cursor、GPT 官方、中转密钥池">
+  &nbsp;
+  <img src="screenshots/settings.png" width="400" alt="设置窗：GLM 额度 Key 的增删管理">
+</p>
+<p align="center">
+  <sub>面板与设置窗均为演示数据离屏渲染。</sub>
+</p>
+
 ## 功能
 
 ### 面板（点开菜单栏图标）

@@ -18,6 +18,8 @@ enum CortexSentinelBarMain {
     static let settingsFixtureArgument = "--settings-fixture"
     static let renderPanelPNGArgument = "--render-panel-png"
     static let panelFixtureArgument = "--panel-fixture"
+    /// 配合 --render-panel-png：注入一套中性演示余额再出图（README 用）。
+    static let demoBalancesArgument = "--demo-balances"
     static let dumpStateArgument = "--dump-state"
     static let idleRefreshArgument = "--idle-refresh"
     static let smokeSettingsArgument = "--smoke-settings"
@@ -170,7 +172,11 @@ enum CortexSentinelBarMain {
             fixture = .idle
         }
         do {
-            try await PanelPNGRenderer.render(fixture: fixture, to: outputPath)
+            try await PanelPNGRenderer.render(
+                fixture: fixture,
+                to: outputPath,
+                demoBalances: arguments.contains(demoBalancesArgument)
+            )
             print("written \(outputPath)")
         } catch {
             FileHandle.standardError.write(Data("面板离屏渲染失败：\(error.localizedDescription)\n".utf8))

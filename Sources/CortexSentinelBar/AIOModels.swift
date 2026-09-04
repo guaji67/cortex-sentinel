@@ -116,6 +116,27 @@ struct AIOUsage: Equatable, Sendable {
     let email: String?
     let isValid: Bool
 
+    /// 成员构造器：预览/测试造演示数据用。
+    init(
+        remaining: Double?,
+        unit: String?,
+        planName: String?,
+        expiresAt: String?,
+        weeklyUsedPercentage: Double?,
+        weeklyResetAt: Date?,
+        email: String?,
+        isValid: Bool
+    ) {
+        self.remaining = remaining
+        self.unit = unit
+        self.planName = planName
+        self.expiresAt = expiresAt
+        self.weeklyUsedPercentage = weeklyUsedPercentage
+        self.weeklyResetAt = weeklyResetAt
+        self.email = email
+        self.isValid = isValid
+    }
+
     init(response: AIOUsageResponse) {
         remaining = response.remaining
         unit = response.unit

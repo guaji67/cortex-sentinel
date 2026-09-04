@@ -1170,6 +1170,35 @@ final class SentinelStore {
         }
     }
 
+    /// 截图/预览专用：注入一套演示余额（README 出图、fixture 渲染用）。
+    /// 不落盘、不进任何生产路径；下一轮真实刷新会直接覆盖这些数据。
+    func injectPreviewData(
+        official: OfficialUsageSnapshot? = nil,
+        cursor: CursorUsageSnapshot? = nil,
+        glm: GLMUsageSnapshot? = nil,
+        aio: AIOSnapshot? = nil,
+        inputStatus: InputStatusSnapshot? = nil
+    ) {
+        if let official {
+            setOfficialUsageIfChanged(official)
+        }
+        if let cursor {
+            self.cursorUsage = cursor
+        }
+        if let glm {
+            self.glmUsage = glm
+        }
+        if let aio {
+            apply(
+                lines: lines,
+                aio: aio,
+                otherCodexProcesses: otherCodexProcesses,
+                lineRegistry: lineRegistry,
+                inputStatus: inputStatus ?? self.inputStatus
+            )
+        }
+    }
+
     private func syncStatusBarRenderState() {
         let next = StatusBarRenderState(
             inputStatus: inputStatus,

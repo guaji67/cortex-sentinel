@@ -249,6 +249,7 @@ struct SentinelChannelSection: View {
             HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
                 channelItem(presentation.codex)
                 Spacer(minLength: SentinelTheme.Spacing.md)
+                updateRestartButton
                 channelItem(presentation.grok)
             }
 
@@ -266,6 +267,31 @@ struct SentinelChannelSection: View {
             return nil
         }
         return SentinelTimeFormat.clockTime(generatedAt)
+    }
+
+    /// 新版本下载就绪后，Codex / Grok 两卡中间出「重启更新」小按钮：
+    /// 不弹窗，点了就换装重启。下载中只给一行小字，失败信息在底部更新行。
+    @ViewBuilder private var updateRestartButton: some View {
+        if store.preparedUpdate != nil {
+            Button {
+                store.performUpdateNow()
+            } label: {
+                Label("重启更新", systemImage: "arrow.down.circle.fill")
+                    .font(SentinelTheme.Fonts.metadata.weight(.semibold))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .buttonStyle(SentinelButtonStyle(kind: .primary, compact: true))
+            .disabled(store.isUpdateInstalling)
+            .help("新版本 \(store.preparedUpdate?.version ?? "") 已就绪，点击换装并重启哨兵")
+            .accessibilityIdentifier("update-restart-button")
+        } else if store.isUpdateDownloading {
+            Text("更新下载中")
+                .font(SentinelTheme.Fonts.metadata)
+                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        }
     }
 
     private func channelItem(_ item: ChannelItemPresentation) -> some View {
@@ -1826,7 +1852,7 @@ struct SentinelFooterSection: View {
         }
     }
 
-    /// 新版本提示行：自动安装关着时在这里手动点更新；开着时只剩加载态。
+    /// 新版本提示行：下载就绪后按钮变成「重启更新」；其余状态给下载/安装进度。
     private func updateRow(_ update: SentinelUpdateInfo) -> some View {
         VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xs) {
             HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
@@ -1841,6 +1867,16 @@ struct SentinelFooterSection: View {
                         .progressViewStyle(.circular)
                         .controlSize(.small)
                     Text("正在更新")
+                        .font(SentinelTheme.Fonts.subtitle)
+                        .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                } else if store.preparedUpdate?.version == update.version {
+                    Button("重启更新") {
+                        store.performUpdateNow()
+                    }
+                    .buttonStyle(SentinelButtonStyle(kind: .primary, compact: true))
+                    .accessibilityIdentifier("update-install-button")
+                } else if store.isUpdateDownloading {
+                    Text("下载中")
                         .font(SentinelTheme.Fonts.subtitle)
                         .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
                 } else {

@@ -37,8 +37,12 @@ final class SentinelStore {
     private(set) var providerRenames: [String: String] = [:]
     /// 检查到的可安装更新；没有更新保持 nil，底部不占位。
     private(set) var availableUpdate: SentinelUpdateInfo?
+    /// 新版本 DMG 已下载并过 sha 校验；置位后通道卡中间出「重启更新」按钮。
+    private(set) var preparedUpdate: SentinelUpdateInfo?
     /// 换装进行中（下载/校验/跑安装脚本），底部的更新行用它换加载态。
     private(set) var isUpdateInstalling = false
+    /// 新版本 DMG 后台下载中。
+    private(set) var isUpdateDownloading = false
     /// 更新流程的反馈文案（失败原因等）。
     private(set) var updateInstallMessage: String?
     private(set) var channelStatus: ChannelStatusSnapshot = .missing
@@ -77,6 +81,8 @@ final class SentinelStore {
     @ObservationIgnored private var commandCodeKeyEntries: [CommandCodeKeyEntry] = []
     @ObservationIgnored private var updateCheckInFlight = false
     @ObservationIgnored private var lastUpdateCheckAt: Date?
+    /// 下载并校验过的 DMG 本地路径；重启后临时目录可能被清，用时再验。
+    @ObservationIgnored private var preparedDMGLocalURL: URL?
     private(set) var isOfficialUsageRefreshCoolingDown = false
     private(set) var loginItemPresentation: LoginItemPanelPresentation = .disabled
     private(set) var paths: SentinelPaths
@@ -919,7 +925,8 @@ final class SentinelStore {
     // MARK: - 自更新
 
     /// 更新检查跟着官方额度的定时器走（10 分钟拍一次，最短 1 小时真查一次）。
-    /// 失败静默：更新源挂了不该给用户添堵。
+    /// 失败静默：更新源挂了不该给用户添堵。发现新版本：发一次通知 + 后台
+    /// 静默下载，下载完面板顶部出「重启更新」按钮；开了自动安装则直接换装。
     func refreshUpdateCheck(bypassMinimumInterval: Bool = false) {
         let timestamp = self.now()
         guard !updateCheckInFlight else {
@@ -951,17 +958,57 @@ final class SentinelStore {
             }
             guard let update else {
                 // 已经是最新：把旧提示撤掉。
-                if self.availableUpdate != nil {
+                if self.availableUpdate != nil || self.preparedUpdate != nil {
                     self.availableUpdate = nil
+                    self.preparedUpdate = nil
+                    self.preparedDMGLocalURL = nil
                 }
                 return
             }
-            self.availableUpdate = update
+            if self.availableUpdate?.version != update.version {
+                self.availableUpdate = update
+                self.preparedUpdate = nil
+                self.preparedDMGLocalURL = nil
+            }
             if SentinelSettings.updateAutoInstall(defaults: self.defaults) {
                 self.performUpdateNow()
-            } else if SentinelSettings.lastNotifiedUpdateVersion(defaults: self.defaults) != update.version {
+                return
+            }
+            if SentinelSettings.lastNotifiedUpdateVersion(defaults: self.defaults) != update.version {
                 SentinelSettings.setLastNotifiedUpdateVersion(update.version, defaults: self.defaults)
                 self.notifier.postUpdateAvailable(version: update.version)
+            }
+            self.prepareUpdateDownload()
+        }
+    }
+
+    /// 后台下载 + sha256 校验。下载完 preparedUpdate 置位，通道卡中间出
+    /// 「重启更新」按钮；这一步纯下载不碰系统，失败也无声可重试。
+    private func prepareUpdateDownload() {
+        guard let update = availableUpdate, preparedUpdate?.version != update.version else {
+            return
+        }
+        guard !isUpdateDownloading else {
+            return
+        }
+        isUpdateDownloading = true
+        let installer = SentinelUpdateInstaller()
+
+        Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            do {
+                let localURL = try await installer.prepare(update)
+                self.preparedDMGLocalURL = localURL
+                self.preparedUpdate = update
+                self.isUpdateDownloading = false
+            } catch let error as SentinelUpdateError {
+                self.isUpdateDownloading = false
+                self.updateInstallMessage = error.userMessage
+            } catch {
+                self.isUpdateDownloading = false
+                self.updateInstallMessage = SentinelUpdateError.downloadFailed.userMessage
             }
         }
     }
@@ -975,13 +1022,21 @@ final class SentinelStore {
         isUpdateInstalling = true
         updateInstallMessage = nil
         let installer = SentinelUpdateInstaller()
+        let preparedURL = preparedDMGLocalURL
 
         Task { @MainActor [weak self] in
             guard let self else {
                 return
             }
             do {
-                try await installer.install(update)
+                // 下载好的直接换装；临时文件被清了就现场重下。
+                let dmgURL: URL
+                if let preparedURL, installer.preparedDMGIsValid(at: preparedURL) {
+                    dmgURL = preparedURL
+                } else {
+                    dmgURL = try await installer.prepare(update)
+                }
+                try installer.commit(dmgURL: dmgURL)
                 // 安装脚本会停掉本进程再拉新的；活到这里说明脚本没接管，如实提示。
                 self.isUpdateInstalling = false
                 self.updateInstallMessage = "脚本没有完成重启，请手动重启哨兵"

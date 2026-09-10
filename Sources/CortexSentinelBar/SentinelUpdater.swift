@@ -257,11 +257,24 @@ struct SentinelUpdateInstaller: Sendable {
         self.mountPointResolver = mountPointResolver
     }
 
-    /// 完整更新流程。脚本会重启哨兵，正常情况下走到 install 这步本进程就没了。
+    /// 完整更新流程：下载校验 + 换装重启。脚本会重启哨兵，正常情况下
+    /// 走到 install 这步本进程就没了。
     func install(_ update: SentinelUpdateInfo) async throws {
+        let dmgURL = try await prepare(update)
+        try commit(dmgURL: dmgURL)
+    }
+
+    /// 前半段：下载 DMG + sha256 校验。纯下载不碰系统，失败随时可重试。
+    /// 返回本地 DMG 路径，交给 commit。
+    func prepare(_ update: SentinelUpdateInfo) async throws -> URL {
         let dmgURL = try await download(update)
         try await verifySha256(dmgURL: dmgURL, shaURL: update.shaURL)
+        return dmgURL
+    }
 
+    /// 后半段：挂载 → 系统安全闸 → 跑 DMG 自带的 install-app.sh 换装重启。
+    /// 传入 prepare 返回的本地 DMG 路径。
+    func commit(dmgURL: URL) throws {
         let attachOutput = try shell.run(
             launchPath: "/usr/bin/hdiutil",
             arguments: ["attach", "-readonly", "-nobrowse", "-plist", dmgURL.path]
@@ -284,6 +297,14 @@ struct SentinelUpdateInstaller: Sendable {
         guard install.status == 0 else {
             throw SentinelUpdateError.installScriptFailed
         }
+    }
+
+    /// 下载好的本地 DMG 是否还有效（文件在且非空）。重启后临时目录可能被清。
+    func preparedDMGIsValid(at url: URL) -> Bool {
+        guard let size = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int else {
+            return false
+        }
+        return size > 0
     }
 
     private func download(_ update: SentinelUpdateInfo) async throws -> URL {

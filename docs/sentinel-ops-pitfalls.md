@@ -68,3 +68,8 @@
 - 版本三连：commit（feat:/fix:/docs: 前缀）推送 → `RELEASE_VERSION=x.y.z bash scripts/build-release.sh` → `bash scripts/publish-release.sh x.y.z dist/Cortex哨兵-x.y.z.notes.md`。
 - Release 资产必须 ASCII 名（`Cortex.-x.y.z.dmg`），publish 脚本负责改名，中文名 dmg 直接传会坏自动更新。
 - `releases/latest` 只认正式版，draft/prerelease 不算，发完即成为更新源。
+
+## 余额口径
+
+- 数字报剩余（电量），横条报已流逝（时间轴正向：绿 → 黄 → 红）。0.1.15 把 GLM 百分比双重反转成已用口径、横条做成剩余方向越走越短，Falcon 点名：这种问题不要再犯。
+- GLM API 给 percentUsed，模型 `remainingPercentage` 已算好剩余；显示层再动它就是事故。

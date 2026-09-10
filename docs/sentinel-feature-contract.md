@@ -51,3 +51,7 @@
 3. 父 body 不要再读线列表 / 余额等高频面。打包从无到有只能走 `packagingActive` 挂载，不要把分区永远留在树里靠 EmptyView。
 4. 状态栏不要再自己订 Optional 的 `packagingProgress`；只订 `statusBarRenderState`。
 5. 改了必须行为，同一提交改本文。丢了就再丢一次显示。
+
+## 余额口径（2026-09-11 定，反了就是回归）
+
+数字一律剩余口径，像电量：GLM 的 `remainingPercentage` 已经是剩余，显示时禁止再 `100 - $0`（0.1.15 曾双重反转成已用口径）。横条一律已流逝方向，正向走：重置时 0 起步绿条，快到重置点变黄（>=0.6），压线变红（>=0.85）。函数入口 `timeElapsedFraction` / `periodElapsedFraction`。守卫：`CommandCodeUsageTests.testTimeAndPeriodFractions`。

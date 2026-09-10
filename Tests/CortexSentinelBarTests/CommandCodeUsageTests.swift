@@ -238,38 +238,49 @@ final class CommandCodeUsageTests: XCTestCase {
     }
 
     func testTimeAndPeriodFractions() {
+        // 横条是已流逝方向：重置时 0 起步，越接近重置越满，过了就是满格。
         let now = Date(timeIntervalSince1970: 1_000_000)
         XCTAssertEqual(
-            SentinelBalancesSection.timeRemainingFraction(
+            SentinelBalancesSection.timeElapsedFraction(
                 resetAt: now.addingTimeInterval(2.5 * 3600),
                 windowLength: 5 * 3600,
                 now: now
             ),
             0.5
         )
+        // 刚重置（resetAt 在一个整窗外）：流逝 0，绿条起步。
         XCTAssertEqual(
-            SentinelBalancesSection.timeRemainingFraction(
-                resetAt: now.addingTimeInterval(-1),
+            SentinelBalancesSection.timeElapsedFraction(
+                resetAt: now.addingTimeInterval(5 * 3600),
                 windowLength: 5 * 3600,
                 now: now
             ),
             0
         )
+        // 过了 resetAt：满格（该重置了）。
+        XCTAssertEqual(
+            SentinelBalancesSection.timeElapsedFraction(
+                resetAt: now.addingTimeInterval(-1),
+                windowLength: 5 * 3600,
+                now: now
+            ),
+            1
+        )
         XCTAssertNil(
-            SentinelBalancesSection.timeRemainingFraction(resetAt: nil, windowLength: 5 * 3600, now: now)
+            SentinelBalancesSection.timeElapsedFraction(resetAt: nil, windowLength: 5 * 3600, now: now)
         )
         // 账期：起点缺失按 30 天折算。
         let end = now.addingTimeInterval(10 * 24 * 3600)
         XCTAssertEqual(
-            SentinelBalancesSection.periodRemainingFraction(end: end, start: nil, now: now) ?? -1,
-            1.0 / 3.0,
+            SentinelBalancesSection.periodElapsedFraction(end: end, start: nil, now: now) ?? -1,
+            2.0 / 3.0,
             accuracy: 0.001
         )
         XCTAssertEqual(
-            SentinelBalancesSection.periodRemainingFraction(end: now.addingTimeInterval(-1), start: nil, now: now),
-            0
+            SentinelBalancesSection.periodElapsedFraction(end: now.addingTimeInterval(-1), start: nil, now: now),
+            1
         )
-        XCTAssertNil(SentinelBalancesSection.periodRemainingFraction(end: nil, start: nil, now: now))
+        XCTAssertNil(SentinelBalancesSection.periodElapsedFraction(end: nil, start: nil, now: now))
     }
 
     private func makeGoodAccount() -> CommandCodeAccountUsage {

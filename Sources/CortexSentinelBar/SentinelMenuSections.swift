@@ -102,11 +102,12 @@ struct UsageTimeBar: View {
         min(1, max(0, fraction))
     }
 
+    // 时间轴正向：起步绿，快到重置点黄，压线红。
     private var fillColor: Color {
-        if clamped <= 0.05 {
+        if clamped >= 0.85 {
             return SentinelTheme.Colors.danger
         }
-        if clamped <= 0.2 {
+        if clamped >= 0.6 {
             return SentinelTheme.Colors.warning
         }
         return SentinelTheme.Colors.success
@@ -115,7 +116,7 @@ struct UsageTimeBar: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
-                // 灰色底轨：满格在哪一目了然。
+                // 灰色底轨：满格在哪一目了然。fill 传已流逝占比。
                 Capsule()
                     .fill(SentinelTheme.Colors.secondaryForeground.opacity(0.22))
                 Capsule()
@@ -749,18 +750,18 @@ struct SentinelBalancesSection: View {
         let weeklyRemaining = account.weeklyWindow?.remainingPercentage
         let monthly = account.monthlyRemainingCredits
         let now = Date()
-        let fiveHourBar = Self.timeRemainingFraction(
+        let fiveHourBar = Self.timeElapsedFraction(
             resetAt: account.fiveHourWindow?.resetAt,
             windowLength: 5 * 3600,
             now: now
         )
-        let weeklyBar = Self.timeRemainingFraction(
+        let weeklyBar = Self.timeElapsedFraction(
             resetAt: account.weeklyWindow?.resetAt,
             windowLength: 7 * 24 * 3600,
             now: now
         )
         let monthlyBar = account.monthlyRemainingCredits != nil
-            ? Self.periodRemainingFraction(end: account.periodEnd, start: account.periodStart, now: now)
+            ? Self.periodElapsedFraction(end: account.periodEnd, start: account.periodStart, now: now)
             : nil
         return HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
             Circle()
@@ -982,12 +983,12 @@ struct SentinelBalancesSection: View {
         let hasFiveHour = account.fiveHourWindow?.percentUsed != nil
         let hasWeekly = account.weeklyWindow?.percentUsed != nil
         let now = Date()
-        let fiveHourBar = Self.timeRemainingFraction(
+        let fiveHourBar = Self.timeElapsedFraction(
             resetAt: account.fiveHourWindow?.resetAt,
             windowLength: 5 * 3600,
             now: now
         )
-        let weeklyBar = Self.timeRemainingFraction(
+        let weeklyBar = Self.timeElapsedFraction(
             resetAt: account.weeklyWindow?.resetAt,
             windowLength: 7 * 24 * 3600,
             now: now
@@ -1023,12 +1024,10 @@ struct SentinelBalancesSection: View {
                         if hasFiveHour, let fiveHour = account.fiveHourWindow {
                             quotaSegmentWithBar(
                                 label: "5h",
-                                valueText: fiveHour.remainingPercentage.map {
-                                    cursorUsageRemainingText(min(100, max(0, 100 - $0)))
-                                } ?? "—",
-                                valueColor: fiveHour.remainingPercentage.map {
-                                    cursorUsageRemainingColor(min(100, max(0, 100 - $0)))
-                                } ?? SentinelTheme.Colors.secondaryForeground,
+                                // 剩余口径（像电量）：remainingPercentage 就是剩的，不许再反转。
+                                valueText: fiveHour.remainingPercentage.map(cursorUsageRemainingText) ?? "—",
+                                valueColor: fiveHour.remainingPercentage.map(cursorUsageRemainingColor)
+                                    ?? SentinelTheme.Colors.secondaryForeground,
                                 columnWidth: SentinelTheme.Metrics.usageColWidth1,
                                 barFraction: fiveHourBar
                             )
@@ -1039,12 +1038,9 @@ struct SentinelBalancesSection: View {
                         if hasWeekly, let weekly = account.weeklyWindow {
                             quotaSegmentWithBar(
                                 label: "周",
-                                valueText: weekly.remainingPercentage.map {
-                                    cursorUsageRemainingText(min(100, max(0, 100 - $0)))
-                                } ?? "—",
-                                valueColor: weekly.remainingPercentage.map {
-                                    cursorUsageRemainingColor(min(100, max(0, 100 - $0)))
-                                } ?? SentinelTheme.Colors.secondaryForeground,
+                                valueText: weekly.remainingPercentage.map(cursorUsageRemainingText) ?? "—",
+                                valueColor: weekly.remainingPercentage.map(cursorUsageRemainingColor)
+                                    ?? SentinelTheme.Colors.secondaryForeground,
                                 columnWidth: SentinelTheme.Metrics.usageColWidth2,
                                 barFraction: weeklyBar
                             )
@@ -1180,9 +1176,10 @@ struct SentinelBalancesSection: View {
         return rounded
     }
 
-    /// 时间维度：当前窗口的剩余时间占比（5 小时窗按 5h 折算，周窗按 7 天）。
-    /// 过了 resetAt 就是 0，横条见底；重置后 API 给新的 resetAt，横条回满。
-    static func timeRemainingFraction(
+    /// 时间轴：窗口内已流逝占比，正向走（重置时 0 起步，越接近 resetAt 越满）。
+    /// 5 小时窗按 5h 折算，周窗按 7 天。过了 resetAt 就是满格（该重置了）。
+    /// Falcon 2026-09-11 定：数字报剩余，横条报流逝，方向别再搞反。
+    static func timeElapsedFraction(
         resetAt: Date?,
         windowLength: TimeInterval,
         now: Date
@@ -1190,11 +1187,12 @@ struct SentinelBalancesSection: View {
         guard let resetAt else {
             return nil
         }
-        return min(1, max(0, resetAt.timeIntervalSince(now) / windowLength))
+        let remaining = resetAt.timeIntervalSince(now)
+        return min(1, max(0, 1 - remaining / windowLength))
     }
 
-    /// 月度倒计时：订阅账期内剩余时间占比；起点缺失按 30 天账期折算。
-    static func periodRemainingFraction(
+    /// 账期时间轴：已流逝占比；起点缺失按 30 天账期折算。
+    static func periodElapsedFraction(
         end: Date?,
         start: Date?,
         now: Date
@@ -1208,7 +1206,8 @@ struct SentinelBalancesSection: View {
         } else {
             length = 30 * 24 * 3600
         }
-        return min(1, max(0, end.timeIntervalSince(now) / length))
+        let remaining = end.timeIntervalSince(now)
+        return min(1, max(0, 1 - remaining / length))
     }
 
     /// Cursor 订阅余额：三组（模式 / API / Bot）排成一行，只报剩余百分比。

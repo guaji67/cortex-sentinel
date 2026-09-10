@@ -667,11 +667,20 @@ struct SentinelBalancesSection: View {
         let fiveHourRemaining = account.fiveHourWindow?.remainingPercentage
         let weeklyRemaining = account.weeklyWindow?.remainingPercentage
         let monthly = account.monthlyRemainingCredits
-        let timeFraction = Self.timeRemainingFraction(
-            resetAt: account.fiveHourWindow?.resetAt ?? account.weeklyWindow?.resetAt,
-            windowLength: account.fiveHourWindow != nil ? 5 * 3600 : 7 * 24 * 3600,
-            now: Date()
+        let now = Date()
+        let fiveHourBar = Self.timeRemainingFraction(
+            resetAt: account.fiveHourWindow?.resetAt,
+            windowLength: 5 * 3600,
+            now: now
         )
+        let weeklyBar = Self.timeRemainingFraction(
+            resetAt: account.weeklyWindow?.resetAt,
+            windowLength: 7 * 24 * 3600,
+            now: now
+        )
+        let monthlyBar = account.monthlyRemainingCredits != nil
+            ? Self.periodRemainingFraction(end: account.periodEnd, start: account.periodStart, now: now)
+            : nil
         return HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
             Circle()
                 .fill(commandCodeStatusColor(account))
@@ -699,25 +708,47 @@ struct SentinelBalancesSection: View {
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
                 } else {
-                    HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
+                    HStack(alignment: .top, spacing: SentinelTheme.Spacing.xxs) {
                         if let fiveHourRemaining {
-                            remainingUsageSegment("5h", remaining: fiveHourRemaining)
+                            quotaSegmentWithBar(
+                                label: "5h",
+                                valueText: cursorUsageRemainingText(fiveHourRemaining),
+                                valueColor: cursorUsageRemainingColor(fiveHourRemaining),
+                                columnWidth: SentinelTheme.Metrics.usageColWidth1,
+                                barFraction: fiveHourBar,
+                                barHelp: "5 小时窗倒计时"
+                            )
                         }
                         if fiveHourRemaining != nil, weeklyRemaining != nil || monthly != nil {
                             cursorUsageDivider
                         }
                         if let weeklyRemaining {
-                            remainingUsageSegment("周", remaining: weeklyRemaining)
+                            quotaSegmentWithBar(
+                                label: "周",
+                                valueText: cursorUsageRemainingText(weeklyRemaining),
+                                valueColor: cursorUsageRemainingColor(weeklyRemaining),
+                                columnWidth: SentinelTheme.Metrics.usageColWidth2,
+                                barFraction: weeklyBar,
+                                barHelp: "周窗倒计时"
+                            )
                         }
                         if weeklyRemaining != nil, monthly != nil {
                             cursorUsageDivider
                         }
                         if let monthly {
-                            commandCodeMonthlySegment(monthly, periodEnd: account.periodEnd)
+                            quotaSegmentWithBar(
+                                label: "月余",
+                                valueText: String(format: "$%.2f", monthly),
+                                valueColor: monthly <= 0
+                                    ? SentinelTheme.Colors.danger
+                                    : monthly < CommandCodeUsageConstants.lowMonthlyCredits
+                                        ? SentinelTheme.Colors.warning
+                                        : SentinelTheme.Colors.foreground,
+                                columnWidth: SentinelTheme.Metrics.usageColWidth3,
+                                barFraction: monthlyBar,
+                                barHelp: account.periodEnd.map(Self.monthlyResetHelpText) ?? ""
+                            )
                         }
-                    }
-                    if let timeFraction {
-                        UsageTimeBar(fraction: timeFraction)
                     }
                 }
             }
@@ -742,31 +773,37 @@ struct SentinelBalancesSection: View {
         return "未知"
     }
 
-    private func commandCodeMonthlySegment(_ credits: Double, periodEnd: Date?) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 3) {
-            Text("月余")
-                .font(SentinelTheme.Fonts.balanceAmount)
-                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
-                .lineLimit(1)
-            Text(String(format: "$%.2f", credits))
-                .font(SentinelTheme.Fonts.balanceAmount)
-                .foregroundStyle(credits <= 0
-                    ? SentinelTheme.Colors.danger
-                    : credits < CommandCodeUsageConstants.lowMonthlyCredits
-                        ? SentinelTheme.Colors.warning
-                        : SentinelTheme.Colors.foreground)
-                .monospacedDigit()
-                .lineLimit(1)
-                .help(periodEnd.map(Self.monthlyResetHelpText) ?? "")
+    /// 带倒计时横额度的段：上面 label + 数值，下面自己的时间横条。
+    /// 横条长度统一固定，段内左对齐——数字变化不会左右抖。
+    private func quotaSegmentWithBar(
+        label: String,
+        valueText: String,
+        valueColor: Color,
+        columnWidth: CGFloat,
+        barFraction: Double?,
+        barHelp: String = ""
+    ) -> some View {
+        VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xxs) {
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
+                Text(label)
+                    .font(SentinelTheme.Fonts.balanceAmount)
+                    .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                Text(valueText)
+                    .font(SentinelTheme.Fonts.balanceAmount)
+                    .foregroundStyle(valueColor)
+                    .monospacedDigit()
+            }
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            if let barFraction {
+                UsageTimeBar(fraction: barFraction)
+                    .frame(width: SentinelTheme.Metrics.timeBarWidth)
+                    .help(barHelp)
+            }
         }
-    }
-
-    /// 月余指的是订阅账期内剩余的 credits，账期结束就刷新。
-    static func monthlyResetHelpText(_ periodEnd: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "M/d HH:mm"
-        return "月余 = 订阅账期内剩余 credits，\(formatter.string(from: periodEnd)) 刷新"
+        .frame(width: columnWidth, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label) \(valueText)")
     }
 
     private func commandCodeStatusColor(_ account: CommandCodeAccountUsage) -> Color {
@@ -853,10 +890,16 @@ struct SentinelBalancesSection: View {
         )
         let hasFiveHour = account.fiveHourWindow?.percentUsed != nil
         let hasWeekly = account.weeklyWindow?.percentUsed != nil
-        let timeFraction = Self.timeRemainingFraction(
-            resetAt: account.fiveHourWindow?.resetAt ?? account.weeklyWindow?.resetAt,
-            windowLength: account.fiveHourWindow != nil ? 5 * 3600 : 7 * 24 * 3600,
-            now: Date()
+        let now = Date()
+        let fiveHourBar = Self.timeRemainingFraction(
+            resetAt: account.fiveHourWindow?.resetAt,
+            windowLength: 5 * 3600,
+            now: now
+        )
+        let weeklyBar = Self.timeRemainingFraction(
+            resetAt: account.weeklyWindow?.resetAt,
+            windowLength: 7 * 24 * 3600,
+            now: now
         )
         return HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
             Circle()
@@ -885,15 +928,37 @@ struct SentinelBalancesSection: View {
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
                 } else {
-                    HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
-                        if hasFiveHour {
-                            cursorUsageSegment("5h", account.fiveHourWindow?.percentUsed)
+                    HStack(alignment: .top, spacing: SentinelTheme.Spacing.xxs) {
+                        if hasFiveHour, let fiveHour = account.fiveHourWindow {
+                            quotaSegmentWithBar(
+                                label: "5h",
+                                valueText: fiveHour.remainingPercentage.map {
+                                    cursorUsageRemainingText(min(100, max(0, 100 - $0)))
+                                } ?? "—",
+                                valueColor: fiveHour.remainingPercentage.map {
+                                    cursorUsageRemainingColor(min(100, max(0, 100 - $0)))
+                                } ?? SentinelTheme.Colors.secondaryForeground,
+                                columnWidth: SentinelTheme.Metrics.usageColWidth1,
+                                barFraction: fiveHourBar,
+                                barHelp: "5 小时窗倒计时"
+                            )
                         }
                         if hasFiveHour, hasWeekly {
                             cursorUsageDivider
                         }
-                        if hasWeekly {
-                            cursorUsageSegment("周", account.weeklyWindow?.percentUsed)
+                        if hasWeekly, let weekly = account.weeklyWindow {
+                            quotaSegmentWithBar(
+                                label: "周",
+                                valueText: weekly.remainingPercentage.map {
+                                    cursorUsageRemainingText(min(100, max(0, 100 - $0)))
+                                } ?? "—",
+                                valueColor: weekly.remainingPercentage.map {
+                                    cursorUsageRemainingColor(min(100, max(0, 100 - $0)))
+                                } ?? SentinelTheme.Colors.secondaryForeground,
+                                columnWidth: SentinelTheme.Metrics.usageColWidth2,
+                                barFraction: weeklyBar,
+                                barHelp: "周窗倒计时"
+                            )
                         }
                         if account.cashBalance != nil {
                             if hasFiveHour || hasWeekly {
@@ -901,9 +966,6 @@ struct SentinelBalancesSection: View {
                             }
                             glmBalanceSegment(account)
                         }
-                    }
-                    if let timeFraction {
-                        UsageTimeBar(fraction: timeFraction)
                     }
                 }
             }
@@ -1036,6 +1098,32 @@ struct SentinelBalancesSection: View {
             return nil
         }
         return min(1, max(0, resetAt.timeIntervalSince(now) / windowLength))
+    }
+
+    /// 月度倒计时：订阅账期内剩余时间占比；起点缺失按 30 天账期折算。
+    static func periodRemainingFraction(
+        end: Date?,
+        start: Date?,
+        now: Date
+    ) -> Double? {
+        guard let end else {
+            return nil
+        }
+        let length: TimeInterval
+        if let start, end > start {
+            length = end.timeIntervalSince(start)
+        } else {
+            length = 30 * 24 * 3600
+        }
+        return min(1, max(0, end.timeIntervalSince(now) / length))
+    }
+
+    /// 月余指的是订阅账期内剩余的 credits，账期结束就刷新。
+    static func monthlyResetHelpText(_ periodEnd: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "M/d HH:mm"
+        return "月余 = 订阅账期内剩余 credits，\(formatter.string(from: periodEnd)) 刷新"
     }
 
     /// Cursor 订阅余额：三组（模式 / API / Bot）排成一行，只报剩余百分比。

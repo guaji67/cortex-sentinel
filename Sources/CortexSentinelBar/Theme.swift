@@ -93,8 +93,12 @@ enum SentinelTheme {
         /// 额度行（数字 + 时间横条）加宽一丢丢的行高。
         static let usageRowHeight: CGFloat = 46
         /// 数字/横条固定宽度：左对齐防数字变化抖动，CC 与 GLM 行统一。
-        static let usageBlockWidth: CGFloat = 232
+        static let usageBlockWidth: CGFloat = 238
         static let timeBarHeight: CGFloat = 3
+        static let timeBarWidth: CGFloat = 60
+        static let usageColWidth1: CGFloat = 76
+        static let usageColWidth2: CGFloat = 64
+        static let usageColWidth3: CGFloat = 82
         static let balanceRowSpacing: CGFloat = 2
         static let balanceDot: CGFloat = 8
         static let disclosureChevron: CGFloat = 12

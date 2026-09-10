@@ -33,6 +33,8 @@ struct CommandCodeAccountUsage: Equatable, Sendable, Identifiable {
     let monthlyRemainingCredits: Double?
     /// 订阅账期结束时间 = 月度 credits 重置时间（subscriptions 接口拿，失败为空）。
     let periodEnd: Date?
+    /// 订阅账期开始时间，算月度倒计时的分母用。
+    let periodStart: Date?
     let checkedAt: Date?
     let stale: Bool
     let errorMessage: String?
@@ -76,6 +78,7 @@ struct CommandCodeAccountUsage: Equatable, Sendable, Identifiable {
             weeklyWindow: nil,
             monthlyRemainingCredits: nil,
             periodEnd: nil,
+            periodStart: nil,
             checkedAt: nil,
             stale: false,
             errorMessage: errorMessage
@@ -95,6 +98,7 @@ struct CommandCodeAccountUsage: Equatable, Sendable, Identifiable {
             weeklyWindow: old.weeklyWindow,
             monthlyRemainingCredits: old.monthlyRemainingCredits,
             periodEnd: periodEnd ?? old.periodEnd,
+            periodStart: periodStart ?? old.periodStart,
             checkedAt: old.checkedAt,
             stale: true,
             errorMessage: errorMessage ?? old.errorMessage
@@ -237,7 +241,9 @@ struct CommandCodeUsageClient: Sendable {
 
         let payload = try parseCreditsPayload(data: creditsData)
         let identity = whoamiData.flatMap(Self.parseAccountIdentity(data:))
-        let periodEnd = subscriptionData.flatMap(Self.parsePeriodEnd(data:))
+        let period = subscriptionData.flatMap(Self.parseSubscriptionPeriod(data:))
+        let periodEnd = period?.end
+        let periodStart = period?.start
         let monthlyRemaining = [payload.credits?.monthlyCredits,
                                 payload.credits?.purchasedCredits,
                                 payload.credits?.freeCredits]
@@ -254,6 +260,7 @@ struct CommandCodeUsageClient: Sendable {
             weeklyWindow: payload.windowLimits?.weekly.map(Self.window(from:)),
             monthlyRemainingCredits: hasMonthlyFigure ? monthlyRemaining : nil,
             periodEnd: periodEnd,
+            periodStart: periodStart,
             checkedAt: now,
             stale: false,
             errorMessage: nil
@@ -303,17 +310,28 @@ struct CommandCodeUsageClient: Sendable {
         }
     }
 
-    /// /alpha/billing/subscriptions 的 data.currentPeriodEnd（ISO8601 带毫秒），
-    /// 即月度 credits 的重置时间。解析不了返回 nil，不影响额度数字。
-    static func parsePeriodEnd(data: Data) -> Date? {
+    struct SubscriptionPeriod: Equatable, Sendable {
+        let start: Date?
+        let end: Date?
+    }
+
+    /// /alpha/billing/subscriptions 的 data.currentPeriodStart/End（ISO8601 带毫秒），
+    /// 账期结束即月度 credits 重置时间。解析不了返回 nil，不影响额度数字。
+    static func parseSubscriptionPeriod(data: Data) -> SubscriptionPeriod? {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
         }
         let payload = (object["data"] as? [String: Any]) ?? object
-        guard let text = payload["currentPeriodEnd"] as? String else {
+        let end = (payload["currentPeriodEnd"] as? String).flatMap {
+            Self.isoFormatter.date(from: $0) ?? Self.isoFormatterNoFraction.date(from: $0)
+        }
+        let start = (payload["currentPeriodStart"] as? String).flatMap {
+            Self.isoFormatter.date(from: $0) ?? Self.isoFormatterNoFraction.date(from: $0)
+        }
+        guard end != nil || start != nil else {
             return nil
         }
-        return Self.isoFormatter.date(from: text) ?? Self.isoFormatterNoFraction.date(from: text)
+        return SubscriptionPeriod(start: start, end: end)
     }
 
     static let isoFormatter: ISO8601DateFormatter = {

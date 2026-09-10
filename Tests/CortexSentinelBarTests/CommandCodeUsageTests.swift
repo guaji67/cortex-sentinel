@@ -214,19 +214,62 @@ final class CommandCodeUsageTests: XCTestCase {
         XCTAssertNil(CommandCodeUsageClient.parseAccountIdentity(data: Data("{}".utf8)))
     }
 
-    func testParsePeriodEndToleratesShapes() throws {
-        let withData = CommandCodeUsageClient.parsePeriodEnd(
-            data: Data(#"{"data": {"currentPeriodEnd": "2026-10-01T09:53:27.000Z"}}"#.utf8)
+    func testParseSubscriptionPeriodToleratesShapes() throws {
+        let period = try XCTUnwrap(
+            CommandCodeUsageClient.parseSubscriptionPeriod(
+                data: Data(
+                    #"{"data": {"currentPeriodStart": "2026-09-01T09:53:27.000Z", "currentPeriodEnd": "2026-10-01T09:53:27.000Z"}}"#.utf8
+                )
+            )
         )
-        XCTAssertEqual(try XCTUnwrap(withData), Date(timeIntervalSince1970: 1_790_848_407))
+        XCTAssertEqual(period.start, Date(timeIntervalSince1970: 1_788_256_407))
+        XCTAssertEqual(period.end, Date(timeIntervalSince1970: 1_790_848_407))
 
-        let flat = CommandCodeUsageClient.parsePeriodEnd(
-            data: Data(#"{"currentPeriodEnd": "2026-10-01T09:53:27Z"}"#.utf8)
+        let endOnly = try XCTUnwrap(
+            CommandCodeUsageClient.parseSubscriptionPeriod(
+                data: Data(#"{"currentPeriodEnd": "2026-10-01T09:53:27Z"}"#.utf8)
+            )
         )
-        XCTAssertEqual(try XCTUnwrap(flat), Date(timeIntervalSince1970: 1_790_848_407))
+        XCTAssertNil(endOnly.start)
+        XCTAssertEqual(endOnly.end, Date(timeIntervalSince1970: 1_790_848_407))
 
-        XCTAssertNil(CommandCodeUsageClient.parsePeriodEnd(data: Data("{}".utf8)))
-        XCTAssertNil(CommandCodeUsageClient.parsePeriodEnd(data: Data("garbage".utf8)))
+        XCTAssertNil(CommandCodeUsageClient.parseSubscriptionPeriod(data: Data("{}".utf8)))
+        XCTAssertNil(CommandCodeUsageClient.parseSubscriptionPeriod(data: Data("garbage".utf8)))
+    }
+
+    func testTimeAndPeriodFractions() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        XCTAssertEqual(
+            SentinelBalancesSection.timeRemainingFraction(
+                resetAt: now.addingTimeInterval(2.5 * 3600),
+                windowLength: 5 * 3600,
+                now: now
+            ),
+            0.5
+        )
+        XCTAssertEqual(
+            SentinelBalancesSection.timeRemainingFraction(
+                resetAt: now.addingTimeInterval(-1),
+                windowLength: 5 * 3600,
+                now: now
+            ),
+            0
+        )
+        XCTAssertNil(
+            SentinelBalancesSection.timeRemainingFraction(resetAt: nil, windowLength: 5 * 3600, now: now)
+        )
+        // 账期：起点缺失按 30 天折算。
+        let end = now.addingTimeInterval(10 * 24 * 3600)
+        XCTAssertEqual(
+            SentinelBalancesSection.periodRemainingFraction(end: end, start: nil, now: now) ?? -1,
+            1.0 / 3.0,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            SentinelBalancesSection.periodRemainingFraction(end: now.addingTimeInterval(-1), start: nil, now: now),
+            0
+        )
+        XCTAssertNil(SentinelBalancesSection.periodRemainingFraction(end: nil, start: nil, now: now))
     }
 
     private func makeGoodAccount() -> CommandCodeAccountUsage {
@@ -248,6 +291,7 @@ final class CommandCodeUsageTests: XCTestCase {
             ),
             monthlyRemainingCredits: 52.3,
             periodEnd: nil,
+            periodStart: nil,
             checkedAt: checkedAt,
             stale: false,
             errorMessage: nil
@@ -452,7 +496,7 @@ final class CommandCodeUsageTests: XCTestCase {
             CommandCodeAccountUsage(
                 key: "k1", label: "", accountIdentity: nil, fiveHourWindow: nil,
                 weeklyWindow: nil, monthlyRemainingCredits: nil, periodEnd: nil,
-                checkedAt: nil, stale: false, errorMessage: nil
+                periodStart: nil, checkedAt: nil, stale: false, errorMessage: nil
             ).displayTitle,
             "Command Code"
         )
@@ -460,7 +504,7 @@ final class CommandCodeUsageTests: XCTestCase {
             CommandCodeAccountUsage(
                 key: "k2", label: "Command Code 主力", accountIdentity: nil, fiveHourWindow: nil,
                 weeklyWindow: nil, monthlyRemainingCredits: nil, periodEnd: nil,
-                checkedAt: nil, stale: false, errorMessage: nil
+                periodStart: nil, checkedAt: nil, stale: false, errorMessage: nil
             ).displayTitle,
             "Command Code 主力"
         )
@@ -468,7 +512,7 @@ final class CommandCodeUsageTests: XCTestCase {
             CommandCodeAccountUsage(
                 key: "k3", label: "账号1", accountIdentity: nil, fiveHourWindow: nil,
                 weeklyWindow: nil, monthlyRemainingCredits: nil, periodEnd: nil,
-                checkedAt: nil, stale: false, errorMessage: nil
+                periodStart: nil, checkedAt: nil, stale: false, errorMessage: nil
             ).displayTitle,
             "CC 账号1"
         )

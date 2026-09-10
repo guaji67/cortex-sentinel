@@ -252,6 +252,33 @@ enum DemoBalancesPreview {
             checkedAt: checked
         )
 
+        let commandCode = CommandCodeUsageSnapshot(
+            accounts: [
+                CommandCodeAccountUsage(
+                    key: "demo-cc-key-main",
+                    label: "Pro",
+                    accountIdentity: "falcon@example.com",
+                    fiveHourWindow: CommandCodeWindow(
+                        used: 0.72,
+                        cap: 3,
+                        exceeded: false,
+                        resetAt: checked.addingTimeInterval(3600 * 4.35)
+                    ),
+                    weeklyWindow: CommandCodeWindow(
+                        used: 2.82,
+                        cap: 6,
+                        exceeded: false,
+                        resetAt: checked.addingTimeInterval(3600 * 84)
+                    ),
+                    monthlyRemainingCredits: 52.3,
+                    checkedAt: checked,
+                    stale: false,
+                    errorMessage: nil
+                ),
+            ],
+            checkedAt: checked
+        )
+
         func aioProvider(
             id: Int64,
             name: String,
@@ -301,6 +328,7 @@ enum DemoBalancesPreview {
             official: official,
             cursor: cursor,
             glm: glm,
+            commandCode: commandCode,
             aio: aio,
             inputStatus: demoInputStatus(checked: checked)
         )

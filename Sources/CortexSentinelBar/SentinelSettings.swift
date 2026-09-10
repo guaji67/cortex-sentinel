@@ -40,6 +40,8 @@ enum SentinelSettingsCopy {
     static let startupGroupTitle = "启动与文件夹"
     static let loginItemTitle = "开机时自动启动"
     static let loginItemManagedHint = "由系统服务托管，改这里没用"
+    static let updateAutoInstallTitle = "自动下载并安装更新"
+    static let updateAutoInstallHint = "发现新版本就后台换装并自动重启哨兵。关着时只发通知提醒。"
     static let watchTitle = "盯这个文件夹"
     static let watchChoose = "选择"
     static let watchHint = "派工工具把任务状态写在这里，一般不用改。"
@@ -54,6 +56,14 @@ enum SentinelSettingsCopy {
     static let glmKeyFieldPlaceholder = "粘贴智谱 API Key"
     static let glmEmptyHint = "还没识别到智谱 key，可以在下面手动添加。"
     static let glmHint = "自动识别本机已有的智谱 Coding Plan key（键池、ClaudeZ 网关、环境变量）。删掉的自动识别 key 会记住，不会再回来。"
+
+    static let commandCodeGroupTitle = "Command Code Key"
+    static let commandCodeAddButton = "添加"
+    static let commandCodeDeleteButton = "删除"
+    static let commandCodeNameFieldPlaceholder = "名称（账号1）"
+    static let commandCodeKeyFieldPlaceholder = "粘贴 Command Code API Key"
+    static let commandCodeEmptyHint = "没识别到本机的 Command Code key，可以在下面手动添加。"
+    static let commandCodeHint = "自动识别官方 CLI 登录（~/.commandcode/auth.json）和环境变量；只用 API 的直接粘贴 key。删掉的自动识别 key 会记住，不会再回来。查询只走账务接口，不消耗 credits。"
 }
 
 enum SentinelAppVersion {
@@ -116,6 +126,14 @@ enum SentinelSettingsKey {
     /// GLM 额度监控：用户手动添加的 key 列表 + 被删除的自动识别 key。
     static let glmUserKeys = "\(bundlePrefix).glmUserKeys"
     static let glmRemovedKeys = "\(bundlePrefix).glmRemovedKeys"
+    /// Command Code 额度监控：同 GLM 一套结构。
+    static let commandCodeUserKeys = "\(bundlePrefix).commandCodeUserKeys"
+    static let commandCodeRemovedKeys = "\(bundlePrefix).commandCodeRemovedKeys"
+    /// 面板点名字改显示名的覆盖表（命名空间:完整 key → 显示名）。
+    static let providerRenames = "\(bundlePrefix).providerRenames"
+    /// 自更新：自动下载并安装开关（默认关，只提醒）+ 已提醒过的版本（防重复弹）。
+    static let updateAutoInstall = "\(bundlePrefix).updateAutoInstall"
+    static let lastNotifiedUpdateVersion = "\(bundlePrefix).lastNotifiedUpdateVersion"
 }
 
 protocol SentinelRefreshIntervalOption: Hashable, RawRepresentable where RawValue == TimeInterval {
@@ -485,6 +503,25 @@ enum SentinelSettings {
         defaults.string(forKey: SentinelSettingsKey.watchDirectory)
     }
 
+    // MARK: 自更新
+
+    /// 自动换装默认关：发现新版本只发通知，用户在面板里点了才装。
+    static func updateAutoInstall(defaults: UserDefaults) -> Bool {
+        defaults.bool(forKey: SentinelSettingsKey.updateAutoInstall)
+    }
+
+    static func setUpdateAutoInstall(_ value: Bool, defaults: UserDefaults) {
+        defaults.set(value, forKey: SentinelSettingsKey.updateAutoInstall)
+    }
+
+    static func lastNotifiedUpdateVersion(defaults: UserDefaults) -> String? {
+        defaults.string(forKey: SentinelSettingsKey.lastNotifiedUpdateVersion)
+    }
+
+    static func setLastNotifiedUpdateVersion(_ version: String, defaults: UserDefaults) {
+        defaults.set(version, forKey: SentinelSettingsKey.lastNotifiedUpdateVersion)
+    }
+
     // MARK: GLM 额度 key
 
     static func glmUserKeys(defaults: UserDefaults) -> [GLMKeyEntry] {
@@ -495,13 +532,15 @@ enum SentinelSettings {
         defaults.set(encodeGLMEntries(entries), forKey: SentinelSettingsKey.glmUserKeys)
     }
 
-    static func addGLMUserKey(_ entry: GLMKeyEntry, defaults: UserDefaults) {
+    @discardableResult
+    static func addGLMUserKey(_ entry: GLMKeyEntry, defaults: UserDefaults) -> Bool {
         var entries = glmUserKeys(defaults: defaults)
         guard !entries.contains(where: { $0.key == entry.key }) else {
-            return
+            return false
         }
         entries.append(entry)
         setGLMUserKeys(entries, defaults: defaults)
+        return true
     }
 
     static func removeGLMUserKey(_ key: String, defaults: UserDefaults) {
@@ -531,6 +570,73 @@ enum SentinelSettings {
             encodeGLMEntries(keys.subtracting([key]).map { GLMKeyEntry(label: "", key: $0) }),
             forKey: SentinelSettingsKey.glmRemovedKeys
         )
+    }
+
+    // MARK: Command Code 额度 key
+
+    static func commandCodeUserKeys(defaults: UserDefaults) -> [CommandCodeKeyEntry] {
+        decodeCommandCodeEntries(defaults.data(forKey: SentinelSettingsKey.commandCodeUserKeys)) ?? []
+    }
+
+    static func setCommandCodeUserKeys(_ entries: [CommandCodeKeyEntry], defaults: UserDefaults) {
+        defaults.set(encodeCommandCodeEntries(entries), forKey: SentinelSettingsKey.commandCodeUserKeys)
+    }
+
+    @discardableResult
+    static func addCommandCodeUserKey(_ entry: CommandCodeKeyEntry, defaults: UserDefaults) -> Bool {
+        var entries = commandCodeUserKeys(defaults: defaults)
+        guard !entries.contains(where: { $0.key == entry.key }) else {
+            return false
+        }
+        entries.append(entry)
+        setCommandCodeUserKeys(entries, defaults: defaults)
+        return true
+    }
+
+    static func removeCommandCodeUserKey(_ key: String, defaults: UserDefaults) {
+        setCommandCodeUserKeys(
+            commandCodeUserKeys(defaults: defaults).filter { $0.key != key },
+            defaults: defaults
+        )
+    }
+
+    static func commandCodeRemovedKeys(defaults: UserDefaults) -> Set<String> {
+        Set(decodeCommandCodeEntries(defaults.data(forKey: SentinelSettingsKey.commandCodeRemovedKeys))?
+            .map(\.key) ?? [])
+    }
+
+    static func addCommandCodeRemovedKey(_ key: String, defaults: UserDefaults) {
+        var keys = commandCodeRemovedKeys(defaults: defaults)
+        guard !keys.contains(key) else {
+            return
+        }
+        keys.insert(key)
+        defaults.set(
+            encodeCommandCodeEntries(keys.map { CommandCodeKeyEntry(label: "", key: $0) }),
+            forKey: SentinelSettingsKey.commandCodeRemovedKeys
+        )
+    }
+
+    static func removeCommandCodeRemovedKey(_ key: String, defaults: UserDefaults) {
+        let keys = commandCodeRemovedKeys(defaults: defaults)
+        guard keys.contains(key) else {
+            return
+        }
+        defaults.set(
+            encodeCommandCodeEntries(keys.subtracting([key]).map { CommandCodeKeyEntry(label: "", key: $0) }),
+            forKey: SentinelSettingsKey.commandCodeRemovedKeys
+        )
+    }
+
+    private static func encodeCommandCodeEntries(_ entries: [CommandCodeKeyEntry]) -> Data? {
+        try? JSONEncoder().encode(entries)
+    }
+
+    private static func decodeCommandCodeEntries(_ data: Data?) -> [CommandCodeKeyEntry]? {
+        guard let data else {
+            return nil
+        }
+        return try? JSONDecoder().decode([CommandCodeKeyEntry].self, from: data)
     }
 
     private static func encodeGLMEntries(_ entries: [GLMKeyEntry]) -> Data? {

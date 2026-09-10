@@ -20,6 +20,8 @@ struct SentinelMenuView: View {
     /// 菜单栏常驻默认 false，现场布局一条都不改。
     var rendersOffscreen = false
     @State private var settingsLine: LineStatus?
+    /// Command Code 首次接入引导浮层（余额区引导行点开）。
+    @State private var showsCommandCodeKeyPanel = false
 
     var body: some View {
         // 生产路径仍不读线/余额等高频面。只读两个低频开关：
@@ -56,6 +58,10 @@ struct SentinelMenuView: View {
             if let settingsLine {
                 settingsOverlay(for: settingsLine)
             }
+
+            if showsCommandCodeKeyPanel {
+                commandCodeKeyPanelOverlay
+            }
         }
         .background(SentinelTheme.Colors.canvas)
         .frame(
@@ -74,7 +80,9 @@ struct SentinelMenuView: View {
         }
         SentinelChannelSection(store: store)
         SentinelServiceSection(store: store)
-        SentinelBalancesSection(store: store)
+        SentinelBalancesSection(store: store, onAddCommandCodeKey: {
+            showsCommandCodeKeyPanel = true
+        })
         SentinelDispatchSection(
             store: store,
             autoExpandFirstCompleted: autoExpandFirstCompleted,
@@ -108,6 +116,25 @@ struct SentinelMenuView: View {
         .accessibilityIdentifier("line-settings-overlay")
         .onExitCommand {
             settingsLine = nil
+        }
+    }
+
+    private var commandCodeKeyPanelOverlay: some View {
+        ZStack {
+            SentinelTheme.Colors.canvas.opacity(0.82)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    showsCommandCodeKeyPanel = false
+                }
+
+            SentinelCommandCodeKeyPanel(
+                model: store.settingsModel,
+                onClose: { showsCommandCodeKeyPanel = false }
+            )
+        }
+        .accessibilityIdentifier("commandcode-key-overlay")
+        .onExitCommand {
+            showsCommandCodeKeyPanel = false
         }
     }
 }

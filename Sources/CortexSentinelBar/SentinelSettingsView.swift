@@ -28,12 +28,19 @@ final class SentinelSettingsModel: ObservableObject {
     @Published var glmEntries: [GLMKeyEntry] = []
     @Published var glmNewLabel: String = ""
     @Published var glmNewKey: String = ""
+    /// Command Code 额度监控的生效 key 列表，同 GLM 一套结构。
+    @Published var ccEntries: [CommandCodeKeyEntry] = []
+    @Published var ccNewLabel: String = ""
+    @Published var ccNewKey: String = ""
+    /// 自更新：自动下载并安装（默认关，只提醒）。
+    @Published var updateAutoInstall: Bool
 
     var applyLoginItem: ((Bool) -> Void)?
     var applyHistoryRetainCount: ((Int) -> Void)?
     var applyRefreshIntervals: (() -> Void)?
     var chooseWatchDirectory: (() -> Void)?
     var applyGLMKeys: (() -> Void)?
+    var applyCommandCodeKeys: (() -> Void)?
 
     private let defaults: UserDefaults
 
@@ -58,6 +65,7 @@ final class SentinelSettingsModel: ObservableObject {
         self.balanceRecheckInterval = SentinelSettings.balanceRecheckInterval(defaults: defaults)
         self.watchPath = watchPath
         self.isWatchLocked = isWatchLocked
+        self.updateAutoInstall = SentinelSettings.updateAutoInstall(defaults: defaults)
     }
 
     var preferences: SentinelNotifyPreferences {
@@ -202,21 +210,41 @@ final class SentinelSettingsModel: ObservableObject {
         applyRefreshIntervals?()
     }
 
+    var updateAutoInstallBinding: Binding<Bool> {
+        Binding(
+            get: { self.updateAutoInstall },
+            set: { self.setUpdateAutoInstall($0) }
+        )
+    }
+
+    func setUpdateAutoInstall(_ enabled: Bool) {
+        SentinelSettings.setUpdateAutoInstall(enabled, defaults: defaults)
+        updateAutoInstall = enabled
+    }
+
     /// 把两个输入框里的内容录成一把新 key；key 太短或已存在就不动。
     func addGLMKeyFromFields() {
-        let key = glmNewKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard key.count >= GLMKeyConstants.minKeyLength else {
+        addGLMKey(name: glmNewLabel, key: glmNewKey)
+        glmNewLabel = ""
+        glmNewKey = ""
+    }
+
+    /// 录入一把新 GLM key（名称可空）；key 太短或已存在就不动，也不发变更通知。
+    func addGLMKey(name: String, key: String) {
+        let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedKey.count >= GLMKeyConstants.minKeyLength else {
             return
         }
-        let label = glmNewLabel.trimmingCharacters(in: .whitespacesAndNewlines)
-        SentinelSettings.addGLMUserKey(
-            GLMKeyEntry(label: label.isEmpty ? "自定义" : label, key: key),
+        let label = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let added = SentinelSettings.addGLMUserKey(
+            GLMKeyEntry(label: label.isEmpty ? "自定义" : label, key: trimmedKey),
             defaults: defaults
         )
         // 手动加回来的 key 同时从删除名单里捞回来。
-        SentinelSettings.removeGLMRemovedKey(key, defaults: defaults)
-        glmNewLabel = ""
-        glmNewKey = ""
+        SentinelSettings.removeGLMRemovedKey(trimmedKey, defaults: defaults)
+        guard added else {
+            return
+        }
         applyGLMKeys?()
     }
 
@@ -225,6 +253,39 @@ final class SentinelSettingsModel: ObservableObject {
         SentinelSettings.removeGLMUserKey(entry.key, defaults: defaults)
         SentinelSettings.addGLMRemovedKey(entry.key, defaults: defaults)
         applyGLMKeys?()
+    }
+
+    /// 把两个输入框里的内容录成一把新 Command Code key；key 太短或已存在就不动。
+    func addCommandCodeKeyFromFields() {
+        addCommandCodeKey(name: ccNewLabel, key: ccNewKey)
+        ccNewLabel = ""
+        ccNewKey = ""
+    }
+
+    /// 录入一把新 Command Code key（名称可空）；key 太短或已存在就不动，也不发变更通知。
+    func addCommandCodeKey(name: String, key: String) {
+        let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedKey.count >= CommandCodeUsageConstants.minKeyLength else {
+            return
+        }
+        let label = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let added = SentinelSettings.addCommandCodeUserKey(
+            CommandCodeKeyEntry(label: label.isEmpty ? "账号" : label, key: trimmedKey),
+            defaults: defaults
+        )
+        // 手动加回来的 key 同时从删除名单里捞回来。
+        SentinelSettings.removeCommandCodeRemovedKey(trimmedKey, defaults: defaults)
+        guard added else {
+            return
+        }
+        applyCommandCodeKeys?()
+    }
+
+    /// 删一把 Command Code key：手加的直接删，自动识别的进删除名单。
+    func removeCommandCodeKey(_ entry: CommandCodeKeyEntry) {
+        SentinelSettings.removeCommandCodeUserKey(entry.key, defaults: defaults)
+        SentinelSettings.addCommandCodeRemovedKey(entry.key, defaults: defaults)
+        applyCommandCodeKeys?()
     }
 
     static func preview(
@@ -270,9 +331,12 @@ final class SentinelSettingsModel: ObservableObject {
             watchPath: SentinelPaths.defaultWatchDirectory.path,
             isWatchLocked: fixture == .watchLocked
         )
-        // 截图 smoke 用演示 key（假数据），让 GLM 列表行在出图里有覆盖。
+        // 截图 smoke 用演示 key（假数据），让 GLM / Command Code 列表行在出图里有覆盖。
         model.glmEntries = [
             GLMKeyEntry(label: "pro", key: "demo0000000000000000000000000000.zf4X"),
+        ]
+        model.ccEntries = [
+            CommandCodeKeyEntry(label: "账号1", key: "demo-cc-0000000000000000000000000001"),
         ]
         return model
     }
@@ -308,6 +372,9 @@ struct SentinelSettingsView: View {
             }
             settingsGroup(title: SentinelSettingsCopy.glmGroupTitle) {
                 glmKeyGroup
+            }
+            settingsGroup(title: SentinelSettingsCopy.commandCodeGroupTitle) {
+                commandCodeKeyGroup
             }
             settingsGroup(title: SentinelSettingsCopy.refreshGroupTitle) {
                 refreshGroup
@@ -417,77 +484,60 @@ struct SentinelSettingsView: View {
                 }
             }
 
-            HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
-                glmField(
-                    placeholder: SentinelSettingsCopy.glmNameFieldPlaceholder,
-                    text: $model.glmNewLabel,
-                    width: SentinelTheme.Metrics.settingsCountFieldWidth * 1.6,
-                    identifier: "settings-glm-new-label"
-                )
-                glmField(
-                    placeholder: SentinelSettingsCopy.glmKeyFieldPlaceholder,
-                    text: $model.glmNewKey,
-                    width: nil,
-                    identifier: "settings-glm-new-key"
-                )
-                Button(SentinelSettingsCopy.glmAddButton) {
-                    model.addGLMKeyFromFields()
-                }
-                .buttonStyle(SentinelButtonStyle(kind: .primary, compact: true))
-                .disabled(!canAddGLMKey)
-                .accessibilityIdentifier("settings-glm-add")
+            SettingsKeyInputRow(
+                namePlaceholder: SentinelSettingsCopy.glmNameFieldPlaceholder,
+                keyPlaceholder: SentinelSettingsCopy.glmKeyFieldPlaceholder,
+                addButtonTitle: SentinelSettingsCopy.glmAddButton,
+                identifierPrefix: "settings-glm",
+                minKeyLength: GLMKeyConstants.minKeyLength,
+                rendersOffscreen: rendersOffscreen
+            ) { name, key in
+                model.addGLMKey(name: name, key: key)
             }
             hintText(SentinelSettingsCopy.glmHint)
         }
     }
 
-    private var canAddGLMKey: Bool {
-        model.glmNewKey.trimmingCharacters(in: .whitespacesAndNewlines).count >= GLMKeyConstants.minKeyLength
-    }
-
-    private func glmField(
-        placeholder: String,
-        text: Binding<String>,
-        width: CGFloat?,
-        identifier: String
-    ) -> some View {
-        ZStack(alignment: .leading) {
-            // 离屏渲染（截图 smoke）不吃 .plain TextField，照 historyGroup
-            // 的做法用 Text 替身；真实窗口挂真输入框。
-            if text.wrappedValue.isEmpty {
-                Text(placeholder)
-                    .font(SentinelTheme.Fonts.subtitle)
-                    .foregroundStyle(SentinelTheme.Colors.secondaryForeground.opacity(0.7))
-                    .padding(.horizontal, SentinelTheme.Spacing.md)
-                    .allowsHitTesting(false)
+    /// Command Code key 管理：列表 + 增删，和 GLM 组同一套交互。
+    private var commandCodeKeyGroup: some View {
+        VStack(alignment: .leading, spacing: SentinelTheme.Spacing.md) {
+            if model.ccEntries.isEmpty {
+                hintText(SentinelSettingsCopy.commandCodeEmptyHint)
             } else {
-                Text(text.wrappedValue)
-                    .font(SentinelTheme.Fonts.subtitle)
-                    .foregroundStyle(SentinelTheme.Colors.foreground)
-                    .padding(.horizontal, SentinelTheme.Spacing.md)
-                    .allowsHitTesting(false)
+                VStack(alignment: .leading, spacing: SentinelTheme.Spacing.sm) {
+                    ForEach(model.ccEntries, id: \.key) { entry in
+                        HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
+                            Text(entry.label.isEmpty ? "Command Code" : entry.label)
+                                .font(SentinelTheme.Fonts.rowTitle)
+                                .foregroundStyle(SentinelTheme.Colors.foreground)
+                                .lineLimit(1)
+                            Spacer(minLength: SentinelTheme.Spacing.sm)
+                            Text(entry.maskedKeyText)
+                                .font(SentinelTheme.Fonts.metadata)
+                                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                                .lineLimit(1)
+                            Button(SentinelSettingsCopy.commandCodeDeleteButton) {
+                                model.removeCommandCodeKey(entry)
+                            }
+                            .buttonStyle(SentinelButtonStyle(kind: .secondary, compact: true))
+                            .accessibilityIdentifier("settings-commandcode-delete-\(entry.label)")
+                        }
+                    }
+                }
             }
-            if !rendersOffscreen {
-                TextField("", text: text)
-                    .font(SentinelTheme.Fonts.subtitle)
-                    .foregroundStyle(Color.clear)
-                    .textFieldStyle(.plain)
-                    .padding(.horizontal, SentinelTheme.Spacing.md)
-                    .onSubmit { model.addGLMKeyFromFields() }
+
+            SettingsKeyInputRow(
+                namePlaceholder: SentinelSettingsCopy.commandCodeNameFieldPlaceholder,
+                keyPlaceholder: SentinelSettingsCopy.commandCodeKeyFieldPlaceholder,
+                addButtonTitle: SentinelSettingsCopy.commandCodeAddButton,
+                identifierPrefix: "settings-commandcode",
+                minKeyLength: CommandCodeUsageConstants.minKeyLength,
+                rendersOffscreen: rendersOffscreen
+            ) { name, key in
+                model.addCommandCodeKey(name: name, key: key)
             }
+            hintText(SentinelSettingsCopy.commandCodeHint)
         }
-        .frame(maxWidth: width, alignment: .leading)
-        .frame(minHeight: SentinelTheme.Metrics.controlHeight)
-        .background(SentinelTheme.Colors.inset)
-        .clipShape(RoundedRectangle(cornerRadius: SentinelTheme.Radius.field))
-        .overlay(
-            RoundedRectangle(cornerRadius: SentinelTheme.Radius.field)
-                .stroke(
-                    SentinelTheme.Colors.border,
-                    lineWidth: SentinelTheme.Metrics.borderWidth
-                )
-        )
-        .accessibilityIdentifier(identifier)
     }
 
     private var refreshGroup: some View {
@@ -609,6 +659,15 @@ struct SentinelSettingsView: View {
                     hintText(hint)
                         .accessibilityIdentifier("settings-login-item-hint")
                 }
+            }
+
+            VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xs) {
+                labeledToggle(
+                    title: SentinelSettingsCopy.updateAutoInstallTitle,
+                    isOn: model.updateAutoInstallBinding,
+                    identifier: "settings-update-auto-install-toggle"
+                )
+                hintText(SentinelSettingsCopy.updateAutoInstallHint)
             }
 
             VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xs) {
@@ -812,6 +871,110 @@ enum SettingsViewRedrawProbe {
     @MainActor
     static func storeObservingProbe(store: SentinelStore, counter: SentinelViewBodyCounter) -> some View {
         StoreObservingProbeView(store: store, bodyCounter: counter)
+    }
+}
+
+/// 设置窗的素输入框。离屏渲染（截图 smoke）不吃 .plain TextField，
+/// 用 Text 替身（限一行截断，长 key 不许把行高撑开）；真实窗口挂真输入框。
+struct SettingsPlainTextField: View {
+    let placeholder: String
+    @Binding var text: String
+    var width: CGFloat?
+    let identifier: String
+    let rendersOffscreen: Bool
+    var onSubmit: () -> Void = {}
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            if text.isEmpty {
+                Text(placeholder)
+                    .font(SentinelTheme.Fonts.subtitle)
+                    .foregroundStyle(SentinelTheme.Colors.secondaryForeground.opacity(0.7))
+                    .padding(.horizontal, SentinelTheme.Spacing.md)
+                    .allowsHitTesting(false)
+            } else {
+                Text(text)
+                    .font(SentinelTheme.Fonts.subtitle)
+                    .foregroundStyle(SentinelTheme.Colors.foreground)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                    .padding(.horizontal, SentinelTheme.Spacing.md)
+                    .allowsHitTesting(false)
+            }
+            if !rendersOffscreen {
+                TextField("", text: $text)
+                    .font(SentinelTheme.Fonts.subtitle)
+                    .foregroundStyle(Color.clear)
+                    .textFieldStyle(.plain)
+                    .padding(.horizontal, SentinelTheme.Spacing.md)
+                    .onSubmit(onSubmit)
+            }
+        }
+        .frame(maxWidth: width, alignment: .leading)
+        .frame(minHeight: SentinelTheme.Metrics.controlHeight)
+        .background(SentinelTheme.Colors.inset)
+        .clipShape(RoundedRectangle(cornerRadius: SentinelTheme.Radius.field))
+        .overlay(
+            RoundedRectangle(cornerRadius: SentinelTheme.Radius.field)
+                .stroke(
+                    SentinelTheme.Colors.border,
+                    lineWidth: SentinelTheme.Metrics.borderWidth
+                )
+        )
+        .accessibilityIdentifier(identifier)
+    }
+}
+
+/// 设置窗的 key 输入行：名称 + key + 添加。草稿文本放在本地 @State，
+/// 每次按键只重渲染这一行——之前草稿挂在模型的 @Published 上，一个键
+/// 让整个设置窗重算一遍，字越多 Text 排版越贵，粘贴长 key 越打越卡。
+struct SettingsKeyInputRow: View {
+    let namePlaceholder: String
+    let keyPlaceholder: String
+    let addButtonTitle: String
+    let identifierPrefix: String
+    let minKeyLength: Int
+    let rendersOffscreen: Bool
+    let onAdd: (_ name: String, _ key: String) -> Void
+    @State private var nameText = ""
+    @State private var keyText = ""
+
+    private var canAdd: Bool {
+        keyText.trimmingCharacters(in: .whitespacesAndNewlines).count >= minKeyLength
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
+            SettingsPlainTextField(
+                placeholder: namePlaceholder,
+                text: $nameText,
+                width: SentinelTheme.Metrics.settingsCountFieldWidth * 1.6,
+                identifier: "\(identifierPrefix)-new-label",
+                rendersOffscreen: rendersOffscreen,
+                onSubmit: add
+            )
+            SettingsPlainTextField(
+                placeholder: keyPlaceholder,
+                text: $keyText,
+                width: nil,
+                identifier: "\(identifierPrefix)-new-key",
+                rendersOffscreen: rendersOffscreen,
+                onSubmit: add
+            )
+            Button(addButtonTitle, action: add)
+                .buttonStyle(SentinelButtonStyle(kind: .primary, compact: true))
+                .disabled(!canAdd)
+                .accessibilityIdentifier("\(identifierPrefix)-add")
+        }
+    }
+
+    private func add() {
+        guard canAdd else {
+            return
+        }
+        onAdd(nameText, keyText)
+        nameText = ""
+        keyText = ""
     }
 }
 

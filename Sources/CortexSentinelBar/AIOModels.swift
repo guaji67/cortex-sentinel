@@ -488,13 +488,18 @@ enum BalanceSectionPresentation: Equatable {
     static func resolve(
         official: OfficialUsageSnapshot,
         aio: AIOSnapshot,
-        glm: GLMUsageSnapshot = .empty
+        glm: GLMUsageSnapshot = .empty,
+        commandCodeShowsEntry: Bool = false
     ) -> Self {
         if hasDisplayableAccount(official: official, aio: aio) {
             return .expanded
         }
         if !glm.accounts.isEmpty {
             // 有 key 就展开：有数字显数字，全失败也展开露出报错行。
+            return .expanded
+        }
+        if commandCodeShowsEntry {
+            // Command Code 一旦占位（有 key 显数据行，没 key 显填写引导行）就展开。
             return .expanded
         }
         if aio.sourceState == .invalid {

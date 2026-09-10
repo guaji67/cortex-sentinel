@@ -286,6 +286,31 @@ final class SentinelNotifier {
         }
     }
 
+    /// 新版本提醒：不走攒批、不受四类开关约束，每个版本只发一次（由调用方去重）。
+    func postUpdateAvailable(version: String) {
+        postNow(
+            title: "哨兵有新版本 \(version)",
+            body: "打开哨兵面板，底部可以一键更新。"
+        )
+    }
+
+    private func postNow(title: String, body: String) {
+        guard let center = notificationCenter else {
+            return
+        }
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        center.add(
+            UNNotificationRequest(
+                identifier: "cortex-sentinel-update-\(UUID().uuidString)",
+                content: content,
+                trigger: nil
+            )
+        )
+    }
+
     private func send(_ draft: SentinelNotificationDraft) {
         if let sendHandler {
             sendHandler(draft)

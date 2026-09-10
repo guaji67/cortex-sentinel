@@ -28,6 +28,19 @@ final class SentinelStore {
     private(set) var cursorUsage: CursorUsageSnapshot = .empty
     /// 智谱 GLM Coding Plan 订阅额度；每把 key 一行，跟随官方额度同一套刷新时机。
     private(set) var glmUsage: GLMUsageSnapshot = .empty
+    /// Command Code 订阅额度（5h / 周 / 月）；每把 key 一行，跟随官方额度同一套刷新时机。
+    private(set) var commandCodeUsage: CommandCodeUsageSnapshot = .empty
+    /// 生效的 Command Code key 数。余额区引导行的显隐读它（tracked），
+    /// 增删 key 后界面立刻跟着变；entries 本体是内部消费，不进 Observation。
+    private(set) var commandCodeKeyCount = 0
+    /// 面板点名字改显示名的覆盖表缓存；改名时同步更新，读它的行才会刷新。
+    private(set) var providerRenames: [String: String] = [:]
+    /// 检查到的可安装更新；没有更新保持 nil，底部不占位。
+    private(set) var availableUpdate: SentinelUpdateInfo?
+    /// 换装进行中（下载/校验/跑安装脚本），底部的更新行用它换加载态。
+    private(set) var isUpdateInstalling = false
+    /// 更新流程的反馈文案（失败原因等）。
+    private(set) var updateInstallMessage: String?
     private(set) var channelStatus: ChannelStatusSnapshot = .missing
     private(set) var backgroundJobs: BackgroundJobsSnapshot = .missing
     /// Cortex 打包进度；没打包在跑时保持 nil，界面不占地方。
@@ -58,6 +71,12 @@ final class SentinelStore {
     @ObservationIgnored private var lastGLMUsageAttemptAt: Date?
     /// 当前生效的 GLM key（自动识别 ∪ 用户添加 − 用户删除）。
     @ObservationIgnored private var glmKeyEntries: [GLMKeyEntry] = []
+    @ObservationIgnored private var commandCodeFetchInFlight = false
+    @ObservationIgnored private var lastCommandCodeAttemptAt: Date?
+    /// 当前生效的 Command Code key（自动识别 ∪ 用户添加 − 用户删除）。
+    @ObservationIgnored private var commandCodeKeyEntries: [CommandCodeKeyEntry] = []
+    @ObservationIgnored private var updateCheckInFlight = false
+    @ObservationIgnored private var lastUpdateCheckAt: Date?
     private(set) var isOfficialUsageRefreshCoolingDown = false
     private(set) var loginItemPresentation: LoginItemPanelPresentation = .disabled
     private(set) var paths: SentinelPaths
@@ -197,6 +216,10 @@ final class SentinelStore {
         settingsModel.applyGLMKeys = { [weak self] in
             self?.glmKeysDidChange()
         }
+        settingsModel.applyCommandCodeKeys = { [weak self] in
+            self?.commandCodeKeysDidChange()
+        }
+        providerRenames = ProviderRenameStore.renames(defaults: defaults)
     }
 
     deinit {
@@ -280,6 +303,8 @@ final class SentinelStore {
             self?.refreshOfficialUsage(reason: .automatic)
             self?.refreshCursorUsage()
             self?.refreshGLMUsage()
+            self?.refreshCommandCodeUsage()
+            self?.refreshUpdateCheck()
         }
 
         // v3.2 第 5 点：启动即清一次派工日志，之后每小时巡检一次。
@@ -350,6 +375,7 @@ final class SentinelStore {
         settingsModel.watchPath = paths.logsDirectory.path
         settingsModel.isWatchLocked = isWatchDirectoryLocked
         reloadGLMKeys()
+        reloadCommandCodeKeys()
         SentinelSettingsWindowController.shared.show(model: settingsModel)
     }
 
@@ -430,6 +456,8 @@ final class SentinelStore {
         refreshOfficialUsage(reason: .startup)
         refreshCursorUsage()
         refreshGLMUsage()
+        refreshCommandCodeUsage()
+        refreshUpdateCheck()
     }
 
     func refreshStatuses() async {
@@ -644,12 +672,14 @@ final class SentinelStore {
         refreshOfficialUsage(reason: .panelOpen, bypassMinimumInterval: true)
         refreshCursorUsage(bypassMinimumInterval: true)
         refreshGLMUsage(bypassMinimumInterval: true)
+        refreshCommandCodeUsage(bypassMinimumInterval: true)
     }
 
     func refreshOfficialUsageManually() {
         refreshOfficialUsage(reason: .manual)
         refreshCursorUsage()
         refreshGLMUsage()
+        refreshCommandCodeUsage()
     }
 
     /// Cursor 余额跟着官方额度走同一套时机（启动 / 定时 / 开面板 / 手动点刷新），
@@ -787,6 +817,182 @@ final class SentinelStore {
     private func glmKeysDidChange() {
         reloadGLMKeys()
         refreshGLMUsage(bypassMinimumInterval: true)
+    }
+
+    var hasCommandCodeKeys: Bool {
+        !commandCodeKeyEntries.isEmpty
+    }
+
+    /// Command Code 额度跟着官方额度走同一套时机（启动 / 定时 / 开面板 / 手动点刷新）。
+    /// 一把 key 一行；一把 key 都没有就保持空快照，余额区给引导入口。
+    private func refreshCommandCodeUsage(bypassMinimumInterval: Bool = false) {
+        let timestamp = self.now()
+        guard !commandCodeFetchInFlight else {
+            return
+        }
+        if !bypassMinimumInterval, let lastCommandCodeAttemptAt {
+            let minimumInterval: TimeInterval
+            if isPanelPresented {
+                minimumInterval = SentinelSettings.balanceRecheckInterval(defaults: defaults).rawValue
+            } else {
+                minimumInterval = CommandCodeUsageConstants.automaticRefreshInterval
+            }
+            guard timestamp.timeIntervalSince(lastCommandCodeAttemptAt) >= minimumInterval else {
+                return
+            }
+        }
+        reloadCommandCodeKeys()
+        guard !commandCodeKeyEntries.isEmpty else {
+            lastCommandCodeAttemptAt = timestamp
+            publishCommandCodeUsage(.empty)
+            return
+        }
+        commandCodeFetchInFlight = true
+        lastCommandCodeAttemptAt = timestamp
+        let entries = commandCodeKeyEntries
+        let client = CommandCodeUsageClient()
+
+        Task { @MainActor [weak self] in
+            let fresh = await client.fetchAll(entries: entries)
+            guard let self else {
+                return
+            }
+            self.commandCodeFetchInFlight = false
+            self.publishCommandCodeUsage(
+                CommandCodeUsageSnapshot.merged(previous: self.commandCodeUsage, fresh: fresh, now: self.now())
+            )
+        }
+    }
+
+    private func publishCommandCodeUsage(_ snapshot: CommandCodeUsageSnapshot) {
+        scrollPublishGate.publish(surface: .officialUsage) { [weak self] in
+            guard let self, self.commandCodeUsage != snapshot else {
+                return
+            }
+            self.commandCodeUsage = snapshot
+        }
+    }
+
+    /// 重新认一遍 Command Code key（自动识别 + 用户手加 − 用户删除），
+    /// 并把结果同步给设置窗；增删 key 之后不用重启就生效。
+    func reloadCommandCodeKeys() {
+        let detected = CommandCodeKeyDetector.detect(environment: environment)
+        let user = SentinelSettings.commandCodeUserKeys(defaults: defaults)
+        let removed = SentinelSettings.commandCodeRemovedKeys(defaults: defaults)
+        let effective = CommandCodeKeyStore.effectiveEntries(
+            detected: detected,
+            user: user,
+            removedKeys: removed
+        )
+        if commandCodeKeyEntries != effective {
+            commandCodeKeyEntries = effective
+        }
+        if commandCodeKeyCount != effective.count {
+            commandCodeKeyCount = effective.count
+        }
+        if settingsModel.ccEntries != effective {
+            settingsModel.ccEntries = effective
+        }
+    }
+
+    /// 设置里增删 key 后走这里：重识别 + 立刻重查一轮。
+    private func commandCodeKeysDidChange() {
+        reloadCommandCodeKeys()
+        refreshCommandCodeUsage(bypassMinimumInterval: true)
+    }
+
+    /// 面板行的显示名：优先用户改过的覆盖名。
+    func providerDisplayName(namespace: String, id: String, fallback: String) -> String {
+        providerRenames["\(namespace):\(id)"] ?? fallback
+    }
+
+    /// 面板里直接点名字改名；空名字等于恢复默认名。
+    func renameProvider(namespace: String, id: String, name: String) {
+        let renameID = "\(namespace):\(id)"
+        ProviderRenameStore.setDisplayName(defaults: defaults, id: renameID, name: name)
+        let next = ProviderRenameStore.renames(defaults: defaults)
+        if providerRenames != next {
+            providerRenames = next
+        }
+    }
+
+    // MARK: - 自更新
+
+    /// 更新检查跟着官方额度的定时器走（10 分钟拍一次，最短 1 小时真查一次）。
+    /// 失败静默：更新源挂了不该给用户添堵。
+    func refreshUpdateCheck(bypassMinimumInterval: Bool = false) {
+        let timestamp = self.now()
+        guard !updateCheckInFlight else {
+            return
+        }
+        if !bypassMinimumInterval, let lastUpdateCheckAt,
+           timestamp.timeIntervalSince(lastUpdateCheckAt) < SentinelUpdateConstants.checkInterval {
+            return
+        }
+        updateCheckInFlight = true
+        lastUpdateCheckAt = timestamp
+        let checker = SentinelUpdateChecker()
+
+        Task { @MainActor [weak self] in
+            let result: Result<SentinelUpdateInfo?, SentinelUpdateError>
+            do {
+                result = .success(try await checker.fetchLatest())
+            } catch let error as SentinelUpdateError {
+                result = .failure(error)
+            } catch {
+                result = .failure(.network)
+            }
+            guard let self else {
+                return
+            }
+            self.updateCheckInFlight = false
+            guard case let .success(update) = result else {
+                return
+            }
+            guard let update else {
+                // 已经是最新：把旧提示撤掉。
+                if self.availableUpdate != nil {
+                    self.availableUpdate = nil
+                }
+                return
+            }
+            self.availableUpdate = update
+            if SentinelSettings.updateAutoInstall(defaults: self.defaults) {
+                self.performUpdateNow()
+            } else if SentinelSettings.lastNotifiedUpdateVersion(defaults: self.defaults) != update.version {
+                SentinelSettings.setLastNotifiedUpdateVersion(update.version, defaults: self.defaults)
+                self.notifier.postUpdateAvailable(version: update.version)
+            }
+        }
+    }
+
+    /// 下载 → 校验 → 换装重启。安装脚本会把哨兵重启掉，所以最后的收尾
+    /// （装回默认态）只是兜底，正常路径走不到。
+    func performUpdateNow() {
+        guard let update = availableUpdate, !isUpdateInstalling else {
+            return
+        }
+        isUpdateInstalling = true
+        updateInstallMessage = nil
+        let installer = SentinelUpdateInstaller()
+
+        Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            do {
+                try await installer.install(update)
+                // 安装脚本会停掉本进程再拉新的；活到这里说明脚本没接管，如实提示。
+                self.isUpdateInstalling = false
+                self.updateInstallMessage = "脚本没有完成重启，请手动重启哨兵"
+            } catch let error as SentinelUpdateError {
+                self.isUpdateInstalling = false
+                self.updateInstallMessage = error.userMessage
+            } catch {
+                self.isUpdateInstalling = false
+                self.updateInstallMessage = SentinelUpdateError.network.userMessage
+            }
+        }
     }
 
     private func refreshOfficialUsage(
@@ -1176,6 +1382,7 @@ final class SentinelStore {
         official: OfficialUsageSnapshot? = nil,
         cursor: CursorUsageSnapshot? = nil,
         glm: GLMUsageSnapshot? = nil,
+        commandCode: CommandCodeUsageSnapshot? = nil,
         aio: AIOSnapshot? = nil,
         inputStatus: InputStatusSnapshot? = nil
     ) {
@@ -1187,6 +1394,9 @@ final class SentinelStore {
         }
         if let glm {
             self.glmUsage = glm
+        }
+        if let commandCode {
+            self.commandCodeUsage = commandCode
         }
         if let aio {
             apply(

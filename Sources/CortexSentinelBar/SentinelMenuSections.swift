@@ -93,6 +93,56 @@ enum SentinelSectionChrome {
     }
 }
 
+/// 余额行名字：点一下就地变输入框，回车提交、Esc 取消、点别处不提交。
+/// Falcon 2026-09-11 令：改名不要编辑按钮，直接点名字。空名字等于不改。
+struct EditableBalanceRowName: View {
+    let text: String
+    var accessibilityIdentifier: String = "editable-balance-name"
+    var onCommit: (String) -> Void
+    @State private var isEditing = false
+    @State private var draft = ""
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        if isEditing {
+            TextField("", text: $draft)
+                .textFieldStyle(.plain)
+                .font(SentinelTheme.Fonts.balanceName)
+                .foregroundStyle(SentinelTheme.Colors.foreground)
+                .frame(maxWidth: 160)
+                .focused($isFocused)
+                .onSubmit(commit)
+                .onExitCommand {
+                    isEditing = false
+                }
+                .accessibilityIdentifier(accessibilityIdentifier)
+        } else {
+            Text(text)
+                .font(SentinelTheme.Fonts.balanceName)
+                .foregroundStyle(SentinelTheme.Colors.foreground)
+                .lineLimit(1)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    draft = text
+                    isEditing = true
+                    Task { @MainActor in
+                        isFocused = true
+                    }
+                }
+                .accessibilityIdentifier(accessibilityIdentifier)
+        }
+    }
+
+    private func commit() {
+        isEditing = false
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != text else {
+            return
+        }
+        onCommit(trimmed)
+    }
+}
+
 /// 标题 + 副标题。读：paths（监视目录缺失）、lineGroups / boardWindow / localHost（计数）。
 struct SentinelHeaderSection: View {
     var store: SentinelStore
@@ -389,15 +439,19 @@ struct SentinelServiceSection: View {
     }
 }
 
-/// 余额（官方额度 + 中转各账号）。读：aio、officialUsage、两个手动刷新标志。
+/// 余额（官方额度 + 中转各账号）。读：aio、officialUsage、glmUsage、commandCodeUsage、
+/// commandCodeKeyCount、手动刷新标志。没配 Command Code key 时给引导行，点了回调上层弹填写面板。
 struct SentinelBalancesSection: View {
     var store: SentinelStore
+    /// 引导行点击回调；上层（SentinelMenuView）用它弹 key 填写浮层。
+    var onAddCommandCodeKey: () -> Void = {}
 
     var body: some View {
         switch BalanceSectionPresentation.resolve(
             official: store.officialUsage,
             aio: store.aio,
-            glm: store.glmUsage
+            glm: store.glmUsage,
+            commandCodeShowsEntry: true
         ) {
         case let .compact(statusText):
             SentinelSectionChrome.compactDiagnosticRow(title: "余额", status: statusText)
@@ -414,6 +468,8 @@ struct SentinelBalancesSection: View {
                 "余额",
                 trailing: SentinelTopChannelPresentation(aio: store.aio).balanceCountText
             )
+
+            commandCodeEntryRows
 
             glmUsageRows
 
@@ -438,6 +494,227 @@ struct SentinelBalancesSection: View {
         }
     }
 
+    /// Command Code 额度：一把 key 一行（5h / 周 / 月），排在 GLM 前面。
+    /// 一把 key 都没有时给「点击填写 API Key」引导行，点了就地弹填写面板。
+    @ViewBuilder private var commandCodeEntryRows: some View {
+        if store.commandCodeKeyCount == 0 && store.commandCodeUsage.accounts.isEmpty {
+            commandCodeGuideRow
+        } else {
+            VStack(spacing: SentinelTheme.Metrics.balanceRowSpacing) {
+                ForEach(store.commandCodeUsage.accounts) { account in
+                    commandCodeRow(account)
+                }
+                if store.commandCodeUsage.accounts.isEmpty {
+                    commandCodeWaitingRow
+                }
+            }
+        }
+    }
+
+    private var commandCodeGuideRow: some View {
+        Button(action: onAddCommandCodeKey) {
+            HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
+                Circle()
+                    .fill(SentinelTheme.Colors.secondaryForeground)
+                    .frame(
+                        width: SentinelTheme.Metrics.balanceDot,
+                        height: SentinelTheme.Metrics.balanceDot
+                    )
+                Text("Command Code")
+                    .font(SentinelTheme.Fonts.balanceName)
+                    .foregroundStyle(SentinelTheme.Colors.foreground)
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                Spacer(minLength: SentinelTheme.Spacing.xs)
+                HStack(alignment: .center, spacing: 4) {
+                    Text("点击填写 API Key")
+                        .font(SentinelTheme.Fonts.balanceMeta)
+                        .foregroundStyle(SentinelTheme.Colors.info)
+                    Image(systemName: "square.and.pencil")
+                        .font(SentinelTheme.Fonts.balanceMeta)
+                        .foregroundStyle(SentinelTheme.Colors.info)
+                }
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(2)
+            }
+            .frame(height: 38)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("填写 Command Code API Key，监控 5 小时 / 周 / 月额度")
+        .accessibilityIdentifier("commandcode-add-key-guide")
+    }
+
+    private var commandCodeWaitingRow: some View {
+        HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
+            Circle()
+                .fill(SentinelTheme.Colors.secondaryForeground)
+                .frame(
+                    width: SentinelTheme.Metrics.balanceDot,
+                    height: SentinelTheme.Metrics.balanceDot
+                )
+            Text("Command Code")
+                .font(SentinelTheme.Fonts.balanceName)
+                .foregroundStyle(SentinelTheme.Colors.foreground)
+                .lineLimit(1)
+                .layoutPriority(1)
+            Spacer(minLength: SentinelTheme.Spacing.xs)
+            Text(BalanceSectionPresentation.queryingStatusText)
+                .font(SentinelTheme.Fonts.balanceMeta)
+                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(2)
+        }
+        .frame(height: 38)
+        .contentShape(Rectangle())
+    }
+
+    private func commandCodeRow(_ account: CommandCodeAccountUsage) -> some View {
+        let displayName = store.providerDisplayName(
+            namespace: ProviderRenameNamespace.commandCode,
+            id: account.key,
+            fallback: account.displayTitle
+        )
+        let fiveHourRemaining = account.fiveHourWindow?.remainingPercentage
+        let weeklyRemaining = account.weeklyWindow?.remainingPercentage
+        let monthly = account.monthlyRemainingCredits
+        return HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
+            Circle()
+                .fill(commandCodeStatusColor(account))
+                .frame(
+                    width: SentinelTheme.Metrics.balanceDot,
+                    height: SentinelTheme.Metrics.balanceDot
+                )
+            EditableBalanceRowName(
+                text: displayName,
+                accessibilityIdentifier: "commandcode-name-\(account.maskedKeyText)"
+            ) { newName in
+                store.renameProvider(
+                    namespace: ProviderRenameNamespace.commandCode,
+                    id: account.key,
+                    name: newName
+                )
+            }
+            .layoutPriority(1)
+            Spacer(minLength: SentinelTheme.Spacing.xs)
+            if let failureText = commandCodeFailureText(account) {
+                Text(failureText)
+                    .font(SentinelTheme.Fonts.balanceMeta)
+                    .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(2)
+            } else {
+                HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
+                    if let fiveHourRemaining {
+                        remainingUsageSegment("5h", remaining: fiveHourRemaining)
+                    }
+                    if fiveHourRemaining != nil, weeklyRemaining != nil || monthly != nil {
+                        cursorUsageDivider
+                    }
+                    if let weeklyRemaining {
+                        remainingUsageSegment("周", remaining: weeklyRemaining)
+                    }
+                    if weeklyRemaining != nil, monthly != nil {
+                        cursorUsageDivider
+                    }
+                    if let monthly {
+                        commandCodeMonthlySegment(monthly)
+                    }
+                }
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(2)
+            }
+        }
+        .frame(height: 38)
+        .contentShape(Rectangle())
+        .help(commandCodeTooltip(account))
+    }
+
+    /// 无任何可显示数字时的右侧文案：优先报错；接口通了但什么都没有显示未知。
+    private func commandCodeFailureText(_ account: CommandCodeAccountUsage) -> String? {
+        if account.hasDisplayableNumber {
+            return nil
+        }
+        if let errorMessage = account.errorMessage, !errorMessage.isEmpty {
+            return errorMessage
+        }
+        return "未知"
+    }
+
+    private func commandCodeMonthlySegment(_ credits: Double) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 3) {
+            Text("月")
+                .font(SentinelTheme.Fonts.balanceAmount)
+                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                .lineLimit(1)
+            Text(String(format: "$%.2f", credits))
+                .font(SentinelTheme.Fonts.balanceAmount)
+                .foregroundStyle(credits <= 0
+                    ? SentinelTheme.Colors.danger
+                    : credits < CommandCodeUsageConstants.lowMonthlyCredits
+                        ? SentinelTheme.Colors.warning
+                        : SentinelTheme.Colors.foreground)
+                .monospacedDigit()
+                .lineLimit(1)
+        }
+    }
+
+    private func commandCodeStatusColor(_ account: CommandCodeAccountUsage) -> Color {
+        if account.stale {
+            return SentinelTheme.Colors.warning
+        }
+        let windows = [account.fiveHourWindow?.remainingPercentage, account.weeklyWindow?.remainingPercentage]
+            .compactMap { $0 }
+        if windows.contains(where: { $0 <= 100 - AIOConstants.quotaWarningThreshold }) {
+            return SentinelTheme.Colors.warning
+        }
+        if let monthly = account.monthlyRemainingCredits, monthly <= 0 {
+            return SentinelTheme.Colors.danger
+        }
+        return account.hasDisplayableNumber
+            ? SentinelTheme.Colors.success
+            : SentinelTheme.Colors.secondaryForeground
+    }
+
+    private func commandCodeTooltip(_ account: CommandCodeAccountUsage) -> String {
+        var parts = ["Command Code 订阅 · \(store.providerDisplayName(namespace: ProviderRenameNamespace.commandCode, id: account.key, fallback: account.displayTitle))"]
+        if let identity = account.accountIdentity, !identity.isEmpty {
+            parts.append(identity)
+        }
+        for (name, window) in [("5小时", account.fiveHourWindow), ("周", account.weeklyWindow)] {
+            guard let window else {
+                continue
+            }
+            var piece = "\(name) "
+            if let used = window.used, let cap = window.cap, cap > 0 {
+                piece += "已用 \(used) / \(cap)"
+            } else if let remaining = window.remainingPercentage {
+                piece += "剩余 \(Int(remaining.rounded()))%"
+            }
+            if let resetAt = window.resetAt {
+                let formatter = DateFormatter()
+                formatter.locale = Locale(identifier: "zh_CN")
+                formatter.dateFormat = "M/d HH:mm"
+                piece += "，\(formatter.string(from: resetAt)) 重置"
+            }
+            parts.append(piece)
+        }
+        if let monthly = account.monthlyRemainingCredits {
+            parts.append("月度余额 $\(String(format: "%.2f", monthly))")
+        }
+        if let checkedAt = account.checkedAt {
+            parts.append("\(SentinelTimeFormat.clockTime(checkedAt)) 更新")
+        }
+        if account.stale {
+            parts.append("已过期")
+        }
+        if let errorMessage = account.errorMessage {
+            parts.append(errorMessage)
+        }
+        return parts.joined(separator: " · ")
+    }
+
     /// 智谱 GLM Coding Plan 额度：每把 key 一行（5 小时窗 + 周窗两组剩余百分比），
     /// 排在 Cursor 前面。没识别到 key 就不占位。
     @ViewBuilder private var glmUsageRows: some View {
@@ -453,18 +730,29 @@ struct SentinelBalancesSection: View {
     }
 
     private func glmUsageRow(_ account: GLMAccountUsage) -> some View {
-        HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
+        let displayName = store.providerDisplayName(
+            namespace: ProviderRenameNamespace.glm,
+            id: account.key,
+            fallback: account.displayTitle
+        )
+        return HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
             Circle()
                 .fill(glmUsageStatusColor(account))
                 .frame(
                     width: SentinelTheme.Metrics.balanceDot,
                     height: SentinelTheme.Metrics.balanceDot
                 )
-            Text(account.displayTitle)
-                .font(SentinelTheme.Fonts.balanceName)
-                .foregroundStyle(SentinelTheme.Colors.foreground)
-                .lineLimit(1)
-                .layoutPriority(1)
+            EditableBalanceRowName(
+                text: displayName,
+                accessibilityIdentifier: "glm-name-\(account.maskedKeyText)"
+            ) { newName in
+                store.renameProvider(
+                    namespace: ProviderRenameNamespace.glm,
+                    id: account.key,
+                    name: newName
+                )
+            }
+            .layoutPriority(1)
             Spacer(minLength: SentinelTheme.Spacing.xs)
             if let failureText = glmUsageFailureText(account) {
                 // 探测失败或两头都空就如实说一句，不摆「5h —」的空架子。
@@ -701,6 +989,24 @@ struct SentinelBalancesSection: View {
                     .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
                     .lineLimit(1)
             }
+        }
+    }
+
+    /// 直接拿「剩余百分比」的段（Command Code 返回的就是剩余口径）。
+    private func remainingUsageSegment(
+        _ label: String,
+        remaining: Double
+    ) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 3) {
+            Text(label)
+                .font(SentinelTheme.Fonts.balanceAmount)
+                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                .lineLimit(1)
+            Text(cursorUsageRemainingText(remaining))
+                .font(SentinelTheme.Fonts.balanceAmount)
+                .foregroundStyle(cursorUsageRemainingColor(remaining))
+                .monospacedDigit()
+                .lineLimit(1)
         }
     }
 
@@ -1425,6 +1731,10 @@ struct SentinelFooterSection: View {
     var body: some View {
         let topChannel = SentinelTopChannelPresentation(aio: store.aio)
         VStack(alignment: .leading, spacing: SentinelTheme.Spacing.md) {
+            if let update = store.availableUpdate {
+                updateRow(update)
+            }
+
             Rectangle()
                 .fill(SentinelTheme.Colors.border)
                 .frame(height: SentinelTheme.Spacing.hairline)
@@ -1514,5 +1824,151 @@ struct SentinelFooterSection: View {
                 .accessibilityLabel("退出")
             }
         }
+    }
+
+    /// 新版本提示行：自动安装关着时在这里手动点更新；开着时只剩加载态。
+    private func updateRow(_ update: SentinelUpdateInfo) -> some View {
+        VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xs) {
+            HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
+                Image(systemName: "arrow.down.circle")
+                    .foregroundStyle(SentinelTheme.Colors.info)
+                Text("新版本 \(update.version) 可更新")
+                    .font(SentinelTheme.Fonts.rowTitle)
+                    .foregroundStyle(SentinelTheme.Colors.foreground)
+                Spacer(minLength: SentinelTheme.Spacing.sm)
+                if store.isUpdateInstalling {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .controlSize(.small)
+                    Text("正在更新")
+                        .font(SentinelTheme.Fonts.subtitle)
+                        .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                } else {
+                    Button("立即更新") {
+                        store.performUpdateNow()
+                    }
+                    .buttonStyle(SentinelButtonStyle(kind: .primary, compact: true))
+                    .accessibilityIdentifier("update-install-button")
+                }
+            }
+            if let message = store.updateInstallMessage {
+                Text(message)
+                    .font(SentinelTheme.Fonts.metadata)
+                    .foregroundStyle(SentinelTheme.Colors.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .help(update.notes ?? "")
+    }
+}
+
+/// Command Code 首次接入引导：余额区引导行点开，就地填 key，不绕设置窗。
+/// 字段直接绑设置模型的 cc 输入框；保存走 addCommandCodeKeyFromFields，
+/// 由 applyCommandCodeKeys 回调 store 立刻重查一轮。
+struct SentinelCommandCodeKeyPanel: View {
+    @ObservedObject var model: SentinelSettingsModel
+    let onClose: () -> Void
+
+    private var canSave: Bool {
+        model.ccNewKey.trimmingCharacters(in: .whitespacesAndNewlines).count
+            >= CommandCodeUsageConstants.minKeyLength
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: SentinelTheme.Spacing.section) {
+            HStack(spacing: SentinelTheme.Spacing.md) {
+                Text("接入 Command Code")
+                    .font(SentinelTheme.Fonts.rowTitle)
+                    .foregroundStyle(SentinelTheme.Colors.foreground)
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(
+                    SentinelLineControlButtonStyle(
+                        width: SentinelTheme.Metrics.lineControlIconWidth
+                    )
+                )
+                .help("关闭")
+                .accessibilityLabel("关闭")
+            }
+
+            Text("粘贴 API Key，哨兵只查账务接口，不消耗 credits。用过官方 CLI 的话会自动识别登录态，无需手动填。")
+                .font(SentinelTheme.Fonts.subtitle)
+                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
+                TextField(SentinelSettingsCopy.commandCodeNameFieldPlaceholder, text: $model.ccNewLabel)
+                    .textFieldStyle(.plain)
+                    .font(SentinelTheme.Fonts.subtitle)
+                    .foregroundStyle(SentinelTheme.Colors.foreground)
+                    .padding(.horizontal, SentinelTheme.Spacing.md)
+                    .frame(width: 110)
+                    .frame(minHeight: SentinelTheme.Metrics.controlHeight)
+                    .background(SentinelTheme.Colors.inset)
+                    .clipShape(RoundedRectangle(cornerRadius: SentinelTheme.Radius.field))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: SentinelTheme.Radius.field)
+                            .stroke(
+                                SentinelTheme.Colors.border,
+                                lineWidth: SentinelTheme.Metrics.borderWidth
+                            )
+                    )
+                    .accessibilityIdentifier("commandcode-panel-new-label")
+
+                TextField(SentinelSettingsCopy.commandCodeKeyFieldPlaceholder, text: $model.ccNewKey)
+                    .textFieldStyle(.plain)
+                    .font(SentinelTheme.Fonts.subtitle)
+                    .foregroundStyle(SentinelTheme.Colors.foreground)
+                    .padding(.horizontal, SentinelTheme.Spacing.md)
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: SentinelTheme.Metrics.controlHeight)
+                    .background(SentinelTheme.Colors.inset)
+                    .clipShape(RoundedRectangle(cornerRadius: SentinelTheme.Radius.field))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: SentinelTheme.Radius.field)
+                            .stroke(
+                                SentinelTheme.Colors.border,
+                                lineWidth: SentinelTheme.Metrics.borderWidth
+                            )
+                    )
+                    .onSubmit(save)
+                    .accessibilityIdentifier("commandcode-panel-new-key")
+            }
+
+            HStack(spacing: SentinelTheme.Spacing.md) {
+                if !canSave {
+                    Text("key 至少 \(CommandCodeUsageConstants.minKeyLength) 位")
+                        .font(SentinelTheme.Fonts.metadata)
+                        .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                }
+                Spacer()
+                Button("保存并开始监控", action: save)
+                    .buttonStyle(SentinelButtonStyle(kind: .primary, compact: true))
+                    .disabled(!canSave)
+                    .accessibilityIdentifier("commandcode-panel-save")
+            }
+        }
+        .padding(SentinelTheme.Spacing.sheet)
+        .frame(width: 360)
+        .background(SentinelTheme.Colors.panel)
+        .clipShape(RoundedRectangle(cornerRadius: SentinelTheme.Radius.panel))
+        .overlay(
+            RoundedRectangle(cornerRadius: SentinelTheme.Radius.panel)
+                .stroke(
+                    SentinelTheme.Colors.border,
+                    lineWidth: SentinelTheme.Metrics.borderWidth
+                )
+        )
+        .accessibilityIdentifier("commandcode-key-panel")
+    }
+
+    private func save() {
+        guard canSave else {
+            return
+        }
+        model.addCommandCodeKeyFromFields()
+        onClose()
     }
 }

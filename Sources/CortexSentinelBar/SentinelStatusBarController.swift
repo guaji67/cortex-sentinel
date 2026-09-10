@@ -2,6 +2,38 @@ import AppKit
 import Observation
 import SwiftUI
 
+/// 哨兵以 accessory 策略手动启动，系统不会替它装默认主菜单。没有编辑菜单，
+/// Cmd+V/X/C/A 这些键等价就没有分发出口——设置窗输入框右键能粘贴
+/// （上下文菜单直达 paste:），Cmd+V 却没反应，就是这个原因。补一套最小
+/// 标准菜单：动作走响应链（nil target），菜单栏本身对 accessory 应用不可见。
+@MainActor
+enum SentinelAppMenus {
+    static func installStandardMenus() {
+        let mainMenu = NSMenu()
+
+        let appItem = NSMenuItem()
+        mainMenu.addItem(appItem)
+        let appMenu = NSMenu()
+        appItem.submenu = appMenu
+        appMenu.addItem(
+            withTitle: "退出 Cortex 哨兵",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        )
+
+        let editItem = NSMenuItem()
+        mainMenu.addItem(editItem)
+        let editMenu = NSMenu(title: "编辑")
+        editItem.submenu = editMenu
+        editMenu.addItem(withTitle: "剪切", action: Selector(("cut:")), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "拷贝", action: Selector(("copy:")), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "粘贴", action: Selector(("paste:")), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "全选", action: Selector(("selectAll:")), keyEquivalent: "a")
+
+        NSApplication.shared.mainMenu = mainMenu
+    }
+}
+
 @MainActor
 final class SentinelApplicationDelegate: NSObject, NSApplicationDelegate {
     private var statusBarController: SentinelStatusBarController?
@@ -10,6 +42,8 @@ final class SentinelApplicationDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         launchAppleEvent = LaunchAppleEventSummary.fromCurrentAppleEvent()
+        // 主菜单必须在 didFinishLaunching 前挂上，键等价（Cmd+V 等）才有分发链。
+        SentinelAppMenus.installStandardMenus()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

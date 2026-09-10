@@ -1037,13 +1037,15 @@ final class SentinelStore {
                     dmgURL = try await installer.prepare(update)
                 }
                 try installer.commit(dmgURL: dmgURL)
-                // 安装脚本会停掉本进程再拉新的；活到这里说明脚本没接管，如实提示。
-                self.isUpdateInstalling = false
-                self.updateInstallMessage = "脚本没有完成重启，请手动重启哨兵"
+                // 安装脚本会停掉本进程再拉新的；活到这里说明脚本没接管，
+                // 补一脚 kickstart 完成重启，再不行才把失败亮出来。
+                installer.recoverAfterFailedInstall()
             } catch let error as SentinelUpdateError {
+                installer.recoverAfterFailedInstall()
                 self.isUpdateInstalling = false
                 self.updateInstallMessage = error.userMessage
             } catch {
+                installer.recoverAfterFailedInstall()
                 self.isUpdateInstalling = false
                 self.updateInstallMessage = SentinelUpdateError.network.userMessage
             }

@@ -133,6 +133,23 @@ final class SentinelUpdaterTests: XCTestCase {
         XCTAssertFalse(shell.didRunAttach)
     }
 
+    /// 换装失败自愈：补 bootstrap + kickstart 把 launchd 任务和哨兵拉回来。
+    func testRecoveryBootstrapsAndKickstartsLaunchd() {
+        let shell = ScriptedShellRunner(attachOutput: "", gateAccepted: true)
+        SentinelUpdateInstaller(
+            loader: makeLoader(dmgBytes: Data(), shaHex: String(repeating: "0", count: 64)),
+            shell: shell
+        ).recoverAfterFailedInstall()
+        XCTAssertTrue(shell.invocations.contains { invocation in
+            invocation.launchPath == "/bin/launchctl" && invocation.arguments.first == "bootstrap"
+        })
+        XCTAssertTrue(shell.invocations.contains { invocation in
+            invocation.launchPath == "/bin/launchctl"
+                && invocation.arguments.first == "kickstart"
+                && invocation.arguments.last == "gui/\(getuid())/com.cortex.sentinelbar"
+        })
+    }
+
     func testInstallerRunsGateAndInstallScriptOnMount() async throws {
         let dmgBytes = Data("real-dmg".utf8)
         let digest = SHA256.hash(data: dmgBytes).map { String(format: "%02x", $0) }.joined()

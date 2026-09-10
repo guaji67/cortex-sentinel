@@ -307,6 +307,22 @@ struct SentinelUpdateInstaller: Sendable {
         return size > 0
     }
 
+    /// 换装失败后的自愈：install-app.sh 失败时可能已经 bootout 卸了任务
+    /// （0.1.8 首次更新撞 App Management 授权实锤），不兜底哨兵就躺平了。
+    /// 先补 bootstrap（任务还在位时该步报错无所谓），再 kickstart 强制拉起。
+    func recoverAfterFailedInstall() {
+        let plistPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents/com.cortex.sentinelbar.plist").path
+        _ = try? shell.run(
+            launchPath: "/bin/launchctl",
+            arguments: ["bootstrap", "gui/\(getuid())", plistPath]
+        )
+        _ = try? shell.run(
+            launchPath: "/bin/launchctl",
+            arguments: ["kickstart", "-k", "gui/\(getuid())/com.cortex.sentinelbar"]
+        )
+    }
+
     private func download(_ update: SentinelUpdateInfo) async throws -> URL {
         var request = URLRequest(url: update.dmgURL)
         request.timeoutInterval = SentinelUpdateConstants.downloadTimeout

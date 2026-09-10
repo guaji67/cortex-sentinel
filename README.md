@@ -35,7 +35,7 @@ Swift + SwiftUI 写成，单二进制，没有第三方依赖。
 
 ### 自动更新
 
-哨兵会定时查 GitHub Releases 上的最新正式版（每小时最多一次）。发现新版本时发一条系统通知，面板底部出现「新版本 x.y.z 可更新」，点「立即更新」就下载、sha256 校验、系统安全校验，然后跑安装脚本换掉 /Applications 里的 app 并自动重启。设置里可以打开「自动下载并安装更新」，开了就全程静默，连点都不用点。更新只认 Developer ID 签名且过了公证的包，校验不过直接放弃。
+哨兵会定时查 GitHub Releases 上的最新正式版（每小时最多一次），发现新版本就后台静默下载并做 sha256 校验，面板右上角（标题旁边）出现更新按钮：下载中显示「更新下载中」，就绪后显示「重启更新」，点一下换装并自动重启哨兵，全程不弹窗。设置里可以打开「自动下载并安装更新」，开了就下载完自动换装，连点都不用点。更新只认 Developer ID 签名且过了公证的包，校验不过直接放弃；换装万一失败会自动把 launchd 任务拉回来，哨兵不会躺平。首次更新时 macOS 会弹一次 App Management 授权（保护 /Applications 的系统规矩，Sparkle 系应用同样要弹），允许一次之后不再打扰。
 
 自己发版的流程：`RELEASE_VERSION=x.y.z bash scripts/build-release.sh` 出签名公证过的 DMG，写好更新说明后 `bash scripts/publish-release.sh x.y.z <说明文件>` 发到 GitHub。
 

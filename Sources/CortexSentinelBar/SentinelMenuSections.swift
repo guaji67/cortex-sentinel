@@ -115,8 +115,9 @@ struct UsageTimeBar: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
+                // 灰色底轨：满格在哪一目了然。
                 Capsule()
-                    .fill(SentinelTheme.Colors.inset)
+                    .fill(SentinelTheme.Colors.secondaryForeground.opacity(0.22))
                 Capsule()
                     .fill(fillColor)
                     .frame(width: max(2, proxy.size.width * clamped))
@@ -124,6 +125,86 @@ struct UsageTimeBar: View {
         }
         .frame(height: SentinelTheme.Metrics.timeBarHeight)
         .accessibilityHidden(true)
+    }
+}
+
+/// 离屏渲染验收用：置真时详情卡常显，不用真鼠标悬停就能出图检查布局。
+private struct HoverCardPreviewKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var hoverCardPreview: Bool {
+        get { self[HoverCardPreviewKey.self] }
+        set { self[HoverCardPreviewKey.self] = newValue }
+    }
+}
+
+/// 悬停 0.5 秒弹出的详情卡：标题 + 逐行明细。
+/// 不用系统 tooltip：弹层里系统悬浮提示经常不出，且样式没法设计。
+struct BalanceHoverDetail: View {
+    let title: String
+    let lines: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xxs) {
+            Text(title)
+                .font(SentinelTheme.Fonts.rowTitle)
+                .foregroundStyle(SentinelTheme.Colors.foreground)
+            ForEach(lines, id: \.self) { line in
+                Text(line)
+                    .font(SentinelTheme.Fonts.subtitle)
+                    .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(SentinelTheme.Spacing.md)
+        .frame(width: 300, alignment: .leading)
+        .background(SentinelTheme.Colors.panel)
+        .clipShape(RoundedRectangle(cornerRadius: SentinelTheme.Radius.panel))
+        .overlay(
+            RoundedRectangle(cornerRadius: SentinelTheme.Radius.panel)
+                .stroke(SentinelTheme.Colors.border, lineWidth: SentinelTheme.Metrics.borderWidth)
+        )
+        .shadow(color: .black.opacity(0.35), radius: 6, y: 2)
+        .accessibilityIdentifier("balance-hover-detail")
+    }
+}
+
+/// 悬停 0.5 秒后显示详情卡，移开即消失；显示期间该行置顶避免被相邻行盖住。
+struct HoverDetailCard: ViewModifier {
+    let title: () -> String
+    let lines: () -> [String]
+    @Environment(\.hoverCardPreview) private var preview
+    @State private var pending = false
+    @State private var visible = false
+
+    private var showsCard: Bool { visible || preview }
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { hovering in
+                if hovering {
+                    pending = true
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 500_000_000)
+                        if pending {
+                            visible = true
+                        }
+                    }
+                } else {
+                    pending = false
+                    visible = false
+                }
+            }
+            .overlay(alignment: .leading) {
+                if showsCard {
+                    BalanceHoverDetail(title: title(), lines: lines())
+                        .offset(y: -30)
+                        .transition(.opacity)
+                }
+            }
+            .zIndex(showsCard ? 99 : 0)
     }
 }
 
@@ -715,8 +796,7 @@ struct SentinelBalancesSection: View {
                                 valueText: cursorUsageRemainingText(fiveHourRemaining),
                                 valueColor: cursorUsageRemainingColor(fiveHourRemaining),
                                 columnWidth: SentinelTheme.Metrics.usageColWidth1,
-                                barFraction: fiveHourBar,
-                                barHelp: "5 小时窗倒计时"
+                                barFraction: fiveHourBar
                             )
                         }
                         if fiveHourRemaining != nil, weeklyRemaining != nil || monthly != nil {
@@ -728,8 +808,7 @@ struct SentinelBalancesSection: View {
                                 valueText: cursorUsageRemainingText(weeklyRemaining),
                                 valueColor: cursorUsageRemainingColor(weeklyRemaining),
                                 columnWidth: SentinelTheme.Metrics.usageColWidth2,
-                                barFraction: weeklyBar,
-                                barHelp: "周窗倒计时"
+                                barFraction: weeklyBar
                             )
                         }
                         if weeklyRemaining != nil, monthly != nil {
@@ -745,8 +824,7 @@ struct SentinelBalancesSection: View {
                                         ? SentinelTheme.Colors.warning
                                         : SentinelTheme.Colors.foreground,
                                 columnWidth: SentinelTheme.Metrics.usageColWidth3,
-                                barFraction: monthlyBar,
-                                barHelp: account.periodEnd.map(Self.monthlyResetHelpText) ?? ""
+                                barFraction: monthlyBar
                             )
                         }
                     }
@@ -759,7 +837,10 @@ struct SentinelBalancesSection: View {
         }
         .frame(height: SentinelTheme.Metrics.usageRowHeight)
         .contentShape(Rectangle())
-        .help(commandCodeTooltip(account))
+        .modifier(HoverDetailCard(
+            title: { self.commandCodeDetailTitle(account) },
+            lines: { self.commandCodeDetailLines(account) }
+        ))
     }
 
     /// 无任何可显示数字时的右侧文案：优先报错；接口通了但什么都没有显示未知。
@@ -780,8 +861,7 @@ struct SentinelBalancesSection: View {
         valueText: String,
         valueColor: Color,
         columnWidth: CGFloat,
-        barFraction: Double?,
-        barHelp: String = ""
+        barFraction: Double?
     ) -> some View {
         VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xxs) {
             HStack(alignment: .firstTextBaseline, spacing: 3) {
@@ -798,7 +878,6 @@ struct SentinelBalancesSection: View {
             if let barFraction {
                 UsageTimeBar(fraction: barFraction)
                     .frame(width: SentinelTheme.Metrics.timeBarWidth)
-                    .help(barHelp)
             }
         }
         .frame(width: columnWidth, alignment: .leading)
@@ -823,49 +902,61 @@ struct SentinelBalancesSection: View {
             : SentinelTheme.Colors.secondaryForeground
     }
 
-    private func commandCodeTooltip(_ account: CommandCodeAccountUsage) -> String {
-        var parts = ["Command Code 订阅 · \(store.providerDisplayName(namespace: ProviderRenameNamespace.commandCode, id: account.key, fallback: account.displayTitle))"]
+    private func commandCodeDetailTitle(_ account: CommandCodeAccountUsage) -> String {
+        "Command Code 订阅 · \(store.providerDisplayName(namespace: ProviderRenameNamespace.commandCode, id: account.key, fallback: account.displayTitle))"
+    }
+
+    private func commandCodeDetailLines(_ account: CommandCodeAccountUsage) -> [String] {
+        var lines: [String] = []
         if let identity = account.accountIdentity, !identity.isEmpty {
-            parts.append(identity)
+            lines.append(identity)
         }
-        for (name, window) in [("5小时", account.fiveHourWindow), ("周", account.weeklyWindow)] {
+        for (name, window) in [("5 小时窗", account.fiveHourWindow), ("周窗", account.weeklyWindow)] {
             guard let window else {
                 continue
             }
             var piece = "\(name) "
             if let used = window.used, let cap = window.cap, cap > 0 {
-                piece += "已用 \(used) / \(cap)"
+                piece += "已用 \(Self.windowAmountText(used)) / \(Self.windowAmountText(cap))"
             } else if let remaining = window.remainingPercentage {
                 piece += "剩余 \(Int(remaining.rounded()))%"
             }
             if let resetAt = window.resetAt {
-                let formatter = DateFormatter()
-                formatter.locale = Locale(identifier: "zh_CN")
-                formatter.dateFormat = "M/d HH:mm"
-                piece += "，\(formatter.string(from: resetAt)) 重置"
+                piece += "，\(Self.shortTime(resetAt)) 重置"
             }
-            parts.append(piece)
+            lines.append(piece)
         }
         if let monthly = account.monthlyRemainingCredits {
-            var piece = "月度余额 $\(String(format: "%.2f", monthly))"
+            var piece = "月余 $\(String(format: "%.2f", monthly))"
             if let periodEnd = account.periodEnd {
-                let formatter = DateFormatter()
-                formatter.locale = Locale(identifier: "zh_CN")
-                formatter.dateFormat = "M/d HH:mm"
-                piece += "，\(formatter.string(from: periodEnd)) 刷新"
+                piece += "，\(Self.shortTime(periodEnd)) 刷新"
             }
-            parts.append(piece)
+            lines.append(piece)
         }
         if let checkedAt = account.checkedAt {
-            parts.append("\(SentinelTimeFormat.clockTime(checkedAt)) 更新")
+            lines.append("\(SentinelTimeFormat.clockTime(checkedAt)) 更新")
         }
         if account.stale {
-            parts.append("已过期")
+            lines.append("数据已过期")
         }
         if let errorMessage = account.errorMessage {
-            parts.append(errorMessage)
+            lines.append(errorMessage)
         }
-        return parts.joined(separator: " · ")
+        return lines
+    }
+
+    /// 窗口用量的整数就去掉小数点，小数留一位：1.334076828 → 1.3，14.0 → 14。
+    private static func windowAmountText(_ value: Double) -> String {
+        value.rounded() == value
+            ? String(Int(value))
+            : String(format: "%.1f", value)
+    }
+
+    private static func shortTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "M/d HH:mm"
+        return formatter.string(from: date)
     }
 
     /// 智谱 GLM Coding Plan 额度：每把 key 一行（5 小时窗 + 周窗两组剩余百分比），
@@ -939,8 +1030,7 @@ struct SentinelBalancesSection: View {
                                     cursorUsageRemainingColor(min(100, max(0, 100 - $0)))
                                 } ?? SentinelTheme.Colors.secondaryForeground,
                                 columnWidth: SentinelTheme.Metrics.usageColWidth1,
-                                barFraction: fiveHourBar,
-                                barHelp: "5 小时窗倒计时"
+                                barFraction: fiveHourBar
                             )
                         }
                         if hasFiveHour, hasWeekly {
@@ -956,8 +1046,7 @@ struct SentinelBalancesSection: View {
                                     cursorUsageRemainingColor(min(100, max(0, 100 - $0)))
                                 } ?? SentinelTheme.Colors.secondaryForeground,
                                 columnWidth: SentinelTheme.Metrics.usageColWidth2,
-                                barFraction: weeklyBar,
-                                barHelp: "周窗倒计时"
+                                barFraction: weeklyBar
                             )
                         }
                         if account.cashBalance != nil {
@@ -976,7 +1065,10 @@ struct SentinelBalancesSection: View {
         }
         .frame(height: SentinelTheme.Metrics.usageRowHeight)
         .contentShape(Rectangle())
-        .help(glmUsageTooltip(account))
+        .modifier(HoverDetailCard(
+            title: { self.glmDetailTitle(account) },
+            lines: { self.glmDetailLines(account) }
+        ))
     }
 
     /// 无任何可显示数字时的右侧文案：优先报错；接口通了但两头都空显示未知。
@@ -1041,12 +1133,16 @@ struct SentinelBalancesSection: View {
             : SentinelTheme.Colors.secondaryForeground
     }
 
-    private func glmUsageTooltip(_ account: GLMAccountUsage) -> String {
-        var parts = ["GLM Coding Plan · \(account.displayTitle)"]
+    private func glmDetailTitle(_ account: GLMAccountUsage) -> String {
+        "GLM Coding Plan · \(store.providerDisplayName(namespace: ProviderRenameNamespace.glm, id: account.key, fallback: account.displayTitle))"
+    }
+
+    private func glmDetailLines(_ account: GLMAccountUsage) -> [String] {
+        var lines: [String] = []
         if let level = account.level, !level.isEmpty {
-            parts.append("档位 \(level)")
+            lines.append("档位 \(level)")
         }
-        for (name, window) in [("5小时", account.fiveHourWindow), ("周", account.weeklyWindow)] {
+        for (name, window) in [("5 小时窗", account.fiveHourWindow), ("周窗", account.weeklyWindow)] {
             guard let window else {
                 continue
             }
@@ -1057,23 +1153,20 @@ struct SentinelBalancesSection: View {
                 piece += "已用 \(Int(percent.rounded()))%"
             }
             if let resetAt = window.resetAt {
-                let formatter = DateFormatter()
-                formatter.locale = Locale(identifier: "zh_CN")
-                formatter.dateFormat = "M/d HH:mm"
-                piece += "，\(formatter.string(from: resetAt)) 重置"
+                piece += "，\(Self.shortTime(resetAt)) 重置"
             }
-            parts.append(piece)
+            lines.append(piece)
         }
         if let checkedAt = account.checkedAt {
-            parts.append("\(SentinelTimeFormat.clockTime(checkedAt)) 更新")
+            lines.append("\(SentinelTimeFormat.clockTime(checkedAt)) 更新")
         }
         if account.stale {
-            parts.append("已过期")
+            lines.append("数据已过期")
         }
         if let errorMessage = account.errorMessage {
-            parts.append(errorMessage)
+            lines.append(errorMessage)
         }
-        return parts.joined(separator: " · ")
+        return lines
     }
 
     /// 积分数字按官方口径缩写：2201 → 2,201；12000 → 1.2万。
@@ -1116,14 +1209,6 @@ struct SentinelBalancesSection: View {
             length = 30 * 24 * 3600
         }
         return min(1, max(0, end.timeIntervalSince(now) / length))
-    }
-
-    /// 月余指的是订阅账期内剩余的 credits，账期结束就刷新。
-    static func monthlyResetHelpText(_ periodEnd: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "M/d HH:mm"
-        return "月余 = 订阅账期内剩余 credits，\(formatter.string(from: periodEnd)) 刷新"
     }
 
     /// Cursor 订阅余额：三组（模式 / API / Bot）排成一行，只报剩余百分比。
@@ -1214,24 +1299,6 @@ struct SentinelBalancesSection: View {
                     .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
                     .lineLimit(1)
             }
-        }
-    }
-
-    /// 直接拿「剩余百分比」的段（Command Code 返回的就是剩余口径）。
-    private func remainingUsageSegment(
-        _ label: String,
-        remaining: Double
-    ) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 3) {
-            Text(label)
-                .font(SentinelTheme.Fonts.balanceAmount)
-                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
-                .lineLimit(1)
-            Text(cursorUsageRemainingText(remaining))
-                .font(SentinelTheme.Fonts.balanceAmount)
-                .foregroundStyle(cursorUsageRemainingColor(remaining))
-                .monospacedDigit()
-                .lineLimit(1)
         }
     }
 

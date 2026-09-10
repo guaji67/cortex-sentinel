@@ -118,16 +118,23 @@ enum PanelPNGRenderer {
     static func render(
         fixture: PanelPreviewFixture,
         to path: String,
-        demoBalances: Bool = false
+        demoBalances: Bool = false,
+        previewHoverCard: Bool = false
     ) async throws {
-        try await render(fixture: fixture, to: URL(fileURLWithPath: path), demoBalances: demoBalances)
+        try await render(
+            fixture: fixture,
+            to: URL(fileURLWithPath: path),
+            demoBalances: demoBalances,
+            previewHoverCard: previewHoverCard
+        )
     }
 
     @MainActor
     static func render(
         fixture: PanelPreviewFixture,
         to url: URL,
-        demoBalances: Bool = false
+        demoBalances: Bool = false,
+        previewHoverCard: Bool = false
     ) async throws {
         _ = NSApplication.shared
         let session = try await PanelPreviewFactory.makeSession(fixture: fixture)
@@ -137,6 +144,7 @@ enum PanelPNGRenderer {
         }
 
         let view = SentinelMenuView(store: session.store, rendersOffscreen: true)
+            .environment(\.hoverCardPreview, previewHoverCard)
             .frame(width: SentinelTheme.Metrics.menuWidth)
             .fixedSize(horizontal: true, vertical: true)
         let renderer = ImageRenderer(content: view)

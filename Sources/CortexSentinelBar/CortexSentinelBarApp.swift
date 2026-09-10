@@ -27,6 +27,8 @@ enum CortexSentinelBarMain {
     /// 真实 store + 真实本机环境离屏出一张面板 PNG（等余额/额度回来再渲染）。
     /// 与 --render-panel-png 的 fixture 隔离环境相对，用于改动后的真机验收。
     static let renderLivePanelPNGArgument = "--render-live-panel-png"
+    /// 配合两张出图参数：详情卡常显，验收悬停布局不用真鼠标。
+    static let previewHoverCardArgument = "--preview-hover-card"
     static let livePanelSettleSecondsArgument = "--settle-seconds"
 
     @MainActor
@@ -177,7 +179,8 @@ enum CortexSentinelBarMain {
             try await PanelPNGRenderer.render(
                 fixture: fixture,
                 to: outputPath,
-                demoBalances: arguments.contains(demoBalancesArgument)
+                demoBalances: arguments.contains(demoBalancesArgument),
+                previewHoverCard: arguments.contains(previewHoverCardArgument)
             )
             print("written \(outputPath)")
         } catch {
@@ -209,6 +212,7 @@ enum CortexSentinelBarMain {
                 withIntermediateDirectories: true
             )
             let view = SentinelMenuView(store: store, rendersOffscreen: true)
+                .environment(\.hoverCardPreview, arguments.contains(previewHoverCardArgument))
                 .frame(width: SentinelTheme.Metrics.menuWidth)
                 .fixedSize(horizontal: true, vertical: true)
             let renderer = ImageRenderer(content: view)

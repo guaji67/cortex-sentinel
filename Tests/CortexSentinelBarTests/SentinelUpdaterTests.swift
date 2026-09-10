@@ -150,23 +150,58 @@ final class SentinelUpdaterTests: XCTestCase {
         })
     }
 
-    func testInstallerRunsGateAndInstallScriptOnMount() async throws {
+    func testInstallerHandsOffToLaunchdJobOnMount() async throws {
         let dmgBytes = Data("real-dmg".utf8)
         let digest = SHA256.hash(data: dmgBytes).map { String(format: "%02x", $0) }.joined()
         let shell = ScriptedShellRunner(attachOutput: makeAttachPlist(mount: "/Volumes/Cortex 哨兵"), gateAccepted: true)
+        let plistURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cc-test-\(UUID().uuidString)/com.cortex.sentinelbar.update.plist")
         let installer = SentinelUpdateInstaller(
             loader: makeLoader(dmgBytes: dmgBytes, shaHex: digest),
-            shell: shell
+            shell: shell,
+            updateJobPlistURL: plistURL
         )
         try await installer.install(makeUpdate())
 
-        // 闸和安装脚本都跑过：spctl 校验挂载点里的 app，安装脚本带 --app-source。
+        // 闸跑过：spctl 校验挂载点里的 app。
         XCTAssertEqual(shell.invocations.filter { $0.launchPath == "/usr/sbin/spctl" }.count, 1)
+        // 移交换装：bootstrap 一次性任务。
         XCTAssertTrue(shell.invocations.contains { invocation in
-            invocation.launchPath == "/bin/bash"
-                && invocation.arguments == ["/Volumes/Cortex 哨兵/scripts/install-app.sh", "--app-source", "/Volumes/Cortex 哨兵/Cortex哨兵.app"]
+            invocation.launchPath == "/bin/launchctl" && invocation.arguments.first == "bootstrap"
         })
-        // 收尾卸载镜像。
+        // 移交成功后 DMG 保持挂载（任务自己卸），这里不许 detach。
+        XCTAssertFalse(shell.invocations.contains { $0.arguments.first == "detach" })
+        // 任务 plist 指向 DMG 里的安装脚本，自带失败自愈和自我清理。
+        let plistData = try Data(contentsOf: plistURL)
+        let plist = try PropertyListSerialization.propertyList(from: plistData, format: nil) as! [String: Any]
+        let arguments = try XCTUnwrap(plist["ProgramArguments"] as? [String])
+        XCTAssertEqual(arguments.first, "/bin/bash")
+        let script = try XCTUnwrap(arguments.last)
+        XCTAssertTrue(script.contains("/Volumes/Cortex 哨兵/scripts/install-app.sh"))
+        XCTAssertTrue(script.contains("--app-source '/Volumes/Cortex 哨兵/Cortex哨兵.app'"))
+        XCTAssertTrue(script.contains("install-app.sh"))
+        XCTAssertTrue(script.contains("bootstrap"))
+        XCTAssertTrue(script.contains("detach"))
+    }
+
+    func testInstallerDetachesWhenHandOffFails() async throws {
+        let dmgBytes = Data("real-dmg".utf8)
+        let digest = SHA256.hash(data: dmgBytes).map { String(format: "%02x", $0) }.joined()
+        let shell = ScriptedShellRunner(attachOutput: makeAttachPlist(mount: "/Volumes/Cortex 哨兵"), gateAccepted: true)
+        shell.bootstrapFails = true
+        let installer = SentinelUpdateInstaller(
+            loader: makeLoader(dmgBytes: dmgBytes, shaHex: digest),
+            shell: shell,
+            updateJobPlistURL: FileManager.default.temporaryDirectory
+                .appendingPathComponent("cc-test-\(UUID().uuidString)/update.plist")
+        )
+        do {
+            _ = try await installer.install(makeUpdate())
+            XCTFail("bootstrap 失败应当抛错")
+        } catch let error as SentinelUpdateError {
+            XCTAssertEqual(error, .installScriptFailed)
+        }
+        // 移交失败：这里负责把 DMG 卸干净。
         XCTAssertTrue(shell.invocations.contains { $0.arguments.first == "detach" })
     }
 
@@ -246,7 +281,7 @@ final class SentinelUpdaterTests: XCTestCase {
         }
     }
 
-    /// 记录调用、可编程 spctl 结果的假 shell。
+    /// 记录调用、可编程 spctl/bootstrap 结果的假 shell。
     private final class ScriptedShellRunner: SentinelShellRunning, @unchecked Sendable {
         struct Invocation: Equatable {
             let launchPath: String
@@ -255,6 +290,7 @@ final class SentinelUpdaterTests: XCTestCase {
 
         let attachOutput: String
         let gateAccepted: Bool
+        var bootstrapFails = false
         private let lock = NSLock()
         private var recorded: [Invocation] = []
 
@@ -282,6 +318,8 @@ final class SentinelUpdaterTests: XCTestCase {
                 return (arguments.first == "attach" ? attachOutput : "", 0)
             case "/usr/sbin/spctl":
                 return ("", gateAccepted ? 0 : 1)
+            case "/bin/launchctl":
+                return ("", arguments.first == "bootstrap" && bootstrapFails ? 1 : 0)
             default:
                 return ("", 0)
             }

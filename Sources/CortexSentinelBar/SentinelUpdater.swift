@@ -236,24 +236,42 @@ struct SentinelShellRunner: SentinelShellRunning {
     }
 }
 
-/// 下载 → sha256 → spctl 闸 → install-app.sh 换装重启。步骤拆开注入，测试不连网。
+/// 下载 → sha256 → spctl 闸 → 一次性 launchd 任务换装重启。步骤拆开注入，测试不连网。
+///
+/// 为什么换装要经 launchd 任务：install-app.sh 会 bootout 停掉哨兵，而 launchd
+/// 停任务时杀的是整个进程组——换装脚本若是哨兵的子进程就跟着陪葬（0.1.8 首次
+/// 自更新实锤：DMG 已挂载、脚本死在换装前，哨兵停机 + 任务被卸）。把换装挂到
+/// 独立的一次性任务里，哨兵死活与它无关；这也是 Sparkle 官方对 launchd agent
+/// 场景不支持后，社区通行的自更新做法。
 struct SentinelUpdateInstaller: Sendable {
     private let loader: any SentinelUpdateLoading
     private let shell: any SentinelShellRunning
     private let workDirectory: URL
+    /// 一次性换装任务的 plist 落点；测试注入临时目录。
+    private let updateJobPlistURL: URL
+    /// 主任务的 plist 路径，换装失败自愈时补 bootstrap 用。
+    private let mainJobPlistPath: String
     /// DMG 挂载点解析；独立出来是为了测试替身。
     private let mountPointResolver: @Sendable (String) -> String?
+
+    static let updateJobLabel = "com.cortex.sentinelbar.update"
 
     init(
         loader: any SentinelUpdateLoading = URLSession.shared,
         shell: any SentinelShellRunning = SentinelShellRunner(),
         workDirectory: URL = FileManager.default.temporaryDirectory
             .appendingPathComponent("cortex-sentinel-update", isDirectory: true),
+        updateJobPlistURL: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents/\(Self.updateJobLabel).plist"),
+        mainJobPlistPath: String = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents/com.cortex.sentinelbar.plist").path,
         mountPointResolver: @escaping @Sendable (String) -> String? = Self.hdiutilMountPoint
     ) {
         self.loader = loader
         self.shell = shell
         self.workDirectory = workDirectory
+        self.updateJobPlistURL = updateJobPlistURL
+        self.mainJobPlistPath = mainJobPlistPath
         self.mountPointResolver = mountPointResolver
     }
 
@@ -272,8 +290,9 @@ struct SentinelUpdateInstaller: Sendable {
         return dmgURL
     }
 
-    /// 后半段：挂载 → 系统安全闸 → 跑 DMG 自带的 install-app.sh 换装重启。
-    /// 传入 prepare 返回的本地 DMG 路径。
+    /// 后半段：挂载 → 系统安全闸 → 移交一次性 launchd 任务执行换装。
+    /// 传入 prepare 返回的本地 DMG 路径。成功移交后 DMG 保持挂载，
+    /// 由换装任务用完自行卸载；移交失败则这里负责卸载干净。
     func commit(dmgURL: URL) throws {
         let attachOutput = try shell.run(
             launchPath: "/usr/bin/hdiutil",
@@ -282,7 +301,12 @@ struct SentinelUpdateInstaller: Sendable {
         guard let mountPoint = mountPointResolver(attachOutput) else {
             throw SentinelUpdateError.installScriptFailed
         }
-        defer { _ = try? shell.run(launchPath: "/usr/bin/hdiutil", arguments: ["detach", mountPoint]) }
+        var handedOff = false
+        defer {
+            if !handedOff {
+                _ = try? shell.run(launchPath: "/usr/bin/hdiutil", arguments: ["detach", mountPoint])
+            }
+        }
 
         let appPath = mountPoint + "/Cortex哨兵.app"
         // 安全闸：不是 Developer ID 签名且系统认可的包，一个字节都不许换上来。
@@ -290,13 +314,53 @@ struct SentinelUpdateInstaller: Sendable {
         guard gate.status == 0 else {
             throw SentinelUpdateError.gateRejected
         }
-        let install = try shell.run(
-            launchPath: "/bin/bash",
-            arguments: [mountPoint + "/scripts/install-app.sh", "--app-source", appPath]
+        handedOff = try handOffToLaunchdInstaller(mountPoint: mountPoint, appPath: appPath)
+    }
+
+    /// 写一次性换装任务的 plist 并 bootstrap。任务自带收尾：
+    /// 失败补拉主任务、卸载 DMG、删自己的 plist、bootout 自己。
+    private func handOffToLaunchdInstaller(mountPoint: String, appPath: String) throws -> Bool {
+        let uid = getuid()
+        let script = """
+        '\(mountPoint)/scripts/install-app.sh' --app-source '\(appPath)'
+        rc=$?
+        if [ $rc -ne 0 ]; then
+          launchctl bootstrap gui/\(uid) '\(mainJobPlistPath)' >/dev/null 2>&1 || true
+        fi
+        /usr/bin/hdiutil detach '\(mountPoint)' >/dev/null 2>&1 || true
+        rm -f '\(updateJobPlistURL.path)'
+        launchctl bootout gui/\(uid)/\(Self.updateJobLabel) >/dev/null 2>&1 || true
+        exit $rc
+        """
+        let plist: [String: Any] = [
+            "Label": Self.updateJobLabel,
+            "ProgramArguments": ["/bin/bash", "-c", script],
+            "RunAtLoad": true,
+            "StandardOutPath": workDirectory.appendingPathComponent("update-job.log").path,
+            "StandardErrorPath": workDirectory.appendingPathComponent("update-job.log").path,
+        ]
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: plist, format: .xml, options: 0
         )
-        guard install.status == 0 else {
+        try FileManager.default.createDirectory(
+            at: updateJobPlistURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try data.write(to: updateJobPlistURL, options: .atomic)
+
+        // 上一次的换装任务若还挂着先卸掉，再挂新的。
+        _ = try? shell.run(
+            launchPath: "/bin/launchctl",
+            arguments: ["bootout", "gui/\(uid)/\(Self.updateJobLabel)"]
+        )
+        let boot = try shell.run(
+            launchPath: "/bin/launchctl",
+            arguments: ["bootstrap", "gui/\(uid)", updateJobPlistURL.path]
+        )
+        guard boot.status == 0 else {
             throw SentinelUpdateError.installScriptFailed
         }
+        return true
     }
 
     /// 下载好的本地 DMG 是否还有效（文件在且非空）。重启后临时目录可能被清。
@@ -307,9 +371,9 @@ struct SentinelUpdateInstaller: Sendable {
         return size > 0
     }
 
-    /// 换装失败后的自愈：install-app.sh 失败时可能已经 bootout 卸了任务
-    /// （0.1.8 首次更新撞 App Management 授权实锤），不兜底哨兵就躺平了。
-    /// 先补 bootstrap（任务还在位时该步报错无所谓），再 kickstart 强制拉起。
+    /// 换装失败后的自愈：一次性任务失败时可能已经 bootout 卸了主任务，
+    /// 不兜底哨兵就躺平了。先补 bootstrap（任务还在位时该步报错无所谓），
+    /// 再 kickstart 强制拉起。
     func recoverAfterFailedInstall() {
         let plistPath = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/LaunchAgents/com.cortex.sentinelbar.plist").path

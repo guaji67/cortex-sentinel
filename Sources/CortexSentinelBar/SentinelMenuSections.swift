@@ -93,6 +93,40 @@ enum SentinelSectionChrome {
     }
 }
 
+/// 时间横条：数字看额度，横条看时间——长度是当前窗口的剩余时间占比，
+/// 剩得越少越黄。时间看个大概就够，精确重置时间在悬停详情里。
+struct UsageTimeBar: View {
+    let fraction: Double
+
+    private var clamped: Double {
+        min(1, max(0, fraction))
+    }
+
+    private var fillColor: Color {
+        if clamped <= 0.05 {
+            return SentinelTheme.Colors.danger
+        }
+        if clamped <= 0.2 {
+            return SentinelTheme.Colors.warning
+        }
+        return SentinelTheme.Colors.success
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(SentinelTheme.Colors.inset)
+                Capsule()
+                    .fill(fillColor)
+                    .frame(width: max(2, proxy.size.width * clamped))
+            }
+        }
+        .frame(height: SentinelTheme.Metrics.timeBarHeight)
+        .accessibilityHidden(true)
+    }
+}
+
 /// 余额行名字：点一下就地变输入框，回车提交、Esc 取消、点别处不提交。
 /// Falcon 2026-09-11 令：改名不要编辑按钮，直接点名字。空名字等于不改。
 struct EditableBalanceRowName: View {
@@ -633,6 +667,11 @@ struct SentinelBalancesSection: View {
         let fiveHourRemaining = account.fiveHourWindow?.remainingPercentage
         let weeklyRemaining = account.weeklyWindow?.remainingPercentage
         let monthly = account.monthlyRemainingCredits
+        let timeFraction = Self.timeRemainingFraction(
+            resetAt: account.fiveHourWindow?.resetAt ?? account.weeklyWindow?.resetAt,
+            windowLength: account.fiveHourWindow != nil ? 5 * 3600 : 7 * 24 * 3600,
+            now: Date()
+        )
         return HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
             Circle()
                 .fill(commandCodeStatusColor(account))
@@ -652,36 +691,42 @@ struct SentinelBalancesSection: View {
             }
             .layoutPriority(1)
             Spacer(minLength: SentinelTheme.Spacing.xs)
-            if let failureText = commandCodeFailureText(account) {
-                Text(failureText)
-                    .font(SentinelTheme.Fonts.balanceMeta)
-                    .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .layoutPriority(2)
-            } else {
-                HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
-                    if let fiveHourRemaining {
-                        remainingUsageSegment("5h", remaining: fiveHourRemaining)
+            VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xxs) {
+                if let failureText = commandCodeFailureText(account) {
+                    Text(failureText)
+                        .font(SentinelTheme.Fonts.balanceMeta)
+                        .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                } else {
+                    HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
+                        if let fiveHourRemaining {
+                            remainingUsageSegment("5h", remaining: fiveHourRemaining)
+                        }
+                        if fiveHourRemaining != nil, weeklyRemaining != nil || monthly != nil {
+                            cursorUsageDivider
+                        }
+                        if let weeklyRemaining {
+                            remainingUsageSegment("周", remaining: weeklyRemaining)
+                        }
+                        if weeklyRemaining != nil, monthly != nil {
+                            cursorUsageDivider
+                        }
+                        if let monthly {
+                            commandCodeMonthlySegment(monthly, periodEnd: account.periodEnd)
+                        }
                     }
-                    if fiveHourRemaining != nil, weeklyRemaining != nil || monthly != nil {
-                        cursorUsageDivider
-                    }
-                    if let weeklyRemaining {
-                        remainingUsageSegment("周", remaining: weeklyRemaining)
-                    }
-                    if weeklyRemaining != nil, monthly != nil {
-                        cursorUsageDivider
-                    }
-                    if let monthly {
-                        commandCodeMonthlySegment(monthly)
+                    if let timeFraction {
+                        UsageTimeBar(fraction: timeFraction)
                     }
                 }
-                .fixedSize(horizontal: true, vertical: false)
-                .layoutPriority(2)
             }
+            .frame(
+                width: SentinelTheme.Metrics.usageBlockWidth,
+                alignment: .leading
+            )
         }
-        .frame(height: 38)
+        .frame(height: SentinelTheme.Metrics.usageRowHeight)
         .contentShape(Rectangle())
         .help(commandCodeTooltip(account))
     }
@@ -697,9 +742,9 @@ struct SentinelBalancesSection: View {
         return "未知"
     }
 
-    private func commandCodeMonthlySegment(_ credits: Double) -> some View {
+    private func commandCodeMonthlySegment(_ credits: Double, periodEnd: Date?) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 3) {
-            Text("月")
+            Text("月余")
                 .font(SentinelTheme.Fonts.balanceAmount)
                 .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
                 .lineLimit(1)
@@ -712,7 +757,16 @@ struct SentinelBalancesSection: View {
                         : SentinelTheme.Colors.foreground)
                 .monospacedDigit()
                 .lineLimit(1)
+                .help(periodEnd.map(Self.monthlyResetHelpText) ?? "")
         }
+    }
+
+    /// 月余指的是订阅账期内剩余的 credits，账期结束就刷新。
+    static func monthlyResetHelpText(_ periodEnd: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "M/d HH:mm"
+        return "月余 = 订阅账期内剩余 credits，\(formatter.string(from: periodEnd)) 刷新"
     }
 
     private func commandCodeStatusColor(_ account: CommandCodeAccountUsage) -> Color {
@@ -756,7 +810,14 @@ struct SentinelBalancesSection: View {
             parts.append(piece)
         }
         if let monthly = account.monthlyRemainingCredits {
-            parts.append("月度余额 $\(String(format: "%.2f", monthly))")
+            var piece = "月度余额 $\(String(format: "%.2f", monthly))"
+            if let periodEnd = account.periodEnd {
+                let formatter = DateFormatter()
+                formatter.locale = Locale(identifier: "zh_CN")
+                formatter.dateFormat = "M/d HH:mm"
+                piece += "，\(formatter.string(from: periodEnd)) 刷新"
+            }
+            parts.append(piece)
         }
         if let checkedAt = account.checkedAt {
             parts.append("\(SentinelTimeFormat.clockTime(checkedAt)) 更新")
@@ -790,6 +851,13 @@ struct SentinelBalancesSection: View {
             id: account.key,
             fallback: account.displayTitle
         )
+        let hasFiveHour = account.fiveHourWindow?.percentUsed != nil
+        let hasWeekly = account.weeklyWindow?.percentUsed != nil
+        let timeFraction = Self.timeRemainingFraction(
+            resetAt: account.fiveHourWindow?.resetAt ?? account.weeklyWindow?.resetAt,
+            windowLength: account.fiveHourWindow != nil ? 5 * 3600 : 7 * 24 * 3600,
+            now: Date()
+        )
         return HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
             Circle()
                 .fill(glmUsageStatusColor(account))
@@ -809,41 +877,42 @@ struct SentinelBalancesSection: View {
             }
             .layoutPriority(1)
             Spacer(minLength: SentinelTheme.Spacing.xs)
-            if let failureText = glmUsageFailureText(account) {
-                // 探测失败或两头都空就如实说一句，不摆「5h —」的空架子。
-                Text(failureText)
-                    .font(SentinelTheme.Fonts.balanceMeta)
-                    .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .layoutPriority(2)
-            } else {
-                // 探测到什么显示什么：有订阅窗显 5h/周，有现金余额显余，
-                // 都有就并排，中间点号隔开。
-                let hasFiveHour = account.fiveHourWindow?.percentUsed != nil
-                let hasWeekly = account.weeklyWindow?.percentUsed != nil
-                HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
-                    if hasFiveHour {
-                        cursorUsageSegment("5h", account.fiveHourWindow?.percentUsed)
-                    }
-                    if hasFiveHour, hasWeekly {
-                        cursorUsageDivider
-                    }
-                    if hasWeekly {
-                        cursorUsageSegment("周", account.weeklyWindow?.percentUsed)
-                    }
-                    if account.cashBalance != nil {
-                        if hasFiveHour || hasWeekly {
+            VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xxs) {
+                if let failureText = glmUsageFailureText(account) {
+                    Text(failureText)
+                        .font(SentinelTheme.Fonts.balanceMeta)
+                        .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                } else {
+                    HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
+                        if hasFiveHour {
+                            cursorUsageSegment("5h", account.fiveHourWindow?.percentUsed)
+                        }
+                        if hasFiveHour, hasWeekly {
                             cursorUsageDivider
                         }
-                        glmBalanceSegment(account)
+                        if hasWeekly {
+                            cursorUsageSegment("周", account.weeklyWindow?.percentUsed)
+                        }
+                        if account.cashBalance != nil {
+                            if hasFiveHour || hasWeekly {
+                                cursorUsageDivider
+                            }
+                            glmBalanceSegment(account)
+                        }
+                    }
+                    if let timeFraction {
+                        UsageTimeBar(fraction: timeFraction)
                     }
                 }
-                .fixedSize(horizontal: true, vertical: false)
-                .layoutPriority(2)
             }
+            .frame(
+                width: SentinelTheme.Metrics.usageBlockWidth,
+                alignment: .leading
+            )
         }
-        .frame(height: 38)
+        .frame(height: SentinelTheme.Metrics.usageRowHeight)
         .contentShape(Rectangle())
         .help(glmUsageTooltip(account))
     }
@@ -954,6 +1023,19 @@ struct SentinelBalancesSection: View {
         }
         let rounded = value.rounded() == value ? String(Int(value)) : String(format: "%.1f", value)
         return rounded
+    }
+
+    /// 时间维度：当前窗口的剩余时间占比（5 小时窗按 5h 折算，周窗按 7 天）。
+    /// 过了 resetAt 就是 0，横条见底；重置后 API 给新的 resetAt，横条回满。
+    static func timeRemainingFraction(
+        resetAt: Date?,
+        windowLength: TimeInterval,
+        now: Date
+    ) -> Double? {
+        guard let resetAt else {
+            return nil
+        }
+        return min(1, max(0, resetAt.timeIntervalSince(now) / windowLength))
     }
 
     /// Cursor 订阅余额：三组（模式 / API / Bot）排成一行，只报剩余百分比。

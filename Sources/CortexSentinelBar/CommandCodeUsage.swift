@@ -31,6 +31,8 @@ struct CommandCodeAccountUsage: Equatable, Sendable, Identifiable {
     let weeklyWindow: CommandCodeWindow?
     /// 月度剩余 credits（monthly + purchased + free 合计，按返回值算）。
     let monthlyRemainingCredits: Double?
+    /// 订阅账期结束时间 = 月度 credits 重置时间（subscriptions 接口拿，失败为空）。
+    let periodEnd: Date?
     let checkedAt: Date?
     let stale: Bool
     let errorMessage: String?
@@ -73,6 +75,7 @@ struct CommandCodeAccountUsage: Equatable, Sendable, Identifiable {
             fiveHourWindow: nil,
             weeklyWindow: nil,
             monthlyRemainingCredits: nil,
+            periodEnd: nil,
             checkedAt: nil,
             stale: false,
             errorMessage: errorMessage
@@ -91,6 +94,7 @@ struct CommandCodeAccountUsage: Equatable, Sendable, Identifiable {
             fiveHourWindow: old.fiveHourWindow,
             weeklyWindow: old.weeklyWindow,
             monthlyRemainingCredits: old.monthlyRemainingCredits,
+            periodEnd: periodEnd ?? old.periodEnd,
             checkedAt: old.checkedAt,
             stale: true,
             errorMessage: errorMessage ?? old.errorMessage
@@ -147,6 +151,7 @@ enum CommandCodeUsageClientError: Error, Equatable {
 enum CommandCodeUsageConstants {
     static let creditsEndpoint = URL(string: "https://api.commandcode.ai/alpha/billing/credits")!
     static let whoamiEndpoint = URL(string: "https://api.commandcode.ai/alpha/whoami")!
+    static let subscriptionEndpoint = URL(string: "https://api.commandcode.ai/alpha/billing/subscriptions")!
     /// CLI 的 account routes 对版本头敏感，跟着已验证的 CLI 版本走。
     static let cliVersionHeaderValue = "1.53.0"
     static let cliEnvironmentHeaderValue = "production"
@@ -167,15 +172,18 @@ extension URLSession: CommandCodeRequestLoading {}
 struct CommandCodeUsageClient: Sendable {
     private let creditsEndpoint: URL
     private let whoamiEndpoint: URL
+    private let subscriptionEndpoint: URL
     private let requestLoader: any CommandCodeRequestLoading
 
     init(
         creditsEndpoint: URL = CommandCodeUsageConstants.creditsEndpoint,
         whoamiEndpoint: URL = CommandCodeUsageConstants.whoamiEndpoint,
+        subscriptionEndpoint: URL = CommandCodeUsageConstants.subscriptionEndpoint,
         requestLoader: any CommandCodeRequestLoading = URLSession.shared
     ) {
         self.creditsEndpoint = creditsEndpoint
         self.whoamiEndpoint = whoamiEndpoint
+        self.subscriptionEndpoint = subscriptionEndpoint
         self.requestLoader = requestLoader
     }
 
@@ -184,13 +192,14 @@ struct CommandCodeUsageClient: Sendable {
     func fetchAll(entries: [CommandCodeKeyEntry]) async -> [CommandCodeAccountUsage] {
         await withTaskGroup(of: CommandCodeAccountUsage.self) { group in
             for entry in entries {
-                group.addTask { [creditsEndpoint, whoamiEndpoint, requestLoader] in
+                group.addTask { [creditsEndpoint, whoamiEndpoint, subscriptionEndpoint, requestLoader] in
                     do {
                         return try await Self.fetch(
                             key: entry.key,
                             label: entry.label,
                             creditsEndpoint: creditsEndpoint,
                             whoamiEndpoint: whoamiEndpoint,
+                            subscriptionEndpoint: subscriptionEndpoint,
                             requestLoader: requestLoader
                         )
                     } catch let error as CommandCodeUsageClientError {
@@ -215,16 +224,20 @@ struct CommandCodeUsageClient: Sendable {
         label: String,
         creditsEndpoint: URL,
         whoamiEndpoint: URL,
+        subscriptionEndpoint: URL,
         requestLoader: any CommandCodeRequestLoading,
         now: Date = Date()
     ) async throws -> CommandCodeAccountUsage {
         async let creditsOutcome = authorizedGet(apiKey: key, endpoint: creditsEndpoint, requestLoader: requestLoader)
         async let whoamiOutcome = try? authorizedGet(apiKey: key, endpoint: whoamiEndpoint, requestLoader: requestLoader)
+        async let subscriptionOutcome = try? authorizedGet(apiKey: key, endpoint: subscriptionEndpoint, requestLoader: requestLoader)
         let creditsData = try await creditsOutcome
         let whoamiData = await whoamiOutcome
+        let subscriptionData = await subscriptionOutcome
 
         let payload = try parseCreditsPayload(data: creditsData)
         let identity = whoamiData.flatMap(Self.parseAccountIdentity(data:))
+        let periodEnd = subscriptionData.flatMap(Self.parsePeriodEnd(data:))
         let monthlyRemaining = [payload.credits?.monthlyCredits,
                                 payload.credits?.purchasedCredits,
                                 payload.credits?.freeCredits]
@@ -240,6 +253,7 @@ struct CommandCodeUsageClient: Sendable {
             fiveHourWindow: payload.windowLimits?.fiveHour.map(Self.window(from:)),
             weeklyWindow: payload.windowLimits?.weekly.map(Self.window(from:)),
             monthlyRemainingCredits: hasMonthlyFigure ? monthlyRemaining : nil,
+            periodEnd: periodEnd,
             checkedAt: now,
             stale: false,
             errorMessage: nil
@@ -288,6 +302,27 @@ struct CommandCodeUsageClient: Sendable {
             throw CommandCodeUsageClientError.invalidResponse
         }
     }
+
+    /// /alpha/billing/subscriptions 的 data.currentPeriodEnd（ISO8601 带毫秒），
+    /// 即月度 credits 的重置时间。解析不了返回 nil，不影响额度数字。
+    static func parsePeriodEnd(data: Data) -> Date? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        let payload = (object["data"] as? [String: Any]) ?? object
+        guard let text = payload["currentPeriodEnd"] as? String else {
+            return nil
+        }
+        return Self.isoFormatter.date(from: text) ?? Self.isoFormatterNoFraction.date(from: text)
+    }
+
+    static let isoFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    static let isoFormatterNoFraction = ISO8601DateFormatter()
 
     /// whoami 的返回形态没进公开文档，用 JSONSerialization 容错提取：
     /// 顶层或 user/account 嵌套里，优先邮箱，其次 name，最后 id。

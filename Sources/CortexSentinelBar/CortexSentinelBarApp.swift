@@ -31,6 +31,8 @@ enum CortexSentinelBarMain {
 
     @MainActor
     static func main() async {
+        // 悬停详情 0.5 秒就出（系统默认约 1.5 秒起步，Falcon 2026-09-11 令）。
+        UserDefaults.standard.register(defaults: ["NSInitialToolTipDelay": 500])
         let arguments = ProcessInfo.processInfo.arguments
         if arguments.contains(dumpStateArgument) {
             runDumpStateCLI()

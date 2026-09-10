@@ -271,6 +271,7 @@ enum DemoBalancesPreview {
                         resetAt: checked.addingTimeInterval(3600 * 84)
                     ),
                     monthlyRemainingCredits: 52.3,
+                    periodEnd: checked.addingTimeInterval(3600 * 24 * 20),
                     checkedAt: checked,
                     stale: false,
                     errorMessage: nil

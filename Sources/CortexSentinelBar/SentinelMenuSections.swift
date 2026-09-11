@@ -134,10 +134,21 @@ private struct HoverCardPreviewKey: EnvironmentKey {
     static let defaultValue = false
 }
 
+/// 离屏渲染选行用：给了值（行名子串）就只常显命中那一行的卡，其他行不出，
+/// 一张图验一张卡。只在出图 CLI 里注入，生产不传。
+private struct HoverCardPreviewRowKey: EnvironmentKey {
+    static let defaultValue: String? = nil
+}
+
 extension EnvironmentValues {
     var hoverCardPreview: Bool {
         get { self[HoverCardPreviewKey.self] }
         set { self[HoverCardPreviewKey.self] = newValue }
+    }
+
+    var hoverCardPreviewRow: String? {
+        get { self[HoverCardPreviewRowKey.self] }
+        set { self[HoverCardPreviewRowKey.self] = newValue }
     }
 }
 
@@ -198,7 +209,7 @@ struct BalanceHoverDetail: View {
                             Text(line.label)
                                 .font(SentinelTheme.Fonts.balanceMeta)
                                 .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
-                                .frame(width: 58, alignment: .leading)
+                                .frame(width: 76, alignment: .leading)
                             Text(line.value)
                                 .font(SentinelTheme.Fonts.subtitle)
                                 .foregroundStyle(SentinelTheme.Colors.foreground)
@@ -232,7 +243,7 @@ struct BalanceHoverDetail: View {
             }
         }
         .padding(SentinelTheme.Spacing.md)
-        .frame(width: 296, alignment: .leading)
+        .frame(width: 312, alignment: .leading)
         .background(SentinelTheme.Colors.panel)
         .clipShape(RoundedRectangle(cornerRadius: SentinelTheme.Radius.panel))
         .overlay(
@@ -244,16 +255,36 @@ struct BalanceHoverDetail: View {
     }
 }
 
+/// 有详情卡在显示的余额区分支集合：行级 zIndex 只在分支内兄弟间排序，
+/// 跨分支（GLM 卡盖 Cursor 行等）要靠这个把 zIndex 提到余额区顶层。
+private struct BalanceCardBranchKey: PreferenceKey {
+    static var defaultValue: Set<String> = []
+    static func reduce(value: inout Set<String>, nextValue: () -> Set<String>) {
+        value.formUnion(nextValue())
+    }
+}
+
 /// 悬停 0.5 秒后显示详情卡，移开即消失；显示期间该行置顶避免被相邻行盖住。
 struct HoverDetailCard: ViewModifier {
     let makeContent: () -> BalanceHoverContent
     var isSuppressed: () -> Bool = { false }
+    /// 本行所属余额区分支（"cc" / "glm"），卡显示时上报给顶层排 z 序。
+    var branchID: String = ""
+    /// 选行出图用：本行是否命中 --preview-hover-row。选行模式下没传的行不出卡。
+    var previewRowMatch: Bool = false
     @Environment(\.hoverCardPreview) private var preview
+    @Environment(\.hoverCardPreviewRow) private var previewRowSelection
     @State private var pending = false
     @State private var visible = false
 
     /// 鼠标压在状态点上或正在拖拽时，卡片一律不出现，别挡拖拽的道。
-    private var showsCard: Bool { (visible || preview) && !isSuppressed() }
+    /// 选行模式（--preview-hover-row）下只开命中那一行，其他分区行没传匹配也不开。
+    private var showsCard: Bool {
+        if previewRowSelection != nil {
+            return previewRowMatch && !isSuppressed()
+        }
+        return (visible || preview) && !isSuppressed()
+    }
 
     func body(content: Content) -> some View {
         content
@@ -283,6 +314,7 @@ struct HoverDetailCard: ViewModifier {
                 }
             }
             .zIndex(showsCard ? 99 : 0)
+            .preference(key: BalanceCardBranchKey.self, value: showsCard ? [branchID] : [])
     }
 }
 
@@ -710,6 +742,8 @@ struct SentinelBalancesSection: View {
     @State private var dragLastCommittedDy: CGFloat = 0
     /// 点空白处时把焦点挪过来，正在编辑的行名随之失焦提交。
     @FocusState private var renameSinkFocused: Bool
+    /// 出图选行参数（行名子串），只在渲染 CLI 里注入。
+    @Environment(\.hoverCardPreviewRow) private var hoverCardPreviewRow
 
     var body: some View {
         switch BalanceSectionPresentation.resolve(
@@ -727,6 +761,9 @@ struct SentinelBalancesSection: View {
         }
     }
 
+    /// 有卡在显示的分支；分支容器据此顶到余额区所有行之上（行级 zIndex 跨不过分支）。
+    @State private var branchesWithHoverCard: Set<String> = []
+
     private var expandedSection: some View {
         VStack(alignment: .leading, spacing: SentinelTheme.Spacing.sm) {
             SentinelSectionChrome.sectionTitle(
@@ -735,8 +772,10 @@ struct SentinelBalancesSection: View {
             )
 
             commandCodeEntryRows
+                .zIndex(branchesWithHoverCard.contains("cc") ? 1 : 0)
 
             glmUsageRows
+                .zIndex(branchesWithHoverCard.contains("glm") ? 1 : 0)
 
             cursorUsageRow
 
@@ -757,6 +796,7 @@ struct SentinelBalancesSection: View {
                 }
             }
         }
+        .onPreferenceChange(BalanceCardBranchKey.self) { branchesWithHoverCard = $0 }
         .background {
             // 焦点垃圾桶：点空白处把焦点从正在编辑的行名上挪走，触发失焦提交。
             TextField("", text: .constant(""))
@@ -1018,7 +1058,9 @@ struct SentinelBalancesSection: View {
         .contentShape(Rectangle())
         .modifier(HoverDetailCard(
             makeContent: { self.commandCodeDetailContent(account) },
-            isSuppressed: { self.suppressCardKey == account.key || self.draggingKey != nil }
+            isSuppressed: { self.suppressCardKey == account.key || self.draggingKey != nil },
+            branchID: "cc",
+            previewRowMatch: self.rowMatchesPreviewSelection(displayName)
         ))
     }
 
@@ -1228,10 +1270,15 @@ struct SentinelBalancesSection: View {
         index: Int,
         keys: [String]
     ) -> some View {
+        // 认成派工套餐的行：名字用套餐 label（用户改名仍优先）、第三列换在跑/冷却。
+        // 数据过时（超过复用窗没读到新的）时身份照用，数值不显。
+        let planState = store.glmPlanStatus
+        let plan = CortexPlanStatusDisplay.plan(forAccountKey: account.key, in: planState?.payload)
+        let planFreshness = CortexPlanStatusDisplay.freshness(planState, now: Date())
         let displayName = store.providerDisplayName(
             namespace: ProviderRenameNamespace.glm,
             id: account.key,
-            fallback: account.displayTitle
+            fallback: CortexPlanStatusDisplay.rowTitleFallback(plan: plan, account: account)
         )
         let hasFiveHour = account.fiveHourWindow?.percentUsed != nil
         let hasWeekly = account.weeklyWindow?.percentUsed != nil
@@ -1296,7 +1343,22 @@ struct SentinelBalancesSection: View {
                                 barFraction: weeklyBar
                             )
                         }
-                        if account.cashBalance != nil {
+                        if let plan {
+                            // 套餐行的第三列：在跑/冷却，不画横条（横条一律是时间
+                            // 流逝，这列不是时间），也不加 .help（会和详情卡双弹）。
+                            // 数据过时后数值不可信，固定「在跑 —」不显示冷却。
+                            let columnText = planFreshness == .stale
+                                ? CortexPlanStatusDisplay.staleThirdColumnText
+                                : CortexPlanStatusDisplay.thirdColumnText(plan: plan, now: now)
+                            Text(columnText)
+                                .font(SentinelTheme.Fonts.balanceAmount)
+                                .foregroundStyle(SentinelTheme.Colors.foreground)
+                                .monospacedDigit()
+                                .lineLimit(1)
+                                .frame(width: SentinelTheme.Metrics.usageColWidth2, alignment: .leading)
+                                .accessibilityElement(children: .ignore)
+                                .accessibilityLabel(columnText)
+                        } else if account.cashBalance != nil {
                             glmBalanceSegment(account)
                         }
                     }
@@ -1311,8 +1373,18 @@ struct SentinelBalancesSection: View {
         .contentShape(Rectangle())
         .modifier(HoverDetailCard(
             makeContent: { self.glmDetailContent(account) },
-            isSuppressed: { self.suppressCardKey == account.key || self.draggingKey != nil }
+            isSuppressed: { self.suppressCardKey == account.key || self.draggingKey != nil },
+            branchID: "glm",
+            previewRowMatch: self.rowMatchesPreviewSelection(displayName)
         ))
+    }
+
+    /// 出图选行：给的是行名（用户改名后的最终名）子串，命中才出卡。
+    private func rowMatchesPreviewSelection(_ displayName: String) -> Bool {
+        guard let selection = hoverCardPreviewRow else {
+            return false
+        }
+        return displayName.localizedCaseInsensitiveContains(selection)
     }
 
     /// 无任何可显示数字时的右侧文案：优先报错；接口通了但两头都空显示未知。
@@ -1362,7 +1434,16 @@ struct SentinelBalancesSection: View {
     }
 
     private func glmUsageStatusColor(_ account: GLMAccountUsage) -> Color {
-        Self.glmDotSignal(
+        // 套餐行只看订阅窗口和冷却，现金不参与（套餐派工不花现金）；其余行照旧。
+        // 数据过时后冷却判不了，只看订阅窗口。
+        let planState = store.glmPlanStatus
+        if let plan = CortexPlanStatusDisplay.plan(forAccountKey: account.key, in: planState?.payload) {
+            if CortexPlanStatusDisplay.freshness(planState, now: Date()) == .stale {
+                return CortexPlanStatusDisplay.staleDotColor(account: account)
+            }
+            return CortexPlanStatusDisplay.dotColor(plan: plan, account: account, now: Date())
+        }
+        return Self.glmDotSignal(
             fiveHourRemaining: account.fiveHourWindow?.remainingPercentage,
             weeklyRemaining: account.weeklyWindow?.remainingPercentage,
             cashBalance: account.cashBalance,
@@ -1394,6 +1475,8 @@ struct SentinelBalancesSection: View {
 
     private func glmDetailContent(_ account: GLMAccountUsage) -> BalanceHoverContent {
         let now = Date()
+        let planState = store.glmPlanStatus
+        let plan = CortexPlanStatusDisplay.plan(forAccountKey: account.key, in: planState?.payload)
         var lines: [BalanceHoverLine] = []
         for (name, window, windowLength) in [
             ("5 小时窗", account.fiveHourWindow, 5 * 3600.0),
@@ -1402,7 +1485,8 @@ struct SentinelBalancesSection: View {
             guard let window else { continue }
             var value = ""
             if let used = window.usedPoints, let total = window.totalPoints, total > 0 {
-                value = "已用 \(Self.pointsText(used)) / \(Self.pointsText(total)) 积分"
+                // 不带「积分」字样：卡宽 296 里带着它重置时间必截（量宽实锤），CC 卡口径一致。
+                value = "已用 \(Self.pointsText(used)) / \(Self.pointsText(total))"
             } else if let percent = window.percentUsed {
                 value = "已用 \(Int(percent.rounded()))%"
             }
@@ -1414,6 +1498,26 @@ struct SentinelBalancesSection: View {
                     Self.timeElapsedFraction(resetAt: window.resetAt, windowLength: windowLength, now: now)
                 )
             ))
+        }
+        // 套餐行追加派工状态；不是套餐的行一个字不变。
+        // 数据过时后只留在跑/现金/派工状态三行，执行者、派工、免费时段不显示。
+        if let plan {
+            if CortexPlanStatusDisplay.freshness(planState, now: now) == .stale,
+               let failureText = planState?.failureText {
+                lines.append(contentsOf: CortexPlanStatusDisplay.staleDetailLines(
+                    plan: plan,
+                    failureText: failureText,
+                    cashBalance: account.cashBalance
+                ))
+            } else {
+                lines.append(contentsOf: CortexPlanStatusDisplay.detailLines(
+                    plan: plan,
+                    payload: planState?.payload,
+                    failureText: planState?.failureText,
+                    fetchedAt: planState?.fetchedAt,
+                    cashBalance: account.cashBalance
+                ))
+            }
         }
         var subtitle = "GLM Coding Plan"
         if let level = account.level, !level.isEmpty {
@@ -1432,7 +1536,7 @@ struct SentinelBalancesSection: View {
             title: store.providerDisplayName(
                 namespace: ProviderRenameNamespace.glm,
                 id: account.key,
-                fallback: account.displayTitle
+                fallback: CortexPlanStatusDisplay.rowTitleFallback(plan: plan, account: account)
             ),
             subtitle: subtitle,
             lines: lines,

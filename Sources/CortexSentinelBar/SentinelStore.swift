@@ -28,6 +28,9 @@ final class SentinelStore {
     private(set) var cursorUsage: CursorUsageSnapshot = .empty
     /// 智谱 GLM Coding Plan 订阅额度；每把 key 一行，跟随官方额度同一套刷新时机。
     private(set) var glmUsage: GLMUsageSnapshot = .empty
+    /// GLM 套餐的派工状态（套餐名/在跑/冷却），cortex 仓脚本算好这边只显示；
+    /// 新用量发布后跟一轮，失败时按新鲜度保留上一份。
+    private(set) var glmPlanStatus: CortexPlanStatusDisplayState?
     /// Command Code 订阅额度（5h / 周 / 月）；每把 key 一行，跟随官方额度同一套刷新时机。
     private(set) var commandCodeUsage: CommandCodeUsageSnapshot = .empty
     /// 生效的 Command Code key 数。余额区引导行的显隐读它（tracked），
@@ -75,6 +78,8 @@ final class SentinelStore {
     @ObservationIgnored private var lastCursorUsageAttemptAt: Date?
     @ObservationIgnored private var glmUsageFetchInFlight = false
     @ObservationIgnored private var lastGLMUsageAttemptAt: Date?
+    /// 套餐状态取数并发闸：同一时间最多一个在跑。
+    @ObservationIgnored private var glmPlanStatusFetchInFlight = false
     /// 当前生效的 GLM key（自动识别 ∪ 用户添加 − 用户删除）。
     @ObservationIgnored private var glmKeyEntries: [GLMKeyEntry] = []
     @ObservationIgnored private var commandCodeFetchInFlight = false
@@ -794,8 +799,59 @@ final class SentinelStore {
                 return
             }
             self.glmUsageFetchInFlight = false
-            self.publishGLMUsage(
-                GLMUsageSnapshot.merged(previous: self.glmUsage, fresh: fresh, now: self.now())
+            let merged = GLMUsageSnapshot.merged(previous: self.glmUsage, fresh: fresh, now: self.now())
+            self.publishGLMUsage(merged)
+            self.refreshGLMPlanStatus(entries: entries, snapshot: merged)
+        }
+    }
+
+    /// 套餐状态跟一轮 GLM 用量：新用量发布后跑一次 cortex 侧脚本。
+    /// 子进程放后台不卡界面；同一时间最多一个在跑，忙就跳过（下轮用量刷新会再来）。
+    private func refreshGLMPlanStatus(entries: [GLMKeyEntry], snapshot: GLMUsageSnapshot) {
+        guard !glmPlanStatusFetchInFlight else {
+            return
+        }
+        glmPlanStatusFetchInFlight = true
+        // 和 --glm-usage-json 同一份编码器同一份字节，判据在 cortex 侧对得上。
+        let usageJSON = GLMUsageCLI.renderJSON(
+            entries: entries,
+            accounts: snapshot.accounts,
+            checkedAt: snapshot.checkedAt ?? self.now()
+        )
+        let environment = self.environment
+        let watchDirectory = self.paths.logsDirectory
+        let fallbackRepositoryRoot = self.paths.repositoryRoot
+        let homeDirectory = FileManager.default.homeDirectoryForCurrentUser.path
+        Task { @MainActor [weak self] in
+            let outcome = await Task.detached(priority: .utility) {
+                await CortexPlanStatusFetcher.fetch(
+                    environment: environment,
+                    watchDirectory: watchDirectory,
+                    fallbackRepositoryRoot: fallbackRepositoryRoot,
+                    homeDirectory: homeDirectory,
+                    usageJSON: usageJSON,
+                    runner: CortexProcessSubprocessRunner()
+                )
+            }.value
+            guard let self else {
+                return
+            }
+            self.glmPlanStatusFetchInFlight = false
+            self.applyGLMPlanStatus(outcome, at: self.now())
+        }
+    }
+
+    /// 失败时：上次成功的整份留在内存里当套餐身份（指纹/名/上限，不落盘），
+    /// 失败原因一并记下；数还信不信（30 分钟复用窗）由显示层按时间判。
+    private func applyGLMPlanStatus(_ outcome: CortexPlanStatusOutcome, at now: Date) {
+        switch outcome {
+        case let .success(payload):
+            glmPlanStatus = CortexPlanStatusDisplayState(payload: payload, fetchedAt: now, failureText: nil)
+        case let .failure(reason):
+            glmPlanStatus = CortexPlanStatusDisplayState(
+                payload: glmPlanStatus?.payload,
+                fetchedAt: glmPlanStatus?.fetchedAt,
+                failureText: reason
             )
         }
     }
@@ -1461,7 +1517,8 @@ final class SentinelStore {
         glm: GLMUsageSnapshot? = nil,
         commandCode: CommandCodeUsageSnapshot? = nil,
         aio: AIOSnapshot? = nil,
-        inputStatus: InputStatusSnapshot? = nil
+        inputStatus: InputStatusSnapshot? = nil,
+        glmPlanStatus: CortexPlanStatusDisplayState? = nil
     ) {
         if let official {
             setOfficialUsageIfChanged(official)
@@ -1474,6 +1531,9 @@ final class SentinelStore {
         }
         if let commandCode {
             self.commandCodeUsage = commandCode
+        }
+        if let glmPlanStatus {
+            self.glmPlanStatus = glmPlanStatus
         }
         if let aio {
             apply(

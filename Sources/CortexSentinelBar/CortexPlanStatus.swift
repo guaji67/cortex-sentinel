@@ -397,7 +397,7 @@ enum CortexPlanStatusFetcher {
             }
         }
         guard let repoRoot else {
-            return .failure(reason: "没读到派工状态：找不到 cortex 仓")
+            return .failure(reason: "找不到 cortex 仓")
         }
 
         // 2. 清单：跳过 # 行和空行；每条必须是 scripts/ 下、不含 .. 的相对路径，
@@ -411,10 +411,10 @@ enum CortexPlanStatusFetcher {
             timeout: configuration.gitTimeout
         )
         guard manifest.exitCode == 0 else {
-            return .failure(reason: "没读到派工状态：cortex 仓里还没有这个脚本")
+            return .failure(reason: "cortex 仓里还没有这个脚本")
         }
         guard let paths = manifestPaths(from: manifest.standardOutput) else {
-            return .failure(reason: "没读到派工状态：脚本清单不合法")
+            return .failure(reason: "脚本清单不合法")
         }
 
         // 3. 缓存键：ls-tree 整段输出的 sha256，脚本内容没变就不重导。
@@ -427,7 +427,7 @@ enum CortexPlanStatusFetcher {
             timeout: configuration.gitTimeout
         )
         guard lsTree.exitCode == 0 else {
-            return .failure(reason: "没读到派工状态：对不上脚本版本")
+            return .failure(reason: "对不上脚本版本")
         }
         let cacheKey = sha256Hex(lsTree.standardOutput)
         let cacheRoot = configuration.cacheRoot ?? defaultCacheRoot(fileManager: fileManager)
@@ -442,7 +442,7 @@ enum CortexPlanStatusFetcher {
             do {
                 try fileManager.createDirectory(at: stagingDirectory, withIntermediateDirectories: true)
             } catch {
-                return .failure(reason: "没读到派工状态：缓存目录建不了")
+                return .failure(reason: "缓存目录建不了")
             }
             let archive = await runner.run(
                 executablePath: configuration.gitExecutablePath,
@@ -480,7 +480,7 @@ enum CortexPlanStatusFetcher {
             // 半截的临时目录一律清掉，成功与否都不留。
             try? fileManager.removeItem(at: stagingDirectory)
             guard extractionSucceeded else {
-                return .failure(reason: "没读到派工状态：脚本导不出来")
+                return .failure(reason: "脚本导不出来")
             }
             pruneCache(at: cacheRoot, keeping: configuration.maxCacheCopies, fileManager: fileManager)
         }
@@ -489,7 +489,7 @@ enum CortexPlanStatusFetcher {
         let interpreter = configuration.interpreterCandidates(repoRoot)
             .first { fileManager.fileExists(atPath: $0) }
         guard let interpreter else {
-            return .failure(reason: "没读到派工状态：没找到可用的 Python")
+            return .failure(reason: "没找到可用的 Python")
         }
 
         // 5. 在缓存目录里跑脚本，stdin 喂 --glm-usage-json 同一份字节。
@@ -502,18 +502,18 @@ enum CortexPlanStatusFetcher {
             timeout: configuration.scriptTimeout
         )
         guard !run.timedOut else {
-            return .failure(reason: "没读到派工状态：脚本跑超时了")
+            return .failure(reason: "脚本跑超时了")
         }
         guard run.exitCode == 0 else {
-            return .failure(reason: "没读到派工状态：脚本退出码 \(run.exitCode)")
+            return .failure(reason: "脚本退出码 \(run.exitCode)")
         }
 
         // 6. 解码；schema 不是 1 整份当没有。
         guard let payload = try? JSONDecoder().decode(CortexPlanStatusPayload.self, from: run.standardOutput) else {
-            return .failure(reason: "没读到派工状态：脚本输出解析不了")
+            return .failure(reason: "脚本输出解析不了")
         }
         guard payload.schema == 1 else {
-            return .failure(reason: "没读到派工状态：脚本版本不认识")
+            return .failure(reason: "脚本版本不认识")
         }
         return .success(payload)
     }
@@ -571,7 +571,38 @@ enum CortexPlanStatusFetcher {
 // MARK: - 显示规则（纯函数，便于测试）
 
 enum CortexPlanStatusDisplay {
-    /// 钥匙指纹对上哪个套餐，这一行就是那个套餐的行。
+    /// 失败后沿用上一份成功结果的窗口；过了这个窗数就判过时。
+    static let reuseWindow: TimeInterval = 30 * 60
+
+    /// 取数结果的时新度。store 只存「最近一次成功的整份 + 最近一次失败的原因」，
+    /// 过时与否由这里按时间判，跨过 30 分钟边界自然切换。
+    enum Freshness {
+        /// 正常显示（可能带着「这次没读到」的卡内备注）。
+        case fresh
+        /// 上次成功已超过复用窗：数不可信，只拿套餐身份（指纹/名/上限）认行。
+        case stale
+        /// 开 App 以来一次都没成功过：行照旧，--dump-state 排查。
+        case absent
+    }
+
+    static func freshness(
+        _ state: CortexPlanStatusDisplayState?,
+        now: Date,
+        reuseWindow: TimeInterval = CortexPlanStatusDisplay.reuseWindow
+    ) -> Freshness {
+        guard let state, state.payload != nil else {
+            return .absent
+        }
+        if let failureText = state.failureText, !failureText.isEmpty,
+           let fetchedAt = state.fetchedAt,
+           now.timeIntervalSince(fetchedAt) >= reuseWindow {
+            return .stale
+        }
+        return .fresh
+    }
+
+    /// 钥匙指纹对上哪个套餐，这一行就是那个套餐的行。过时态的整份 payload
+    /// 仍留在内存里当身份（指纹、套餐名、上限），匹配照旧。
     static func plan(forAccountKey key: String, in payload: CortexPlanStatusPayload?) -> CortexPlanStatusPlan? {
         guard let payload else {
             return nil
@@ -582,6 +613,7 @@ enum CortexPlanStatusDisplay {
 
     /// 行名：用户改过名照旧用用户的（外层 providerDisplayName 管覆盖），
     /// 没改过用套餐 label，不加「GLM 」前缀；套餐缺失回原样。
+    /// 过时态套餐名照样有效（身份留了）。
     static func rowTitleFallback(
         plan: CortexPlanStatusPlan?,
         account: GLMAccountUsage
@@ -609,11 +641,14 @@ enum CortexPlanStatusDisplay {
             return "冷却 \(time)"
         }
         guard let running = plan.running else {
-            return "在跑 —"
+            return staleThirdColumnText
         }
         let cap = plan.maxParallel.map(String.init) ?? "—"
         return "在跑 \(running)/\(cap)"
     }
+
+    /// 过时态第三列：数已经不可信，固定「在跑 —」，不显示冷却。
+    static let staleThirdColumnText = "在跑 —"
 
     /// 第三列字号同款（Theme.Metrics 13 semibold monospaced）量宽，只挑文案不排版。
     private static func measuredWidth(_ text: String) -> CGFloat {
@@ -641,12 +676,25 @@ enum CortexPlanStatusDisplay {
         return base
     }
 
-    /// 详情卡追加行：在跑 / 派工 / 免费时段 / 提示 / 现金余额 / 取数失败原因。
-    /// 指纹、套餐 id、skip_code、错误 code 任何地方都不露。
+    /// 过时态状态点：数过时了，冷却也判不了，只看订阅窗口（现金同样不参与）。
+    static func staleDotColor(account: GLMAccountUsage) -> Color {
+        SentinelBalancesSection.providerDotSignal(
+            fiveHourRemaining: account.fiveHourWindow?.remainingPercentage,
+            weeklyRemaining: account.weeklyWindow?.remainingPercentage,
+            balanceAmount: nil,
+            stale: account.stale,
+            hasDisplayableNumber: account.hasDisplayableQuota
+        )
+    }
+
+    /// 详情卡追加行（时新态）：在跑 / 派工 / 免费时段 / 提示 / 现金余额，
+    /// 最近一次失败时末尾加一行「派工状态」。指纹、套餐 id、skip_code、错误 code
+    /// 任何地方都不露。
     static func detailLines(
         plan: CortexPlanStatusPlan,
         payload: CortexPlanStatusPayload?,
         failureText: String?,
+        fetchedAt: Date?,
         cashBalance: Double?
     ) -> [BalanceHoverLine] {
         var lines: [BalanceHoverLine] = []
@@ -684,10 +732,82 @@ enum CortexPlanStatusDisplay {
                 note: "套餐派工不花现金"
             ))
         }
-        if let failureText {
-            lines.append(BalanceHoverLine(label: "派工状态", value: failureText, note: nil))
+        if let failureText, !failureText.isEmpty {
+            let readAt = fetchedAt.map { "\(clockText($0)) 读到的，" } ?? ""
+            lines.append(BalanceHoverLine(
+                label: "派工状态",
+                value: "\(readAt)这次没读到（\(failureText)）",
+                note: nil
+            ))
         }
         return lines
+    }
+
+    /// 过时态详情卡：数过时了，只留在跑（不可知）、现金余额、失败原因；
+    /// 执行者 / 派工 / 免费时段几行不显示。
+    static func staleDetailLines(
+        plan: CortexPlanStatusPlan,
+        failureText: String,
+        cashBalance: Double?
+    ) -> [BalanceHoverLine] {
+        var lines: [BalanceHoverLine] = []
+        let capText = plan.maxParallel.map(String.init) ?? "—"
+        lines.append(BalanceHoverLine(
+            label: "在跑",
+            value: "— / 上限 \(capText)",
+            note: nil
+        ))
+        if let cash = cashBalance {
+            lines.append(BalanceHoverLine(
+                label: "现金余额",
+                value: String(format: "¥%.2f", cash),
+                note: "套餐派工不花现金"
+            ))
+        }
+        lines.append(BalanceHoverLine(
+            label: "派工状态",
+            value: "没读到（\(failureText)）",
+            note: nil
+        ))
+        return lines
+    }
+
+    /// --dump-state 的那行结论：面板上看不见套餐状态时拿它排查。
+    static func dumpStateText(_ outcome: CortexPlanStatusOutcome) -> String {
+        switch outcome {
+        case let .success(payload):
+            if payload.plans.isEmpty {
+                return "派工状态：脚本读到了，但里面没有登记的套餐"
+            }
+            return "派工状态：读到 \(payload.plans.count) 个套餐（\(payload.plans.map(\.label).joined(separator: "、"))）"
+        case let .failure(reason):
+            return "派工状态：没读到（\(reason)）"
+        }
+    }
+
+    /// --dump-state 现场跑一轮套餐取数并给出一行结论（独立进程拿不到
+    /// 哨兵 App 的内存状态，所以是现场跑）。用量按未知——空 accounts 喂进去，
+    /// cortex 脚本「读到空也照跑」。
+    static func dumpStateLine(
+        environment: [String: String],
+        watchDirectory: URL?,
+        fallbackRepositoryRoot: URL?,
+        defaults: UserDefaults,
+        configuration: CortexPlanStatusFetcher.Configuration = CortexPlanStatusFetcher.Configuration(),
+        runner: any CortexSubprocessRunning = CortexProcessSubprocessRunner()
+    ) async -> String {
+        let entries = GLMKeyStore.resolvedEntries(environment: environment, defaults: defaults)
+        let usageJSON = GLMUsageCLI.renderJSON(entries: entries, accounts: [], checkedAt: Date())
+        let outcome = await CortexPlanStatusFetcher.fetch(
+            environment: environment,
+            watchDirectory: watchDirectory,
+            fallbackRepositoryRoot: fallbackRepositoryRoot,
+            homeDirectory: FileManager.default.homeDirectoryForCurrentUser.path,
+            usageJSON: usageJSON,
+            configuration: configuration,
+            runner: runner
+        )
+        return dumpStateText(outcome)
     }
 
     /// 冷却时间用本机时间显示。

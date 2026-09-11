@@ -134,10 +134,21 @@ private struct HoverCardPreviewKey: EnvironmentKey {
     static let defaultValue = false
 }
 
+/// 离屏渲染选行用：给了值（行名子串）就只常显命中那一行的卡，其他行不出，
+/// 一张图验一张卡。只在出图 CLI 里注入，生产不传。
+private struct HoverCardPreviewRowKey: EnvironmentKey {
+    static let defaultValue: String? = nil
+}
+
 extension EnvironmentValues {
     var hoverCardPreview: Bool {
         get { self[HoverCardPreviewKey.self] }
         set { self[HoverCardPreviewKey.self] = newValue }
+    }
+
+    var hoverCardPreviewRow: String? {
+        get { self[HoverCardPreviewRowKey.self] }
+        set { self[HoverCardPreviewRowKey.self] = newValue }
     }
 }
 
@@ -248,12 +259,21 @@ struct BalanceHoverDetail: View {
 struct HoverDetailCard: ViewModifier {
     let makeContent: () -> BalanceHoverContent
     var isSuppressed: () -> Bool = { false }
+    /// 选行出图用：本行是否命中 --preview-hover-row。选行模式下没传的行不出卡。
+    var previewRowMatch: Bool = false
     @Environment(\.hoverCardPreview) private var preview
+    @Environment(\.hoverCardPreviewRow) private var previewRowSelection
     @State private var pending = false
     @State private var visible = false
 
     /// 鼠标压在状态点上或正在拖拽时，卡片一律不出现，别挡拖拽的道。
-    private var showsCard: Bool { (visible || preview) && !isSuppressed() }
+    /// 选行模式（--preview-hover-row）下只开命中那一行，其他分区行没传匹配也不开。
+    private var showsCard: Bool {
+        if previewRowSelection != nil {
+            return previewRowMatch && !isSuppressed()
+        }
+        return (visible || preview) && !isSuppressed()
+    }
 
     func body(content: Content) -> some View {
         content
@@ -710,6 +730,8 @@ struct SentinelBalancesSection: View {
     @State private var dragLastCommittedDy: CGFloat = 0
     /// 点空白处时把焦点挪过来，正在编辑的行名随之失焦提交。
     @FocusState private var renameSinkFocused: Bool
+    /// 出图选行参数（行名子串），只在渲染 CLI 里注入。
+    @Environment(\.hoverCardPreviewRow) private var hoverCardPreviewRow
 
     var body: some View {
         switch BalanceSectionPresentation.resolve(
@@ -1229,7 +1251,10 @@ struct SentinelBalancesSection: View {
         keys: [String]
     ) -> some View {
         // 认成派工套餐的行：名字用套餐 label（用户改名仍优先）、第三列换在跑/冷却。
-        let plan = CortexPlanStatusDisplay.plan(forAccountKey: account.key, in: store.glmPlanStatus?.payload)
+        // 数据过时（超过复用窗没读到新的）时身份照用，数值不显。
+        let planState = store.glmPlanStatus
+        let plan = CortexPlanStatusDisplay.plan(forAccountKey: account.key, in: planState?.payload)
+        let planFreshness = CortexPlanStatusDisplay.freshness(planState, now: Date())
         let displayName = store.providerDisplayName(
             namespace: ProviderRenameNamespace.glm,
             id: account.key,
@@ -1301,14 +1326,18 @@ struct SentinelBalancesSection: View {
                         if let plan {
                             // 套餐行的第三列：在跑/冷却，不画横条（横条一律是时间
                             // 流逝，这列不是时间），也不加 .help（会和详情卡双弹）。
-                            Text(CortexPlanStatusDisplay.thirdColumnText(plan: plan, now: now))
+                            // 数据过时后数值不可信，固定「在跑 —」不显示冷却。
+                            let columnText = planFreshness == .stale
+                                ? CortexPlanStatusDisplay.staleThirdColumnText
+                                : CortexPlanStatusDisplay.thirdColumnText(plan: plan, now: now)
+                            Text(columnText)
                                 .font(SentinelTheme.Fonts.balanceAmount)
                                 .foregroundStyle(SentinelTheme.Colors.foreground)
                                 .monospacedDigit()
                                 .lineLimit(1)
                                 .frame(width: SentinelTheme.Metrics.usageColWidth2, alignment: .leading)
                                 .accessibilityElement(children: .ignore)
-                                .accessibilityLabel(CortexPlanStatusDisplay.thirdColumnText(plan: plan, now: now))
+                                .accessibilityLabel(columnText)
                         } else if account.cashBalance != nil {
                             glmBalanceSegment(account)
                         }
@@ -1324,8 +1353,17 @@ struct SentinelBalancesSection: View {
         .contentShape(Rectangle())
         .modifier(HoverDetailCard(
             makeContent: { self.glmDetailContent(account) },
-            isSuppressed: { self.suppressCardKey == account.key || self.draggingKey != nil }
+            isSuppressed: { self.suppressCardKey == account.key || self.draggingKey != nil },
+            previewRowMatch: self.rowMatchesPreviewSelection(displayName)
         ))
+    }
+
+    /// 出图选行：给的是行名（用户改名后的最终名）子串，命中才出卡。
+    private func rowMatchesPreviewSelection(_ displayName: String) -> Bool {
+        guard let selection = hoverCardPreviewRow else {
+            return false
+        }
+        return displayName.localizedCaseInsensitiveContains(selection)
     }
 
     /// 无任何可显示数字时的右侧文案：优先报错；接口通了但两头都空显示未知。
@@ -1376,7 +1414,12 @@ struct SentinelBalancesSection: View {
 
     private func glmUsageStatusColor(_ account: GLMAccountUsage) -> Color {
         // 套餐行只看订阅窗口和冷却，现金不参与（套餐派工不花现金）；其余行照旧。
-        if let plan = CortexPlanStatusDisplay.plan(forAccountKey: account.key, in: store.glmPlanStatus?.payload) {
+        // 数据过时后冷却判不了，只看订阅窗口。
+        let planState = store.glmPlanStatus
+        if let plan = CortexPlanStatusDisplay.plan(forAccountKey: account.key, in: planState?.payload) {
+            if CortexPlanStatusDisplay.freshness(planState, now: Date()) == .stale {
+                return CortexPlanStatusDisplay.staleDotColor(account: account)
+            }
             return CortexPlanStatusDisplay.dotColor(plan: plan, account: account, now: Date())
         }
         return Self.glmDotSignal(
@@ -1411,7 +1454,8 @@ struct SentinelBalancesSection: View {
 
     private func glmDetailContent(_ account: GLMAccountUsage) -> BalanceHoverContent {
         let now = Date()
-        let plan = CortexPlanStatusDisplay.plan(forAccountKey: account.key, in: store.glmPlanStatus?.payload)
+        let planState = store.glmPlanStatus
+        let plan = CortexPlanStatusDisplay.plan(forAccountKey: account.key, in: planState?.payload)
         var lines: [BalanceHoverLine] = []
         for (name, window, windowLength) in [
             ("5 小时窗", account.fiveHourWindow, 5 * 3600.0),
@@ -1420,7 +1464,8 @@ struct SentinelBalancesSection: View {
             guard let window else { continue }
             var value = ""
             if let used = window.usedPoints, let total = window.totalPoints, total > 0 {
-                value = "已用 \(Self.pointsText(used)) / \(Self.pointsText(total)) 积分"
+                // 不带「积分」字样：卡宽 296 里带着它重置时间必截（量宽实锤），CC 卡口径一致。
+                value = "已用 \(Self.pointsText(used)) / \(Self.pointsText(total))"
             } else if let percent = window.percentUsed {
                 value = "已用 \(Int(percent.rounded()))%"
             }
@@ -1434,13 +1479,24 @@ struct SentinelBalancesSection: View {
             ))
         }
         // 套餐行追加派工状态；不是套餐的行一个字不变。
+        // 数据过时后只留在跑/现金/派工状态三行，执行者、派工、免费时段不显示。
         if let plan {
-            lines.append(contentsOf: CortexPlanStatusDisplay.detailLines(
-                plan: plan,
-                payload: store.glmPlanStatus?.payload,
-                failureText: store.glmPlanStatus?.failureText,
-                cashBalance: account.cashBalance
-            ))
+            if CortexPlanStatusDisplay.freshness(planState, now: now) == .stale,
+               let failureText = planState?.failureText {
+                lines.append(contentsOf: CortexPlanStatusDisplay.staleDetailLines(
+                    plan: plan,
+                    failureText: failureText,
+                    cashBalance: account.cashBalance
+                ))
+            } else {
+                lines.append(contentsOf: CortexPlanStatusDisplay.detailLines(
+                    plan: plan,
+                    payload: planState?.payload,
+                    failureText: planState?.failureText,
+                    fetchedAt: planState?.fetchedAt,
+                    cashBalance: account.cashBalance
+                ))
+            }
         }
         var subtitle = "GLM Coding Plan"
         if let level = account.level, !level.isEmpty {

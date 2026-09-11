@@ -239,10 +239,12 @@ final class CortexPlanStatusTests: XCTestCase {
     func testDetailLinesHideFingerprintIDAndCode() throws {
         let payload = try samplePayload()
         let plan = payload.plans[0]
+        let fetchedAt = Date(timeIntervalSince1970: 1_760_000_000)
         let lines = CortexPlanStatusDisplay.detailLines(
             plan: plan,
             payload: payload,
-            failureText: "没读到派工状态：cortex 仓里还没有这个脚本",
+            failureText: "cortex 仓里还没有这个脚本",
+            fetchedAt: fetchedAt,
             cashBalance: 0.62
         )
         let allText = lines.map { [$0.label, $0.value, $0.note ?? ""].joined(separator: " ") }.joined(separator: "\n")
@@ -255,7 +257,8 @@ final class CortexPlanStatusTests: XCTestCase {
         XCTAssertTrue(allText.contains("读不到看板，在跑几条暂时不知道"))
         XCTAssertTrue(allText.contains("¥0.62"))
         XCTAssertTrue(allText.contains("套餐派工不花现金"))
-        XCTAssertTrue(allText.contains("没读到派工状态：cortex 仓里还没有这个脚本"))
+        // 最近一次失败的备注：读到的时刻 + 原因。
+        XCTAssertTrue(allText.contains("\(CortexPlanStatusDisplay.clockText(fetchedAt)) 读到的，这次没读到（cortex 仓里还没有这个脚本）"))
 
         // 指纹、套餐 id、skip_code、错误 code 任何地方都不露。
         XCTAssertFalse(allText.contains(Self.sampleKey))
@@ -270,6 +273,7 @@ final class CortexPlanStatusTests: XCTestCase {
             plan: plan,
             payload: nil,
             failureText: nil,
+            fetchedAt: nil,
             cashBalance: nil
         )
         let allText = lines.map { $0.label }.joined(separator: ",")
@@ -278,6 +282,141 @@ final class CortexPlanStatusTests: XCTestCase {
         XCTAssertFalse(allText.contains("提示"))
         XCTAssertFalse(allText.contains("现金余额"))
         XCTAssertFalse(allText.contains("派工状态"))
+    }
+
+    // MARK: - 失败可见性（三种情形）
+
+    private func state(payload: CortexPlanStatusPayload?, fetchedAt: Date?, failureText: String?) -> CortexPlanStatusDisplayState {
+        CortexPlanStatusDisplayState(payload: payload, fetchedAt: fetchedAt, failureText: failureText)
+    }
+
+    /// 成功后 30 分钟内失败：数照用，详情卡末尾加「HH:MM 读到的，这次没读到（原因）」。
+    func testFreshFailureKeepsNumbersAndAddsNote() throws {
+        let payload = try samplePayload()
+        let now = Date()
+        let fetchedAt = now.addingTimeInterval(-5 * 60)
+        let failure = "cortex 仓里还没有这个脚本"
+        let displayState = state(payload: payload, fetchedAt: fetchedAt, failureText: failure)
+
+        XCTAssertEqual(CortexPlanStatusDisplay.freshness(displayState, now: now), .fresh)
+        let plan = CortexPlanStatusDisplay.plan(forAccountKey: CortexPlanStatusTests.sampleKey, in: displayState.payload)
+        let account = account()
+        // 行名还是套餐名，第三列还是真数。
+        XCTAssertEqual(CortexPlanStatusDisplay.rowTitleFallback(plan: plan, account: account), "Sample 套餐")
+        XCTAssertEqual(CortexPlanStatusDisplay.thirdColumnText(plan: plan!, now: now), "在跑 2/5")
+
+        let lines = CortexPlanStatusDisplay.detailLines(
+            plan: plan!,
+            payload: payload,
+            failureText: failure,
+            fetchedAt: fetchedAt,
+            cashBalance: 0.62
+        )
+        XCTAssertEqual(lines.last?.label, "派工状态")
+        XCTAssertEqual(lines.last?.value, "\(CortexPlanStatusDisplay.clockText(fetchedAt)) 读到的，这次没读到（\(failure)）")
+        let labels = lines.map(\.label)
+        XCTAssertTrue(labels.contains("执行者 1"), "时新态执行者行还在")
+        XCTAssertTrue(labels.contains("免费时段"))
+        XCTAssertTrue(labels.contains("派工"))
+    }
+
+    /// 超过 30 分钟失败：行名仍用套餐名，第三列「在跑 —」不显示冷却，状态点只看
+    /// 订阅窗口，详情卡只留在跑/现金/派工状态三行。
+    func testStaleFailureShowsIdentityOnly() throws {
+        let payload = try samplePayload()
+        let now = Date()
+        let displayState = state(
+            payload: payload,
+            fetchedAt: now.addingTimeInterval(-CortexPlanStatusDisplay.reuseWindow - 10 * 60),
+            failureText: "cortex 仓里还没有这个脚本"
+        )
+
+        XCTAssertEqual(CortexPlanStatusDisplay.freshness(displayState, now: now), .stale)
+        let plan = try XCTUnwrap(CortexPlanStatusDisplay.plan(forAccountKey: CortexPlanStatusTests.sampleKey, in: displayState.payload))
+        let accountRow = account()
+        XCTAssertEqual(CortexPlanStatusDisplay.rowTitleFallback(plan: plan, account: accountRow), "Sample 套餐")
+        XCTAssertEqual(CortexPlanStatusDisplay.staleThirdColumnText, "在跑 —")
+
+        // 现金 0.5 但窗口好 → 绿（过时态同样不看现金）。
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.staleDotColor(account: account(cash: 0.5, fiveHourPercent: 10)),
+            SentinelTheme.Colors.success
+        )
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.staleDotColor(account: account(cash: 86, fiveHourPercent: 99.9)),
+            SentinelTheme.Colors.danger
+        )
+
+        let lines = CortexPlanStatusDisplay.staleDetailLines(
+            plan: plan,
+            failureText: "cortex 仓里还没有这个脚本",
+            cashBalance: 0.62
+        )
+        XCTAssertEqual(lines.map(\.label), ["在跑", "现金余额", "派工状态"])
+        XCTAssertEqual(lines[0].value, "— / 上限 5")
+        XCTAssertEqual(lines[1].value, "¥0.62")
+        XCTAssertEqual(lines[2].value, "没读到（cortex 仓里还没有这个脚本）")
+        let allText = lines.map { [$0.label, $0.value, $0.note ?? ""].joined(separator: " ") }.joined(separator: "\n")
+        XCTAssertFalse(allText.contains("执行者 1"))
+        XCTAssertFalse(allText.contains("免费时段"))
+        XCTAssertFalse(allText.contains("可以派"))
+        XCTAssertFalse(allText.contains(Self.sampleKey))
+        XCTAssertFalse(allText.contains("plan-a"))
+    }
+
+    /// 开 App 以来一次都没成功过：行照旧（认不出哪行是套餐），dump-state 有一行排查结论。
+    func testNeverSucceededKeepsRowsUntouched() throws {
+        let now = Date()
+        let account = account()
+        let payload = try samplePayload()
+
+        // 从没成功（payload nil，只有失败原因）→ 匹配不出套餐行。
+        let failedState = state(payload: nil, fetchedAt: nil, failureText: "找不到 cortex 仓")
+        XCTAssertEqual(CortexPlanStatusDisplay.freshness(failedState, now: now), .absent)
+        XCTAssertNil(CortexPlanStatusDisplay.plan(forAccountKey: account.key, in: failedState.payload))
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.rowTitleFallback(plan: nil, account: account),
+            account.displayTitle,
+            "行名回原样"
+        )
+        // 状态点照旧：现金 0.5 → 红。
+        XCTAssertEqual(
+            SentinelBalancesSection.glmDotSignal(
+                fiveHourRemaining: nil,
+                weeklyRemaining: nil,
+                cashBalance: 0.5,
+                stale: false,
+                hasDisplayableNumber: true
+            ),
+            SentinelTheme.Colors.danger
+        )
+
+        // dump-state 的排查行。
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.dumpStateText(.failure(reason: "找不到 cortex 仓")),
+            "派工状态：没读到（找不到 cortex 仓）"
+        )
+        let dumpSuccess = CortexPlanStatusDisplay.dumpStateText(.success(payload))
+        XCTAssertTrue(dumpSuccess.contains("读到 1 个套餐"))
+        XCTAssertTrue(dumpSuccess.contains("Sample 套餐"))
+        XCTAssertFalse(dumpSuccess.contains(Self.sampleKey))
+        XCTAssertFalse(dumpSuccess.contains("plan-a"))
+    }
+
+    /// 过时边界：跨过 30 分钟自然从 fresh 变 stale。
+    func testFreshnessBoundary() throws {
+        let payload = try samplePayload()
+        let now = Date()
+        XCTAssertEqual(CortexPlanStatusDisplay.freshness(nil, now: now), .absent)
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.freshness(state(payload: payload, fetchedAt: nil, failureText: nil), now: now),
+            .fresh,
+            "成功过但没有失败记录 → 时新"
+        )
+        let recent = state(payload: payload, fetchedAt: now.addingTimeInterval(-CortexPlanStatusDisplay.reuseWindow + 60), failureText: "x")
+        XCTAssertEqual(CortexPlanStatusDisplay.freshness(recent, now: now), .fresh)
+        let old = state(payload: payload, fetchedAt: now.addingTimeInterval(-CortexPlanStatusDisplay.reuseWindow - 1), failureText: "x")
+        XCTAssertEqual(CortexPlanStatusDisplay.freshness(old, now: now), .stale)
     }
 
     // MARK: - 取数流程
@@ -499,7 +638,7 @@ final class CortexPlanStatusTests: XCTestCase {
         try await runGit(["-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-m", "empty", "--no-gpg-sign", "--allow-empty"], at: repoWithoutManifest)
         try await runGit(["update-ref", "refs/remotes/origin/main", "HEAD"], at: repoWithoutManifest)
         let outcome = await fetch(repo: repoWithoutManifest)
-        XCTAssertEqual(outcome, .failure(reason: "没读到派工状态：cortex 仓里还没有这个脚本"))
+        XCTAssertEqual(outcome, .failure(reason: "cortex 仓里还没有这个脚本"))
     }
 
     func testManifestWithPathTraversalRejected() async throws {
@@ -508,7 +647,7 @@ final class CortexPlanStatusTests: XCTestCase {
             manifestOverride: "scripts/glm_plan_status.py\n../evil.py\n"
         )
         let outcome = await fetch(repo: repo)
-        XCTAssertEqual(outcome, .failure(reason: "没读到派工状态：脚本清单不合法"))
+        XCTAssertEqual(outcome, .failure(reason: "脚本清单不合法"))
     }
 
     func testMissingInterpreterFailsWithPlainReason() async throws {
@@ -516,7 +655,7 @@ final class CortexPlanStatusTests: XCTestCase {
         var configuration = cacheConfiguration()
         configuration.interpreterCandidates = { _ in ["/nonexistent/python3"] }
         let outcome = await fetch(repo: repo, configuration: configuration)
-        XCTAssertEqual(outcome, .failure(reason: "没读到派工状态：没找到可用的 Python"))
+        XCTAssertEqual(outcome, .failure(reason: "没找到可用的 Python"))
     }
 
     func testScriptTimeoutFailsAndDoesNotHang() async throws {
@@ -528,7 +667,7 @@ final class CortexPlanStatusTests: XCTestCase {
         }
         let started = Date()
         let outcome = await fetch(repo: repo, configuration: configuration)
-        XCTAssertEqual(outcome, .failure(reason: "没读到派工状态：脚本跑超时了"))
+        XCTAssertEqual(outcome, .failure(reason: "脚本跑超时了"))
         XCTAssertLessThan(Date().timeIntervalSince(started), 4, "超时要在远小于 sleep 时长内返回")
     }
 
@@ -538,7 +677,7 @@ final class CortexPlanStatusTests: XCTestCase {
         }
         let repo = try await makeScriptRepo(scriptText: "print('不是 JSON')\n")
         let outcome = await fetch(repo: repo)
-        XCTAssertEqual(outcome, .failure(reason: "没读到派工状态：脚本输出解析不了"))
+        XCTAssertEqual(outcome, .failure(reason: "脚本输出解析不了"))
     }
 
     func testSchemaOtherThanOneTreatedAsAbsent() async throws {
@@ -547,7 +686,7 @@ final class CortexPlanStatusTests: XCTestCase {
         }
         let repo = try await makeScriptRepo(scriptText: "print('{\"schema\": 9, \"plans\": []}')\n")
         let outcome = await fetch(repo: repo)
-        XCTAssertEqual(outcome, .failure(reason: "没读到派工状态：脚本版本不认识"))
+        XCTAssertEqual(outcome, .failure(reason: "脚本版本不认识"))
     }
 
     // MARK: - 认仓
@@ -618,7 +757,7 @@ final class CortexPlanStatusTests: XCTestCase {
             runner: runner
         )
         // 解释器被注入成不存在的路径，流程停在跑脚本之前；断言只看 git 调用记录。
-        XCTAssertEqual(outcome, .failure(reason: "没读到派工状态：没找到可用的 Python"))
+        XCTAssertEqual(outcome, .failure(reason: "没找到可用的 Python"))
 
         let gitSubcommands = runner.calls
             .filter { $0.executablePath == "/usr/bin/git" }

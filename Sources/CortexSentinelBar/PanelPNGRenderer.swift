@@ -119,13 +119,17 @@ enum PanelPNGRenderer {
         fixture: PanelPreviewFixture,
         to path: String,
         demoBalances: Bool = false,
-        previewHoverCard: Bool = false
+        demoPlanStatusStale: Bool = false,
+        previewHoverCard: Bool = false,
+        previewHoverRow: String? = nil
     ) async throws {
         try await render(
             fixture: fixture,
             to: URL(fileURLWithPath: path),
             demoBalances: demoBalances,
-            previewHoverCard: previewHoverCard
+            demoPlanStatusStale: demoPlanStatusStale,
+            previewHoverCard: previewHoverCard,
+            previewHoverRow: previewHoverRow
         )
     }
 
@@ -134,17 +138,23 @@ enum PanelPNGRenderer {
         fixture: PanelPreviewFixture,
         to url: URL,
         demoBalances: Bool = false,
-        previewHoverCard: Bool = false
+        demoPlanStatusStale: Bool = false,
+        previewHoverCard: Bool = false,
+        previewHoverRow: String? = nil
     ) async throws {
         _ = NSApplication.shared
         let session = try await PanelPreviewFactory.makeSession(fixture: fixture)
         defer { session.tearDown() }
         if demoBalances {
-            DemoBalancesPreview.inject(into: session.store)
+            DemoBalancesPreview.inject(
+                into: session.store,
+                planStatusStale: demoPlanStatusStale
+            )
         }
 
         let view = SentinelMenuView(store: session.store, rendersOffscreen: true)
             .environment(\.hoverCardPreview, previewHoverCard)
+            .environment(\.hoverCardPreviewRow, previewHoverRow)
             .frame(width: SentinelTheme.Metrics.menuWidth)
             .fixedSize(horizontal: true, vertical: true)
         let renderer = ImageRenderer(content: view)
@@ -174,7 +184,7 @@ enum PanelPNGRenderer {
 /// GLM 三行刻意摆出三种探测形态：订阅+余额都有、只有余额、只有订阅。
 @MainActor
 enum DemoBalancesPreview {
-    static func inject(into store: SentinelStore) {
+    static func inject(into store: SentinelStore, planStatusStale: Bool = false) {
         let checked = Date()
 
         let official = OfficialUsageSnapshot(
@@ -341,14 +351,15 @@ enum DemoBalancesPreview {
             commandCode: commandCode,
             aio: aio,
             inputStatus: demoInputStatus(checked: checked),
-            glmPlanStatus: demoPlanStatus(checked: checked)
+            glmPlanStatus: demoPlanStatus(checked: checked, stale: planStatusStale)
         )
     }
 
     /// 演示套餐状态：pro 行配一份在跑 2/5 的套餐、体验卡行配一份冷却中的，
     /// lite 不配（看非套餐行原样）。指纹用假钥匙现算，套餐名中性词。
     private static func demoPlanStatus(
-        checked: Date
+        checked: Date,
+        stale: Bool = false
     ) -> CortexPlanStatusDisplayState? {
         func planObject(
             key: String,
@@ -400,6 +411,14 @@ enum DemoBalancesPreview {
               let payload = try? JSONDecoder().decode(CortexPlanStatusPayload.self, from: data)
         else {
             return nil
+        }
+        if stale {
+            // 上次成功后超过复用窗没读到:身份留着(套餐名/上限照显示),数值判过时。
+            return CortexPlanStatusDisplayState(
+                payload: payload,
+                fetchedAt: checked.addingTimeInterval(-CortexPlanStatusDisplay.reuseWindow - 10 * 60),
+                failureText: "脚本清单缺一个文件"
+            )
         }
         return CortexPlanStatusDisplayState(payload: payload, fetchedAt: checked, failureText: nil)
     }

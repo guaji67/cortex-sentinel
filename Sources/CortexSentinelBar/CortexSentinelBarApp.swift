@@ -31,6 +31,10 @@ enum CortexSentinelBarMain {
     static let renderLivePanelPNGArgument = "--render-live-panel-png"
     /// 配合两张出图参数：详情卡常显，验收悬停布局不用真鼠标。
     static let previewHoverCardArgument = "--preview-hover-card"
+    /// 出图选行：只常显行名含这个子串的那一行的详情卡（GLM 行按最终行名匹配）。
+    static let previewHoverRowArgument = "--preview-hover-row"
+    /// 演示套餐状态的时新度：stale = 上次成功后超过复用窗没读到。
+    static let demoPlanStatusStaleArgument = "--demo-plan-status-stale"
     static let livePanelSettleSecondsArgument = "--settle-seconds"
 
     @MainActor
@@ -39,7 +43,7 @@ enum CortexSentinelBarMain {
         UserDefaults.standard.register(defaults: ["NSInitialToolTipDelay": 500])
         let arguments = ProcessInfo.processInfo.arguments
         if arguments.contains(dumpStateArgument) {
-            runDumpStateCLI()
+            await runDumpStateCLI()
             return
         }
         if arguments.contains(glmUsageJSONArgument) {
@@ -186,13 +190,25 @@ enum CortexSentinelBarMain {
                 fixture: fixture,
                 to: outputPath,
                 demoBalances: arguments.contains(demoBalancesArgument),
-                previewHoverCard: arguments.contains(previewHoverCardArgument)
+                demoPlanStatusStale: arguments.contains(demoPlanStatusStaleArgument),
+                previewHoverCard: arguments.contains(previewHoverCardArgument),
+                previewHoverRow: previewHoverRowValue(arguments)
             )
             print("written \(outputPath)")
         } catch {
             FileHandle.standardError.write(Data("面板离屏渲染失败：\(error.localizedDescription)\n".utf8))
             exit(1)
         }
+    }
+
+    /// --preview-hover-row <行名子串>：只在出图渲染里用。
+    private static func previewHoverRowValue(_ arguments: [String]) -> String? {
+        guard let index = arguments.firstIndex(of: previewHoverRowArgument),
+              index + 1 < arguments.count
+        else {
+            return nil
+        }
+        return arguments[index + 1]
     }
 
     /// 真实环境的面板离屏验收：默认 SentinelStore（真实监视目录、真实 key 识别、
@@ -219,6 +235,7 @@ enum CortexSentinelBarMain {
             )
             let view = SentinelMenuView(store: store, rendersOffscreen: true)
                 .environment(\.hoverCardPreview, arguments.contains(previewHoverCardArgument))
+                .environment(\.hoverCardPreviewRow, previewHoverRowValue(arguments))
                 .frame(width: SentinelTheme.Metrics.menuWidth)
                 .fixedSize(horizontal: true, vertical: true)
             let renderer = ImageRenderer(content: view)
@@ -247,7 +264,7 @@ enum CortexSentinelBarMain {
     /// 自检 CLI：把哨兵此刻从磁盘读到的东西原样打印出来。
     /// 「面板显示的跟实际不一样」不用再靠猜或截图——跑一次就知道是读不到文件、
     /// 解不出内容，还是读到了但分组/显示写错了。
-    private static func runDumpStateCLI() {
+    private static func runDumpStateCLI() async {
         let paths = SentinelPaths.discover()
         let registryURL = paths.lineRegistryURL
         let registryExists = FileManager.default.fileExists(atPath: registryURL.path)
@@ -343,6 +360,13 @@ enum CortexSentinelBarMain {
         }
         print("  历史露出：\(board.historyShown.count)  Codex=\(board.historyCounts.codex) Grok=\(board.historyCounts.grok) ox-alpha=\(board.historyCounts.claudeOxAlpha)")
         print("  历史隐藏：\(board.hiddenCount)  Codex=\(board.hiddenCounts.codex) Grok=\(board.hiddenCounts.grok) ox-alpha=\(board.hiddenCounts.claudeOxAlpha)")
+        // 派工状态（套餐）：现场跑一轮。面板上认不出哪行是套餐的时候，排查看这行。
+        print(await CortexPlanStatusDisplay.dumpStateLine(
+            environment: ProcessInfo.processInfo.environment,
+            watchDirectory: paths.logsDirectory,
+            fallbackRepositoryRoot: paths.repositoryRoot,
+            defaults: SentinelSettings.resolvedDefaults()
+        ))
         print("  裁剪判据：\(SentinelBoardWindow.recencyCriterion)")
         if let footerText = board.footerText {
             print("  脚注：\(footerText)")

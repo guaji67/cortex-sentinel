@@ -841,20 +841,18 @@ final class SentinelStore {
         }
     }
 
-    /// 失败时：上次成功的结果不到 30 分钟接着用；否则当没有，原因一句话留给详情卡。
-    private static let glmPlanStatusReuseWindow: TimeInterval = 30 * 60
-
+    /// 失败时：上次成功的整份留在内存里当套餐身份（指纹/名/上限，不落盘），
+    /// 失败原因一并记下；数还信不信（30 分钟复用窗）由显示层按时间判。
     private func applyGLMPlanStatus(_ outcome: CortexPlanStatusOutcome, at now: Date) {
         switch outcome {
         case let .success(payload):
             glmPlanStatus = CortexPlanStatusDisplayState(payload: payload, fetchedAt: now, failureText: nil)
         case let .failure(reason):
-            if let current = glmPlanStatus, current.payload != nil,
-               let fetchedAt = current.fetchedAt,
-               now.timeIntervalSince(fetchedAt) < Self.glmPlanStatusReuseWindow {
-                return
-            }
-            glmPlanStatus = CortexPlanStatusDisplayState(payload: nil, fetchedAt: nil, failureText: reason)
+            glmPlanStatus = CortexPlanStatusDisplayState(
+                payload: glmPlanStatus?.payload,
+                fetchedAt: glmPlanStatus?.fetchedAt,
+                failureText: reason
+            )
         }
     }
 

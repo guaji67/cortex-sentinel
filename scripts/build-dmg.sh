@@ -223,7 +223,7 @@ echo "==> 压缩成只读 DMG（${DMG_FORMAT}）"
 [ -f "$OUTPUT_PATH" ] || { echo "转换失败" >&2; exit 1; }
 
 echo "==> 核交付盘"
-FORMAT_OUT="$(/usr/bin/hdiutil imageinfo -format "$OUTPUT_PATH" 2>/dev/null | sed -n '2p' | xargs)"
+FORMAT_OUT="$(/usr/bin/hdiutil imageinfo -format "$OUTPUT_PATH" 2>/dev/null | sed -n '1p' | xargs)"
 [ "$FORMAT_OUT" = "$DMG_FORMAT" ] || { echo "交付盘格式不是 ${DMG_FORMAT}：$FORMAT_OUT" >&2; exit 1; }
 CHECK_MOUNT="$(mktemp -d "${TMPDIR:-/tmp}/sentinel-dmg-check.XXXXXX")"
 /usr/bin/hdiutil attach "$OUTPUT_PATH" -readonly -nobrowse -mountpoint "$CHECK_MOUNT" -quiet

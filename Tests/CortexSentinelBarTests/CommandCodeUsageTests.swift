@@ -501,6 +501,130 @@ final class CommandCodeUsageTests: XCTestCase {
         XCTAssertEqual(ProviderRenameStore.displayName(defaults: defaults, id: "glm:key1", fallback: "GLM pro"), "GLM pro")
     }
 
+    func testProviderDotSignalThresholds() {
+        // 5 小时窗优先：剩 20% 以内黄，1% 以内红，其余绿。
+        XCTAssertEqual(
+            SentinelBalancesSection.providerDotSignal(
+                fiveHourRemaining: 19, weeklyRemaining: nil,
+                balanceAmount: nil, stale: false, hasDisplayableNumber: true
+            ),
+            SentinelTheme.Colors.warning
+        )
+        XCTAssertEqual(
+            SentinelBalancesSection.providerDotSignal(
+                fiveHourRemaining: 0.5, weeklyRemaining: nil,
+                balanceAmount: nil, stale: false, hasDisplayableNumber: true
+            ),
+            SentinelTheme.Colors.danger
+        )
+        XCTAssertEqual(
+            SentinelBalancesSection.providerDotSignal(
+                fiveHourRemaining: 21, weeklyRemaining: nil,
+                balanceAmount: nil, stale: false, hasDisplayableNumber: true
+            ),
+            SentinelTheme.Colors.success
+        )
+        // 周窗兜底：剩 10% 以内，无论 5h 多少都黄；1% 以内红。
+        XCTAssertEqual(
+            SentinelBalancesSection.providerDotSignal(
+                fiveHourRemaining: 100, weeklyRemaining: 9,
+                balanceAmount: nil, stale: false, hasDisplayableNumber: true
+            ),
+            SentinelTheme.Colors.warning
+        )
+        XCTAssertEqual(
+            SentinelBalancesSection.providerDotSignal(
+                fiveHourRemaining: 100, weeklyRemaining: 0.5,
+                balanceAmount: nil, stale: false, hasDisplayableNumber: true
+            ),
+            SentinelTheme.Colors.danger
+        )
+        // 余额：<10 黄、<1 红；各维度取最严重一档。
+        XCTAssertEqual(
+            SentinelBalancesSection.providerDotSignal(
+                fiveHourRemaining: 100, weeklyRemaining: nil,
+                balanceAmount: 9, stale: false, hasDisplayableNumber: true
+            ),
+            SentinelTheme.Colors.warning
+        )
+        XCTAssertEqual(
+            SentinelBalancesSection.providerDotSignal(
+                fiveHourRemaining: 100, weeklyRemaining: nil,
+                balanceAmount: 0.5, stale: false, hasDisplayableNumber: true
+            ),
+            SentinelTheme.Colors.danger
+        )
+        // 5h 全好也压不过周窗的黄。
+        XCTAssertEqual(
+            SentinelBalancesSection.providerDotSignal(
+                fiveHourRemaining: 100, weeklyRemaining: 5,
+                balanceAmount: 50, stale: false, hasDisplayableNumber: true
+            ),
+            SentinelTheme.Colors.warning
+        )
+        // stale 至少黄；没数据灰。
+        XCTAssertEqual(
+            SentinelBalancesSection.providerDotSignal(
+                fiveHourRemaining: nil, weeklyRemaining: nil,
+                balanceAmount: nil, stale: true, hasDisplayableNumber: true
+            ),
+            SentinelTheme.Colors.warning
+        )
+        XCTAssertEqual(
+            SentinelBalancesSection.providerDotSignal(
+                fiveHourRemaining: nil, weeklyRemaining: nil,
+                balanceAmount: nil, stale: false, hasDisplayableNumber: false
+            ),
+            SentinelTheme.Colors.secondaryForeground
+        )
+    }
+
+    func testResetNoteColorUrgency() {
+        XCTAssertNil(SentinelBalancesSection.resetNoteColor(nil))
+        XCTAssertNil(SentinelBalancesSection.resetNoteColor(0.5))
+        XCTAssertEqual(
+            SentinelBalancesSection.resetNoteColor(0.7),
+            SentinelTheme.Colors.warning
+        )
+        XCTAssertEqual(
+            SentinelBalancesSection.resetNoteColor(0.9),
+            SentinelTheme.Colors.danger
+        )
+    }
+
+    func testProviderOrderingPureLogic() {
+        struct FakeAccount: ProviderAccount {
+            let key: String
+        }
+        let accounts = [FakeAccount(key: "a"), FakeAccount(key: "b"), FakeAccount(key: "c")]
+        // 没登记过：保持原顺序。
+        XCTAssertEqual(
+            ProviderOrdering.ordered(accounts, order: []).map(\.key),
+            ["a", "b", "c"]
+        )
+        // 登记过：按用户顺序；没登记的（d 会排在登记表外）保持原相对顺序垫底。
+        let ordered = ProviderOrdering.ordered(
+            accounts + [FakeAccount(key: "d")],
+            order: ["c", "a"]
+        )
+        XCTAssertEqual(ordered.map(\.key), ["c", "a", "b", "d"])
+        // 挪到指定位置。
+        XCTAssertEqual(
+            ProviderOrdering.moved(keys: ["a", "b", "c"], key: "a", toIndex: 2),
+            ["b", "c", "a"]
+        )
+        // 位置越界按边界处理。
+        XCTAssertEqual(
+            ProviderOrdering.moved(keys: ["a", "b", "c"], key: "a", toIndex: 99),
+            ["b", "c", "a"]
+        )
+        // key 不在表里：原样返回。
+        XCTAssertEqual(
+            ProviderOrdering.moved(keys: ["a", "b", "c"], key: "x", toIndex: 0),
+            ["a", "b", "c"]
+        )
+    }
+
     func testDisplayTitlePrefixesCCAndKeepsUserNaming() {
         // 没命名 → Command Code 兜底；自带 CC / Command 的原样；普通名字补 CC 前缀。
         XCTAssertEqual(

@@ -590,6 +590,30 @@ enum ProviderRenameNamespace {
     static let commandCode = "commandcode"
 }
 
+/// 拖拽排序的纯逻辑：可单测。登记过的 key 按用户顺序，没登记过的保持原相对顺序。
+enum ProviderOrdering {
+    static func ordered<T: ProviderAccount>(_ accounts: [T], order: [String]) -> [T] {
+        accounts.enumerated().sorted { l, r in
+            let li = order.firstIndex(of: l.element.key) ?? Int.max
+            let ri = order.firstIndex(of: r.element.key) ?? Int.max
+            if li != ri {
+                return li < ri
+            }
+            return l.offset < r.offset
+        }.map(\.element)
+    }
+
+    /// 把 key 挪到 target 位；key 不在表里或位置没变时原样返回。
+    static func moved(keys: [String], key: String, toIndex target: Int) -> [String] {
+        var next = keys.filter { $0 != key }
+        guard next.count == keys.count - 1 else {
+            return keys
+        }
+        next.insert(key, at: max(0, min(next.count, target)))
+        return next
+    }
+}
+
 /// 面板里直接点名字改显示名的持久化层。
 /// 覆盖名按「命名空间:完整 key」存，key 换了覆盖自然失效。
 enum ProviderRenameStore {

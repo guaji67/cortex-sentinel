@@ -55,3 +55,11 @@
 ## 余额口径（2026-09-11 定，反了就是回归）
 
 数字一律剩余口径，像电量：GLM 的 `remainingPercentage` 已经是剩余，显示时禁止再 `100 - $0`（0.1.15 曾双重反转成已用口径）。横条一律已流逝方向，正向走：重置时 0 起步绿条，快到重置点变黄（>=0.6），压线变红（>=0.85）。函数入口 `timeElapsedFraction` / `periodElapsedFraction`。守卫：`CommandCodeUsageTests.testTimeAndPeriodFractions`。
+
+## 状态点与排序（2026-09-11 定）
+
+余额区 GLM / Command Code 行首的点 = 额度状态，综合判定取最严重一档：5 小时窗剩余 ≤20% 黄、≤1% 红；周窗剩余 ≤10% 黄、≤1% 红；余额类（现金/月余）<10 黄、<1 红；stale 至少黄；没数据灰。Cursor / AIO / 官方不参与这套。守卫：`CommandCodeUsageTests.testProviderDotSignalThresholds`。
+
+按住状态点上下拖 = 同组内排序（GLM 一组、CC 一组，互不混排），顺序持久化到 `com.falcon.cortex.sentinelbar.providerOrder.*`。Cursor / AIO 行的点无手势。守卫：`CommandCodeUsageTests.testProviderOrderingPureLogic`。
+
+组与组之间不许再放无含义的小圆点分隔符（已随 0.1.17 删除，别加回来）。改名：点行名编辑，回车或点任意空白处提交，Esc 取消。详情卡：标签/数值/重置时间三列，重置时间越近越醒目（≥60% 流逝黄、≥85% 红）。

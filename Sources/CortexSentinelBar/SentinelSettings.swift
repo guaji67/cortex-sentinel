@@ -109,6 +109,11 @@ enum SentinelAppVersion {
 /// UserDefaults 键。一律带 bundle 前缀，避免跟别的 app 撞。
 enum SentinelSettingsKey {
     static let bundlePrefix = "com.falcon.cortex.sentinelbar"
+
+    /// 余额行拖拽排序的持久化键（GLM / Command Code 各一份 key 顺序表）。
+    static func providerOrder(_ namespace: String) -> String {
+        "\(bundlePrefix).providerOrder.\(namespace)"
+    }
     static let loginItemEnabled = "\(bundlePrefix).loginItemEnabled"
     static let historyRetainCount = "\(bundlePrefix).historyRetainCount"
     /// 主开关。沿用旧键：以前关掉等于四种通知全关。

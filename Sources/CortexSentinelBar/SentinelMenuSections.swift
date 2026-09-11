@@ -141,26 +141,98 @@ extension EnvironmentValues {
     }
 }
 
-/// 悬停 0.5 秒弹出的详情卡：标题 + 逐行明细。
-/// 不用系统 tooltip：弹层里系统悬浮提示经常不出，且样式没法设计。
-struct BalanceHoverDetail: View {
+/// 可在余额区拖拽排序的账号行模型（GLM / Command Code）。
+/// Cursor / AIO / 官方不实现，不参与排序与状态点判定。
+protocol ProviderAccount {
+    var key: String { get }
+}
+
+extension CommandCodeAccountUsage: ProviderAccount {}
+
+extension GLMAccountUsage: ProviderAccount {}
+
+/// 详情卡一行：左标签、中数值、右备注（重置/刷新时间）。
+struct BalanceHoverLine {
+    let label: String
+    let value: String
+    var note: String?
+    var noteColor: Color?
+}
+
+/// 详情卡内容：标题区（名字 + 来源/身份）、明细行、页脚（更新时间/异常）。
+struct BalanceHoverContent {
     let title: String
-    let lines: [String]
+    var subtitle: String?
+    var lines: [BalanceHoverLine]
+    var footer: String?
+    var alert: String?
+    var alertColor: Color?
+}
+
+/// 悬停 0.5 秒弹出的详情卡。
+/// 不用系统 tooltip：弹层里系统悬浮提示经常不出，且样式没法设计。
+/// Falcon 2026-09-11 令：不许密密麻麻一团字，标签/数值/时间分列，重点靠颜色。
+struct BalanceHoverDetail: View {
+    let content: BalanceHoverContent
 
     var body: some View {
-        VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xxs) {
-            Text(title)
-                .font(SentinelTheme.Fonts.rowTitle)
-                .foregroundStyle(SentinelTheme.Colors.foreground)
-            ForEach(lines, id: \.self) { line in
-                Text(line)
-                    .font(SentinelTheme.Fonts.subtitle)
-                    .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
-                    .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: SentinelTheme.Spacing.sm) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(content.title)
+                    .font(SentinelTheme.Fonts.rowTitle)
+                    .foregroundStyle(SentinelTheme.Colors.foreground)
+                if let subtitle = content.subtitle {
+                    Text(subtitle)
+                        .font(SentinelTheme.Fonts.balanceMeta)
+                        .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                        .lineLimit(1)
+                }
+            }
+            if !content.lines.isEmpty {
+                Rectangle()
+                    .fill(SentinelTheme.Colors.borderSoft)
+                    .frame(height: 1)
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(content.lines, id: \.label) { line in
+                        HStack(alignment: .firstTextBaseline, spacing: SentinelTheme.Spacing.sm) {
+                            Text(line.label)
+                                .font(SentinelTheme.Fonts.balanceMeta)
+                                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                                .frame(width: 58, alignment: .leading)
+                            Text(line.value)
+                                .font(SentinelTheme.Fonts.subtitle)
+                                .foregroundStyle(SentinelTheme.Colors.foreground)
+                                .monospacedDigit()
+                                .lineLimit(1)
+                                .layoutPriority(1)
+                            Spacer(minLength: SentinelTheme.Spacing.sm)
+                            if let note = line.note {
+                                Text(note)
+                                    .font(SentinelTheme.Fonts.metadata)
+                                    .foregroundStyle(line.noteColor ?? SentinelTheme.Colors.secondaryForeground)
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
+                }
+            }
+            if content.footer != nil || content.alert != nil {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    if let footer = content.footer {
+                        Text(footer)
+                            .font(SentinelTheme.Fonts.metadata)
+                            .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                    }
+                    if let alert = content.alert {
+                        Text(alert)
+                            .font(SentinelTheme.Fonts.balanceMeta)
+                            .foregroundStyle(content.alertColor ?? SentinelTheme.Colors.danger)
+                    }
+                }
             }
         }
         .padding(SentinelTheme.Spacing.md)
-        .frame(width: 300, alignment: .leading)
+        .frame(width: 330, alignment: .leading)
         .background(SentinelTheme.Colors.panel)
         .clipShape(RoundedRectangle(cornerRadius: SentinelTheme.Radius.panel))
         .overlay(
@@ -174,8 +246,7 @@ struct BalanceHoverDetail: View {
 
 /// 悬停 0.5 秒后显示详情卡，移开即消失；显示期间该行置顶避免被相邻行盖住。
 struct HoverDetailCard: ViewModifier {
-    let title: () -> String
-    let lines: () -> [String]
+    let makeContent: () -> BalanceHoverContent
     @Environment(\.hoverCardPreview) private var preview
     @State private var pending = false
     @State private var visible = false
@@ -200,7 +271,7 @@ struct HoverDetailCard: ViewModifier {
             }
             .overlay(alignment: .leading) {
                 if showsCard {
-                    BalanceHoverDetail(title: title(), lines: lines())
+                    BalanceHoverDetail(content: makeContent())
                         .offset(y: -30)
                         .transition(.opacity)
                 }
@@ -209,7 +280,7 @@ struct HoverDetailCard: ViewModifier {
     }
 }
 
-/// 余额行名字：点一下就地变输入框，回车提交、Esc 取消、点别处不提交。
+/// 余额行名字：点一下就地变输入框，回车或点任意空白处提交、Esc 取消。
 /// Falcon 2026-09-11 令：改名不要编辑按钮，直接点名字。空名字等于不改。
 struct EditableBalanceRowName: View {
     let text: String
@@ -230,6 +301,12 @@ struct EditableBalanceRowName: View {
                 .onSubmit(commit)
                 .onExitCommand {
                     isEditing = false
+                }
+                .onChange(of: isFocused) { focused in
+                    // 点到编辑框以外（空白处/别的行）就算提交，光标不许一直闪。
+                    if !focused, isEditing {
+                        commit()
+                    }
                 }
                 .accessibilityIdentifier(accessibilityIdentifier)
         } else {
@@ -616,6 +693,11 @@ struct SentinelBalancesSection: View {
     var store: SentinelStore
     /// 引导行点击回调；上层（SentinelMenuView）用它弹 key 填写浮层。
     var onAddCommandCodeKey: () -> Void = {}
+    /// 拖拽中的行 key 与拖动起始下标；同一时刻只有一行在拖。
+    @State private var draggingKey: String?
+    @State private var dragBaseIndex: Int?
+    /// 点空白处时把焦点挪过来，正在编辑的行名随之失焦提交。
+    @FocusState private var renameSinkFocused: Bool
 
     var body: some View {
         switch BalanceSectionPresentation.resolve(
@@ -663,6 +745,60 @@ struct SentinelBalancesSection: View {
                 }
             }
         }
+        .background {
+            // 焦点垃圾桶：点空白处把焦点从正在编辑的行名上挪走，触发失焦提交。
+            TextField("", text: .constant(""))
+                .frame(width: 1, height: 1)
+                .opacity(0)
+                .focused($renameSinkFocused)
+                .accessibilityHidden(true)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            renameSinkFocused = true
+        }
+    }
+
+    /// 行首状态点：颜色即额度状态（providerDotSignal）。按住上下拖给同组排序，
+    /// 仅 GLM / Command Code 行有手势；拖动中点放大提示。Falcon 2026-09-11 令。
+    private func providerDot(
+        color: Color,
+        namespace: String,
+        key: String,
+        index: Int,
+        keys: [String]
+    ) -> some View {
+        let pitch = SentinelTheme.Metrics.usageRowHeight + SentinelTheme.Metrics.balanceRowSpacing
+        return Circle()
+            .fill(color)
+            .frame(
+                width: SentinelTheme.Metrics.balanceDot,
+                height: SentinelTheme.Metrics.balanceDot
+            )
+            .scaleEffect(draggingKey == key ? 1.5 : 1)
+            .animation(.easeOut(duration: 0.12), value: draggingKey)
+            .contentShape(Rectangle().inset(by: -6))
+            .gesture(
+                DragGesture(minimumDistance: 2)
+                    .onChanged { value in
+                        if draggingKey == nil {
+                            draggingKey = key
+                            dragBaseIndex = index
+                        }
+                        guard draggingKey == key, let base = dragBaseIndex else { return }
+                        let target = base + Int((value.translation.height / pitch).rounded())
+                        store.moveProvider(
+                            namespace: namespace,
+                            keys: keys,
+                            key: key,
+                            toIndex: target
+                        )
+                    }
+                    .onEnded { _ in
+                        draggingKey = nil
+                        dragBaseIndex = nil
+                    }
+            )
     }
 
     /// Command Code 额度：一把 key 一行（5h / 周 / 月），排在 GLM 前面。
@@ -672,8 +808,12 @@ struct SentinelBalancesSection: View {
             commandCodeGuideRow
         } else {
             VStack(spacing: SentinelTheme.Metrics.balanceRowSpacing) {
-                ForEach(store.commandCodeUsage.accounts) { account in
-                    commandCodeRow(account)
+                let ordered = store.orderedProviders(
+                    store.commandCodeUsage.accounts,
+                    namespace: ProviderRenameNamespace.commandCode
+                )
+                ForEach(Array(ordered.enumerated()), id: \.element.id) { index, account in
+                    commandCodeRow(account, index: index, keys: ordered.map(\.key))
                 }
                 if store.commandCodeUsage.accounts.isEmpty {
                     commandCodeWaitingRow
@@ -740,7 +880,11 @@ struct SentinelBalancesSection: View {
         .contentShape(Rectangle())
     }
 
-    private func commandCodeRow(_ account: CommandCodeAccountUsage) -> some View {
+    private func commandCodeRow(
+        _ account: CommandCodeAccountUsage,
+        index: Int,
+        keys: [String]
+    ) -> some View {
         let displayName = store.providerDisplayName(
             namespace: ProviderRenameNamespace.commandCode,
             id: account.key,
@@ -764,12 +908,13 @@ struct SentinelBalancesSection: View {
             ? Self.periodElapsedFraction(end: account.periodEnd, start: account.periodStart, now: now)
             : nil
         return HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
-            Circle()
-                .fill(commandCodeStatusColor(account))
-                .frame(
-                    width: SentinelTheme.Metrics.balanceDot,
-                    height: SentinelTheme.Metrics.balanceDot
-                )
+            providerDot(
+                color: commandCodeStatusColor(account),
+                namespace: ProviderRenameNamespace.commandCode,
+                key: account.key,
+                index: index,
+                keys: keys
+            )
             EditableBalanceRowName(
                 text: displayName,
                 accessibilityIdentifier: "commandcode-name-\(account.maskedKeyText)"
@@ -800,9 +945,6 @@ struct SentinelBalancesSection: View {
                                 barFraction: fiveHourBar
                             )
                         }
-                        if fiveHourRemaining != nil, weeklyRemaining != nil || monthly != nil {
-                            cursorUsageDivider
-                        }
                         if let weeklyRemaining {
                             quotaSegmentWithBar(
                                 label: "周",
@@ -811,9 +953,6 @@ struct SentinelBalancesSection: View {
                                 columnWidth: SentinelTheme.Metrics.usageColWidth2,
                                 barFraction: weeklyBar
                             )
-                        }
-                        if weeklyRemaining != nil, monthly != nil {
-                            cursorUsageDivider
                         }
                         if let monthly {
                             quotaSegmentWithBar(
@@ -838,10 +977,7 @@ struct SentinelBalancesSection: View {
         }
         .frame(height: SentinelTheme.Metrics.usageRowHeight)
         .contentShape(Rectangle())
-        .modifier(HoverDetailCard(
-            title: { self.commandCodeDetailTitle(account) },
-            lines: { self.commandCodeDetailLines(account) }
-        ))
+        .modifier(HoverDetailCard(makeContent: { self.commandCodeDetailContent(account) }))
     }
 
     /// 无任何可显示数字时的右侧文案：优先报错；接口通了但什么都没有显示未知。
@@ -887,63 +1023,129 @@ struct SentinelBalancesSection: View {
     }
 
     private func commandCodeStatusColor(_ account: CommandCodeAccountUsage) -> Color {
-        if account.stale {
-            return SentinelTheme.Colors.warning
+        Self.providerDotSignal(
+            fiveHourRemaining: account.fiveHourWindow?.remainingPercentage,
+            weeklyRemaining: account.weeklyWindow?.remainingPercentage,
+            balanceAmount: account.monthlyRemainingCredits,
+            stale: account.stale,
+            hasDisplayableNumber: account.hasDisplayableNumber
+        )
+    }
+
+    /// 状态点判定（Falcon 2026-09-11 定，只管 GLM + Command Code，Cursor/AIO 不参与）：
+    /// 先看 5 小时窗剩余：≤20% 黄、≤1% 红；
+    /// 周窗兜底：剩余 ≤10% 无论 5h 多少都黄、≤1% 红；
+    /// 余额类（现金/月余取最大算）<10 黄、<1 红；
+    /// 各维度取最严重一档；stale 至少黄；没数据灰。
+    static func providerDotSignal(
+        fiveHourRemaining: Double?,
+        weeklyRemaining: Double?,
+        balanceAmount: Double?,
+        stale: Bool,
+        hasDisplayableNumber: Bool
+    ) -> Color {
+        guard hasDisplayableNumber else {
+            return SentinelTheme.Colors.secondaryForeground
         }
-        let windows = [account.fiveHourWindow?.remainingPercentage, account.weeklyWindow?.remainingPercentage]
-            .compactMap { $0 }
-        if windows.contains(where: { $0 <= 100 - AIOConstants.quotaWarningThreshold }) {
-            return SentinelTheme.Colors.warning
+        var severity = 0
+        if let remaining = fiveHourRemaining {
+            if remaining <= 1 {
+                severity = max(severity, 2)
+            } else if remaining <= 20 {
+                severity = max(severity, 1)
+            }
         }
-        if let monthly = account.monthlyRemainingCredits, monthly <= 0 {
+        if let remaining = weeklyRemaining {
+            if remaining <= 1 {
+                severity = max(severity, 2)
+            } else if remaining <= 10 {
+                severity = max(severity, 1)
+            }
+        }
+        if let amount = balanceAmount {
+            if amount < 1 {
+                severity = max(severity, 2)
+            } else if amount < 10 {
+                severity = max(severity, 1)
+            }
+        }
+        if severity >= 2 {
             return SentinelTheme.Colors.danger
         }
-        return account.hasDisplayableNumber
-            ? SentinelTheme.Colors.success
-            : SentinelTheme.Colors.secondaryForeground
-    }
-
-    private func commandCodeDetailTitle(_ account: CommandCodeAccountUsage) -> String {
-        "Command Code 订阅 · \(store.providerDisplayName(namespace: ProviderRenameNamespace.commandCode, id: account.key, fallback: account.displayTitle))"
-    }
-
-    private func commandCodeDetailLines(_ account: CommandCodeAccountUsage) -> [String] {
-        var lines: [String] = []
-        if let identity = account.accountIdentity, !identity.isEmpty {
-            lines.append(identity)
+        if severity >= 1 || stale {
+            return SentinelTheme.Colors.warning
         }
-        for (name, window) in [("5 小时窗", account.fiveHourWindow), ("周窗", account.weeklyWindow)] {
-            guard let window else {
-                continue
-            }
-            var piece = "\(name) "
+        return SentinelTheme.Colors.success
+    }
+
+    private func commandCodeDetailContent(_ account: CommandCodeAccountUsage) -> BalanceHoverContent {
+        let now = Date()
+        var lines: [BalanceHoverLine] = []
+        for (name, window, windowLength) in [
+            ("5 小时窗", account.fiveHourWindow, 5 * 3600.0),
+            ("周窗", account.weeklyWindow, 7 * 24 * 3600.0),
+        ] {
+            guard let window else { continue }
+            var value = ""
             if let used = window.used, let cap = window.cap, cap > 0 {
-                piece += "已用 \(Self.windowAmountText(used)) / \(Self.windowAmountText(cap))"
+                value = "已用 \(Self.windowAmountText(used)) / \(Self.windowAmountText(cap))"
             } else if let remaining = window.remainingPercentage {
-                piece += "剩余 \(Int(remaining.rounded()))%"
+                value = "剩余 \(Int(remaining.rounded()))%"
             }
-            if let resetAt = window.resetAt {
-                piece += "，\(Self.shortTime(resetAt)) 重置"
-            }
-            lines.append(piece)
+            lines.append(BalanceHoverLine(
+                label: name,
+                value: value,
+                note: window.resetAt.map { "\(Self.shortTime($0)) 重置" },
+                noteColor: Self.resetNoteColor(
+                    Self.timeElapsedFraction(resetAt: window.resetAt, windowLength: windowLength, now: now)
+                )
+            ))
         }
         if let monthly = account.monthlyRemainingCredits {
-            var piece = "月余 $\(String(format: "%.2f", monthly))"
-            if let periodEnd = account.periodEnd {
-                piece += "，\(Self.shortTime(periodEnd)) 刷新"
-            }
-            lines.append(piece)
+            lines.append(BalanceHoverLine(
+                label: "月余",
+                value: String(format: "$%.2f", monthly),
+                note: account.periodEnd.map { "\(Self.shortTime($0)) 刷新" },
+                noteColor: nil
+            ))
         }
-        if let checkedAt = account.checkedAt {
-            lines.append("\(SentinelTimeFormat.clockTime(checkedAt)) 更新")
+        var subtitle = "Command Code 订阅"
+        if let identity = account.accountIdentity, !identity.isEmpty {
+            subtitle += " · \(identity)"
         }
-        if account.stale {
-            lines.append("数据已过期")
-        }
+        var alert: String?
+        var alertColor: Color?
         if let errorMessage = account.errorMessage {
-            lines.append(errorMessage)
+            alert = errorMessage
+            alertColor = SentinelTheme.Colors.danger
+        } else if account.stale {
+            alert = "数据已过期"
+            alertColor = SentinelTheme.Colors.warning
         }
-        return lines
+        return BalanceHoverContent(
+            title: store.providerDisplayName(
+                namespace: ProviderRenameNamespace.commandCode,
+                id: account.key,
+                fallback: account.displayTitle
+            ),
+            subtitle: subtitle,
+            lines: lines,
+            footer: account.checkedAt.map { "\(SentinelTimeFormat.clockTime($0)) 更新" },
+            alert: alert,
+            alertColor: alertColor
+        )
+    }
+
+    /// 重置时间备注：越接近重置越醒目（快到变黄、压线变红），平时灰。
+    static func resetNoteColor(_ elapsed: Double?) -> Color? {
+        guard let elapsed else { return nil }
+        if elapsed >= 0.85 {
+            return SentinelTheme.Colors.danger
+        }
+        if elapsed >= 0.6 {
+            return SentinelTheme.Colors.warning
+        }
+        return nil
     }
 
     /// 窗口用量的整数就去掉小数点，小数留一位：1.334076828 → 1.3，14.0 → 14。
@@ -967,14 +1169,22 @@ struct SentinelBalancesSection: View {
             EmptyView()
         } else {
             VStack(spacing: SentinelTheme.Metrics.balanceRowSpacing) {
-                ForEach(store.glmUsage.accounts) { account in
-                    glmUsageRow(account)
+                let ordered = store.orderedProviders(
+                    store.glmUsage.accounts,
+                    namespace: ProviderRenameNamespace.glm
+                )
+                ForEach(Array(ordered.enumerated()), id: \.element.id) { index, account in
+                    glmUsageRow(account, index: index, keys: ordered.map(\.key))
                 }
             }
         }
     }
 
-    private func glmUsageRow(_ account: GLMAccountUsage) -> some View {
+    private func glmUsageRow(
+        _ account: GLMAccountUsage,
+        index: Int,
+        keys: [String]
+    ) -> some View {
         let displayName = store.providerDisplayName(
             namespace: ProviderRenameNamespace.glm,
             id: account.key,
@@ -994,12 +1204,13 @@ struct SentinelBalancesSection: View {
             now: now
         )
         return HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
-            Circle()
-                .fill(glmUsageStatusColor(account))
-                .frame(
-                    width: SentinelTheme.Metrics.balanceDot,
-                    height: SentinelTheme.Metrics.balanceDot
-                )
+            providerDot(
+                color: glmUsageStatusColor(account),
+                namespace: ProviderRenameNamespace.glm,
+                key: account.key,
+                index: index,
+                keys: keys
+            )
             EditableBalanceRowName(
                 text: displayName,
                 accessibilityIdentifier: "glm-name-\(account.maskedKeyText)"
@@ -1032,9 +1243,6 @@ struct SentinelBalancesSection: View {
                                 barFraction: fiveHourBar
                             )
                         }
-                        if hasFiveHour, hasWeekly {
-                            cursorUsageDivider
-                        }
                         if hasWeekly, let weekly = account.weeklyWindow {
                             quotaSegmentWithBar(
                                 label: "周",
@@ -1046,9 +1254,6 @@ struct SentinelBalancesSection: View {
                             )
                         }
                         if account.cashBalance != nil {
-                            if hasFiveHour || hasWeekly {
-                                cursorUsageDivider
-                            }
                             glmBalanceSegment(account)
                         }
                     }
@@ -1061,10 +1266,7 @@ struct SentinelBalancesSection: View {
         }
         .frame(height: SentinelTheme.Metrics.usageRowHeight)
         .contentShape(Rectangle())
-        .modifier(HoverDetailCard(
-            title: { self.glmDetailTitle(account) },
-            lines: { self.glmDetailLines(account) }
-        ))
+        .modifier(HoverDetailCard(makeContent: { self.glmDetailContent(account) }))
     }
 
     /// 无任何可显示数字时的右侧文案：优先报错；接口通了但两头都空显示未知。
@@ -1114,55 +1316,63 @@ struct SentinelBalancesSection: View {
     }
 
     private func glmUsageStatusColor(_ account: GLMAccountUsage) -> Color {
-        if account.stale {
-            return SentinelTheme.Colors.warning
-        }
-        let hasLow = [account.fiveHourWindow?.percentUsed, account.weeklyWindow?.percentUsed]
-            .compactMap { $0 }
-            .contains { (100 - $0) <= 100 - AIOConstants.quotaWarningThreshold }
-        if hasLow
-            || account.cashBalance.map { $0 < GLMUsageConstants.lowCashBalance } == true {
-            return SentinelTheme.Colors.warning
-        }
-        return account.hasDisplayableNumber
-            ? SentinelTheme.Colors.success
-            : SentinelTheme.Colors.secondaryForeground
+        Self.providerDotSignal(
+            fiveHourRemaining: account.fiveHourWindow?.remainingPercentage,
+            weeklyRemaining: account.weeklyWindow?.remainingPercentage,
+            balanceAmount: account.cashBalance,
+            stale: account.stale,
+            hasDisplayableNumber: account.hasDisplayableNumber
+        )
     }
 
-    private func glmDetailTitle(_ account: GLMAccountUsage) -> String {
-        "GLM Coding Plan · \(store.providerDisplayName(namespace: ProviderRenameNamespace.glm, id: account.key, fallback: account.displayTitle))"
-    }
-
-    private func glmDetailLines(_ account: GLMAccountUsage) -> [String] {
-        var lines: [String] = []
-        if let level = account.level, !level.isEmpty {
-            lines.append("档位 \(level)")
-        }
-        for (name, window) in [("5 小时窗", account.fiveHourWindow), ("周窗", account.weeklyWindow)] {
-            guard let window else {
-                continue
-            }
-            var piece = "\(name) "
+    private func glmDetailContent(_ account: GLMAccountUsage) -> BalanceHoverContent {
+        let now = Date()
+        var lines: [BalanceHoverLine] = []
+        for (name, window, windowLength) in [
+            ("5 小时窗", account.fiveHourWindow, 5 * 3600.0),
+            ("周窗", account.weeklyWindow, 7 * 24 * 3600.0),
+        ] {
+            guard let window else { continue }
+            var value = ""
             if let used = window.usedPoints, let total = window.totalPoints, total > 0 {
-                piece += "已用 \(Self.pointsText(used)) / \(Self.pointsText(total)) 积分"
+                value = "已用 \(Self.pointsText(used)) / \(Self.pointsText(total)) 积分"
             } else if let percent = window.percentUsed {
-                piece += "已用 \(Int(percent.rounded()))%"
+                value = "已用 \(Int(percent.rounded()))%"
             }
-            if let resetAt = window.resetAt {
-                piece += "，\(Self.shortTime(resetAt)) 重置"
-            }
-            lines.append(piece)
+            lines.append(BalanceHoverLine(
+                label: name,
+                value: value,
+                note: window.resetAt.map { "\(Self.shortTime($0)) 重置" },
+                noteColor: Self.resetNoteColor(
+                    Self.timeElapsedFraction(resetAt: window.resetAt, windowLength: windowLength, now: now)
+                )
+            ))
         }
-        if let checkedAt = account.checkedAt {
-            lines.append("\(SentinelTimeFormat.clockTime(checkedAt)) 更新")
+        var subtitle = "GLM Coding Plan"
+        if let level = account.level, !level.isEmpty {
+            subtitle += " · 档位 \(level)"
         }
-        if account.stale {
-            lines.append("数据已过期")
-        }
+        var alert: String?
+        var alertColor: Color?
         if let errorMessage = account.errorMessage {
-            lines.append(errorMessage)
+            alert = errorMessage
+            alertColor = SentinelTheme.Colors.danger
+        } else if account.stale {
+            alert = "数据已过期"
+            alertColor = SentinelTheme.Colors.warning
         }
-        return lines
+        return BalanceHoverContent(
+            title: store.providerDisplayName(
+                namespace: ProviderRenameNamespace.glm,
+                id: account.key,
+                fallback: account.displayTitle
+            ),
+            subtitle: subtitle,
+            lines: lines,
+            footer: account.checkedAt.map { "\(SentinelTimeFormat.clockTime($0)) 更新" },
+            alert: alert,
+            alertColor: alertColor
+        )
     }
 
     /// 积分数字按官方口径缩写：2201 → 2,201；12000 → 1.2万。
@@ -1256,9 +1466,7 @@ struct SentinelBalancesSection: View {
                 // 哪组快用完一眼扫出来，而不是整行一个颜色糊在一起。
                 HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
                     cursorUsageSegment("Grok", snapshot.autoPercentUsed)
-                    cursorUsageDivider
                     cursorUsageSegment("API", snapshot.apiPercentUsed)
-                    cursorUsageDivider
                     cursorUsageSegment("Bot", snapshot.botPercentUsed)
                 }
                 .fixedSize(horizontal: true, vertical: false)
@@ -1268,12 +1476,6 @@ struct SentinelBalancesSection: View {
             .contentShape(Rectangle())
             .help(cursorUsageTooltip(snapshot))
         }
-    }
-
-    private var cursorUsageDivider: some View {
-        Circle()
-            .fill(SentinelTheme.Colors.secondaryForeground.opacity(0.45))
-            .frame(width: 2.5, height: 2.5)
     }
 
     private func cursorUsageSegment(

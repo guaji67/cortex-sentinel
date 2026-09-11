@@ -35,6 +35,8 @@ final class SentinelStore {
     private(set) var commandCodeKeyCount = 0
     /// 面板点名字改显示名的覆盖表缓存；改名时同步更新，读它的行才会刷新。
     private(set) var providerRenames: [String: String] = [:]
+    /// 拖拽排序出来的 key 顺序缓存（GLM / Command Code 各一份）；读它的行才会刷新。
+    private(set) var providerOrders: [String: [String]] = [:]
     /// 检查到的可安装更新；没有更新保持 nil，底部不占位。
     private(set) var availableUpdate: SentinelUpdateInfo?
     /// 新版本 DMG 已下载并过 sha 校验；置位后通道卡中间出「重启更新」按钮。
@@ -226,6 +228,14 @@ final class SentinelStore {
             self?.commandCodeKeysDidChange()
         }
         providerRenames = ProviderRenameStore.renames(defaults: defaults)
+        providerOrders = [
+            ProviderRenameNamespace.glm: defaults.stringArray(
+                forKey: SentinelSettingsKey.providerOrder(ProviderRenameNamespace.glm)
+            ) ?? [],
+            ProviderRenameNamespace.commandCode: defaults.stringArray(
+                forKey: SentinelSettingsKey.providerOrder(ProviderRenameNamespace.commandCode)
+            ) ?? [],
+        ]
     }
 
     deinit {
@@ -910,6 +920,32 @@ final class SentinelStore {
     /// 面板行的显示名：优先用户改过的覆盖名。
     func providerDisplayName(namespace: String, id: String, fallback: String) -> String {
         providerRenames["\(namespace):\(id)"] ?? fallback
+    }
+
+    /// 拖拽排序后的行顺序：登记过的按用户顺序，没登记过的保持原相对顺序。
+    func orderedProviders<T: ProviderAccount>(_ accounts: [T], namespace: String) -> [T] {
+        let order = providerOrders[namespace] ?? []
+        return accounts.enumerated().sorted { l, r in
+            let li = order.firstIndex(of: l.element.key) ?? Int.max
+            let ri = order.firstIndex(of: r.element.key) ?? Int.max
+            if li != ri {
+                return li < ri
+            }
+            return l.offset < r.offset
+        }.map(\.element)
+    }
+
+    /// 把 key 挪到当前顺序的 target 位；存盘并刷新缓存。拖状态点实时触发。
+    func moveProvider(namespace: String, keys: [String], key: String, toIndex target: Int) {
+        var next = keys.filter { $0 != key }
+        guard next.count == keys.count - 1 else {
+            return
+        }
+        next.insert(key, at: max(0, min(next.count, target)))
+        if providerOrders[namespace] != next {
+            providerOrders[namespace] = next
+            defaults.set(next, forKey: SentinelSettingsKey.providerOrder(namespace))
+        }
     }
 
     /// 面板里直接点名字改名；空名字等于恢复默认名。

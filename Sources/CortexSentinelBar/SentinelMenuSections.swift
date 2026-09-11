@@ -1228,10 +1228,12 @@ struct SentinelBalancesSection: View {
         index: Int,
         keys: [String]
     ) -> some View {
+        // 认成派工套餐的行：名字用套餐 label（用户改名仍优先）、第三列换在跑/冷却。
+        let plan = CortexPlanStatusDisplay.plan(forAccountKey: account.key, in: store.glmPlanStatus?.payload)
         let displayName = store.providerDisplayName(
             namespace: ProviderRenameNamespace.glm,
             id: account.key,
-            fallback: account.displayTitle
+            fallback: CortexPlanStatusDisplay.rowTitleFallback(plan: plan, account: account)
         )
         let hasFiveHour = account.fiveHourWindow?.percentUsed != nil
         let hasWeekly = account.weeklyWindow?.percentUsed != nil
@@ -1296,7 +1298,18 @@ struct SentinelBalancesSection: View {
                                 barFraction: weeklyBar
                             )
                         }
-                        if account.cashBalance != nil {
+                        if let plan {
+                            // 套餐行的第三列：在跑/冷却，不画横条（横条一律是时间
+                            // 流逝，这列不是时间），也不加 .help（会和详情卡双弹）。
+                            Text(CortexPlanStatusDisplay.thirdColumnText(plan: plan, now: now))
+                                .font(SentinelTheme.Fonts.balanceAmount)
+                                .foregroundStyle(SentinelTheme.Colors.foreground)
+                                .monospacedDigit()
+                                .lineLimit(1)
+                                .frame(width: SentinelTheme.Metrics.usageColWidth2, alignment: .leading)
+                                .accessibilityElement(children: .ignore)
+                                .accessibilityLabel(CortexPlanStatusDisplay.thirdColumnText(plan: plan, now: now))
+                        } else if account.cashBalance != nil {
                             glmBalanceSegment(account)
                         }
                     }
@@ -1362,7 +1375,11 @@ struct SentinelBalancesSection: View {
     }
 
     private func glmUsageStatusColor(_ account: GLMAccountUsage) -> Color {
-        Self.glmDotSignal(
+        // 套餐行只看订阅窗口和冷却，现金不参与（套餐派工不花现金）；其余行照旧。
+        if let plan = CortexPlanStatusDisplay.plan(forAccountKey: account.key, in: store.glmPlanStatus?.payload) {
+            return CortexPlanStatusDisplay.dotColor(plan: plan, account: account, now: Date())
+        }
+        return Self.glmDotSignal(
             fiveHourRemaining: account.fiveHourWindow?.remainingPercentage,
             weeklyRemaining: account.weeklyWindow?.remainingPercentage,
             cashBalance: account.cashBalance,
@@ -1394,6 +1411,7 @@ struct SentinelBalancesSection: View {
 
     private func glmDetailContent(_ account: GLMAccountUsage) -> BalanceHoverContent {
         let now = Date()
+        let plan = CortexPlanStatusDisplay.plan(forAccountKey: account.key, in: store.glmPlanStatus?.payload)
         var lines: [BalanceHoverLine] = []
         for (name, window, windowLength) in [
             ("5 小时窗", account.fiveHourWindow, 5 * 3600.0),
@@ -1415,6 +1433,15 @@ struct SentinelBalancesSection: View {
                 )
             ))
         }
+        // 套餐行追加派工状态；不是套餐的行一个字不变。
+        if let plan {
+            lines.append(contentsOf: CortexPlanStatusDisplay.detailLines(
+                plan: plan,
+                payload: store.glmPlanStatus?.payload,
+                failureText: store.glmPlanStatus?.failureText,
+                cashBalance: account.cashBalance
+            ))
+        }
         var subtitle = "GLM Coding Plan"
         if let level = account.level, !level.isEmpty {
             subtitle += " · 档位 \(level)"
@@ -1432,7 +1459,7 @@ struct SentinelBalancesSection: View {
             title: store.providerDisplayName(
                 namespace: ProviderRenameNamespace.glm,
                 id: account.key,
-                fallback: account.displayTitle
+                fallback: CortexPlanStatusDisplay.rowTitleFallback(plan: plan, account: account)
             ),
             subtitle: subtitle,
             lines: lines,

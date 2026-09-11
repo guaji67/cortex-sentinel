@@ -340,8 +340,68 @@ enum DemoBalancesPreview {
             glm: glm,
             commandCode: commandCode,
             aio: aio,
-            inputStatus: demoInputStatus(checked: checked)
+            inputStatus: demoInputStatus(checked: checked),
+            glmPlanStatus: demoPlanStatus(checked: checked)
         )
+    }
+
+    /// 演示套餐状态：pro 行配一份在跑 2/5 的套餐、体验卡行配一份冷却中的，
+    /// lite 不配（看非套餐行原样）。指纹用假钥匙现算，套餐名中性词。
+    private static func demoPlanStatus(
+        checked: Date
+    ) -> CortexPlanStatusDisplayState? {
+        func planObject(
+            key: String,
+            label: String,
+            running: Int?,
+            cooldownMinutes: Double?,
+            skipTextZH: String? = nil
+        ) -> [String: Any] {
+            [
+                "id": "demo-plan-\(label)",
+                "label": label,
+                "key_sha12": GLMUsageCLI.keySHA12(key),
+                "max_parallel": 5,
+                "running": running.map(NSNumber.init(value:)) ?? NSNull(),
+                "executors": running != nil
+                    ? [["name": "执行者 1", "running": running!]]
+                    : [],
+                "dispatchable": skipTextZH == nil,
+                "skip_code": NSNull(),
+                "skip_text_zh": skipTextZH.map { $0 } ?? NSNull(),
+                "cooldown_until": cooldownMinutes.map { minutes in
+                    ISO8601DateFormatter().string(from: checked.addingTimeInterval(minutes * 60))
+                } ?? NSNull(),
+                "usage_known": true,
+            ]
+        }
+        let payloadObject: [String: Any] = [
+            "schema": 1,
+            "generated_at": ISO8601DateFormatter().string(from: checked),
+            "free_window": [
+                "active": false,
+                "start": "23:00",
+                "end": "09:00",
+                "text_zh": "现在是免费时段（北京 23:00 到 09:00）",
+            ],
+            "plans": [
+                planObject(key: "demo-key-pro", label: "Sample 套餐", running: 2, cooldownMinutes: nil),
+                planObject(
+                    key: "demo-key-trial",
+                    label: "测试套餐",
+                    running: nil,
+                    cooldownMinutes: 45,
+                    skipTextZH: "冷却中，暂不派工"
+                ),
+            ],
+            "errors": [],
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payloadObject),
+              let payload = try? JSONDecoder().decode(CortexPlanStatusPayload.self, from: data)
+        else {
+            return nil
+        }
+        return CortexPlanStatusDisplayState(payload: payload, fetchedAt: checked, failureText: nil)
     }
 
     /// Input 探针演示历史：三个模型 60 格，绝大多数绿，零星橙/红。

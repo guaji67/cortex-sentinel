@@ -62,6 +62,8 @@ GLM 钥匙自动识别多认 ZCode CLI 的两份配置（`~/.zcode/cli/config.js
 
 余额区 GLM / Command Code 行首的点 = 额度状态，综合判定取最严重一档：5 小时窗剩余 ≤20% 黄、≤1% 红；周窗剩余 ≤10% 黄、≤1% 红；余额类（现金/月余）<10 黄、<1 红；stale 至少黄；没数据灰。Cursor / AIO / 官方不参与这套。守卫：`CommandCodeUsageTests.testProviderDotSignalThresholds`。
 
+被 cortex 派工侧认成套餐的 GLM 行（钥匙指纹对上套餐清单），状态点不看现金——套餐派工走套餐额度不花现金，判定只看订阅窗口，冷却中至少黄；非套餐行一个字不变。守卫：`CortexPlanStatusTests.testPlanRowDotIgnoresCashBalance`。
+
 按住状态点上下拖 = 同组内排序（GLM 一组、CC 一组，互不混排），顺序持久化到 `com.falcon.cortex.sentinelbar.providerOrder.*`。Cursor / AIO 行的点无手势。守卫：`CommandCodeUsageTests.testProviderOrderingPureLogic`。
 
 组与组之间不许再放无含义的小圆点分隔符（已随 0.1.17 删除，别加回来）。改名：点行名编辑，回车或点任意空白处提交，Esc 取消。详情卡：标签/数值/重置时间三列，重置时间越近越醒目（≥60% 流逝黄、≥85% 红）。
@@ -79,3 +81,5 @@ GLM 钥匙自动识别多认 ZCode CLI 的两份配置（`~/.zcode/cli/config.js
 三列等宽 80、列距 8、横条宽 = 列宽 - 12（右缘留白），条与条间隔恒定；面板宽 400、块宽 256。别再回到不等宽列 + 定长条的组合——条距会忽大忽小（0.1.23 实踩，Falcon 点名马虎）。
 
 GLM 状态点分场景：有订阅（5h / 周窗任一存在）只看订阅窗口，现金余额不参与；没订阅只剩余额的才按余额判定（CC 的月余是订阅量不走这条）。横条约列宽九成。守卫：`CommandCodeUsageTests.testGLMDotSignalScenes`。
+
+套餐行的第三列（原现金格）换在跑/冷却文案：冷却中写「冷却到 HH:MM」（放不下自动换「冷却 HH:MM」，不出图截断为准）、在跑写「在跑 n/上限」、读不到写「在跑 —」；这列不画横条（横条一律是时间流逝，这列不是时间）、不加 `.help`（会和详情卡双弹）。套餐数据由 cortex 仓 `scripts/glm_plan_status.py --json` 提供（按 origin/main 清单导出缓存后运行，失败 30 分钟内用上一份），指纹/套餐 id/错误 code 不进界面。守卫：`CortexPlanStatusTests.testThirdColumnCooldownRunningAndUnknown`、`CortexPlanStatusTests.testGitSubcommandsAreReadOnlyWhitelist`。

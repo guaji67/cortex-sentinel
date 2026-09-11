@@ -440,8 +440,7 @@ enum CortexPlanStatusFetcher {
             return .failure(reason: "脚本清单不合法")
         }
 
-        // 3. 缓存键：清单文本 + ls-tree 整段输出一起做 sha256。清单本身变了
-        //    （比如补列一个文件）键也跟着变，不然命中的还是旧导出。
+        // 3. 缓存键：ls-tree 整段输出的 sha256，脚本内容没变就不重导。
         let lsTree = await runner.run(
             executablePath: configuration.gitExecutablePath,
             arguments: ["-C", repoRoot.path, "ls-tree", configuration.ref, "--"] + paths,
@@ -453,10 +452,7 @@ enum CortexPlanStatusFetcher {
         guard lsTree.exitCode == 0 else {
             return .failure(reason: "对不上脚本版本")
         }
-        var keyMaterial = manifest.standardOutput
-        keyMaterial.append(0)
-        keyMaterial.append(lsTree.standardOutput)
-        let cacheKey = sha256Hex(keyMaterial)
+        let cacheKey = sha256Hex(lsTree.standardOutput)
         let cacheRoot = configuration.cacheRoot ?? defaultCacheRoot(fileManager: fileManager)
         let cacheDirectory = cacheRoot.appendingPathComponent(cacheKey, isDirectory: true)
 

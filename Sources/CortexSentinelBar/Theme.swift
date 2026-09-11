@@ -104,7 +104,8 @@ enum SentinelTheme {
         /// 组内相邻列的间隔。
         static let usageSegmentGap: CGFloat = 8
         /// 横条比所在列窄的量（条右缘留白，保证相邻条间隙一致）。
-        static let usageBarInset: CGFloat = 12
+        /// 条长约是列宽的九成，Falcon 2026-09-11 定。
+        static let usageBarInset: CGFloat = 18
         static let balanceRowSpacing: CGFloat = 2
         static let balanceDot: CGFloat = 8
         static let disclosureChevron: CGFloat = 12

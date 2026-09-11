@@ -1362,12 +1362,33 @@ struct SentinelBalancesSection: View {
     }
 
     private func glmUsageStatusColor(_ account: GLMAccountUsage) -> Color {
-        Self.providerDotSignal(
+        Self.glmDotSignal(
             fiveHourRemaining: account.fiveHourWindow?.remainingPercentage,
             weeklyRemaining: account.weeklyWindow?.remainingPercentage,
-            balanceAmount: account.cashBalance,
+            cashBalance: account.cashBalance,
             stale: account.stale,
             hasDisplayableNumber: account.hasDisplayableNumber
+        )
+    }
+
+    /// GLM 状态点分场景（Falcon 2026-09-11 定）：
+    /// 有订阅（5h / 周窗任一存在）就只看订阅窗口，现金余额不参与——
+    /// 有订阅人家优先烧订阅，余额没人管。没订阅只剩余额的（Lite / 按量）
+    /// 才按余额判定。CC 的月余本身就是订阅量，不走这条。
+    static func glmDotSignal(
+        fiveHourRemaining: Double?,
+        weeklyRemaining: Double?,
+        cashBalance: Double?,
+        stale: Bool,
+        hasDisplayableNumber: Bool
+    ) -> Color {
+        let hasSubscription = fiveHourRemaining != nil || weeklyRemaining != nil
+        return providerDotSignal(
+            fiveHourRemaining: fiveHourRemaining,
+            weeklyRemaining: weeklyRemaining,
+            balanceAmount: hasSubscription ? nil : cashBalance,
+            stale: stale,
+            hasDisplayableNumber: hasDisplayableNumber
         )
     }
 

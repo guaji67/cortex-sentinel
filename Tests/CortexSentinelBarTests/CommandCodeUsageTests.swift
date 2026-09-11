@@ -592,6 +592,40 @@ final class CommandCodeUsageTests: XCTestCase {
         )
     }
 
+    func testGLMDotSignalScenes() {
+        // 有订阅就只看订阅窗口：5h/周全好 → 绿，哪怕现金余额只剩 0.5。
+        XCTAssertEqual(
+            SentinelBalancesSection.glmDotSignal(
+                fiveHourRemaining: 97, weeklyRemaining: 79,
+                cashBalance: 0.5, stale: false, hasDisplayableNumber: true
+            ),
+            SentinelTheme.Colors.success
+        )
+        // 有订阅且订阅告急：黄，余额帮不上忙也不用管。
+        XCTAssertEqual(
+            SentinelBalancesSection.glmDotSignal(
+                fiveHourRemaining: 15, weeklyRemaining: 90,
+                cashBalance: 500, stale: false, hasDisplayableNumber: true
+            ),
+            SentinelTheme.Colors.warning
+        )
+        // 没订阅只剩余额：按余额判定，<1 红、<10 黄。
+        XCTAssertEqual(
+            SentinelBalancesSection.glmDotSignal(
+                fiveHourRemaining: nil, weeklyRemaining: nil,
+                cashBalance: 5.56, stale: false, hasDisplayableNumber: true
+            ),
+            SentinelTheme.Colors.warning
+        )
+        XCTAssertEqual(
+            SentinelBalancesSection.glmDotSignal(
+                fiveHourRemaining: nil, weeklyRemaining: nil,
+                cashBalance: 0.62, stale: false, hasDisplayableNumber: true
+            ),
+            SentinelTheme.Colors.danger
+        )
+    }
+
     func testProviderOrderingPureLogic() {
         struct FakeAccount: ProviderAccount {
             let key: String

@@ -224,7 +224,7 @@ echo "==> 压缩成只读 DMG（${DMG_FORMAT}）"
 
 echo "==> 核交付盘"
 FORMAT_OUT="$(/usr/bin/hdiutil imageinfo -format "$OUTPUT_PATH" 2>/dev/null | sed -n '2p' | xargs)"
-[ "$FORMAT_OUT" = "$DMG_FORMAT" ] || { echo "交付盘格式不是 $DMG_FORMAT：$FORMAT_OUT" >&2; exit 1; }
+[ "$FORMAT_OUT" = "$DMG_FORMAT" ] || { echo "交付盘格式不是 ${DMG_FORMAT}：$FORMAT_OUT" >&2; exit 1; }
 CHECK_MOUNT="$(mktemp -d "${TMPDIR:-/tmp}/sentinel-dmg-check.XXXXXX")"
 /usr/bin/hdiutil attach "$OUTPUT_PATH" -readonly -nobrowse -mountpoint "$CHECK_MOUNT" -quiet
 [ -d "$CHECK_MOUNT/$APP_NAME" ] || { echo "盘里没有 $APP_NAME" >&2; /usr/bin/hdiutil detach "$CHECK_MOUNT" -quiet; exit 1; }

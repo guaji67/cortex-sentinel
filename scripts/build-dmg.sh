@@ -54,7 +54,9 @@ APP_PATH="$(cd "$(dirname "$APP_PATH")" && pwd)/$(basename "$APP_PATH")"
 [ -n "$OUTPUT_PATH" ] || { echo "必须 --output 指定输出路径" >&2; exit 1; }
 mkdir -p "$(dirname "$OUTPUT_PATH")"
 
-APP_NAME="$(basename "$APP_PATH")"
+# 盘面上的名字固定：launchd、自更新、面板都按 /Applications/Cortex哨兵.app 找。
+# 源 app（如 .build/CortexSentinelBar.app）装进舞台时改名。
+APP_NAME="Cortex哨兵.app"
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sentinel-dmg.XXXXXX")"
 STAGE_DIR="$WORK_DIR/stage"
 RW_DMG="$WORK_DIR/rw.dmg"

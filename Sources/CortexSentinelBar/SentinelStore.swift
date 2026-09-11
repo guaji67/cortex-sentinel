@@ -919,28 +919,16 @@ final class SentinelStore {
     }
 
     /// 拖拽排序后的行顺序：登记过的按用户顺序，没登记过的保持原相对顺序。
-    func orderedProviders<T: ProviderAccount>(_ accounts: [T], namespace: String) -> [T] {
-        let order = providerOrders[namespace] ?? []
-        return accounts.enumerated().sorted { l, r in
-            let li = order.firstIndex(of: l.element.key) ?? Int.max
-            let ri = order.firstIndex(of: r.element.key) ?? Int.max
-            if li != ri {
-                return li < ri
-            }
-            return l.offset < r.offset
-        }.map(\.element)
+    /// 拖拽过程传预览顺序进来，松手才落库，别每帧写 defaults 抽搐。
+    func orderedProviders<T: ProviderAccount>(_ accounts: [T], namespace: String, previewOrder: [String]? = nil) -> [T] {
+        ProviderOrdering.ordered(accounts, order: previewOrder ?? providerOrders[namespace] ?? [])
     }
 
-    /// 把 key 挪到当前顺序的 target 位；存盘并刷新缓存。拖状态点实时触发。
-    func moveProvider(namespace: String, keys: [String], key: String, toIndex target: Int) {
-        var next = keys.filter { $0 != key }
-        guard next.count == keys.count - 1 else {
-            return
-        }
-        next.insert(key, at: max(0, min(next.count, target)))
-        if providerOrders[namespace] != next {
-            providerOrders[namespace] = next
-            defaults.set(next, forKey: SentinelSettingsKey.providerOrder(namespace))
+    /// 松手一次性落库。
+    func setProviderOrder(namespace: String, keys: [String]) {
+        if providerOrders[namespace] != keys {
+            providerOrders[namespace] = keys
+            defaults.set(keys, forKey: SentinelSettingsKey.providerOrder(namespace))
         }
     }
 

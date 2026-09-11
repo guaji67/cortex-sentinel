@@ -247,11 +247,13 @@ struct BalanceHoverDetail: View {
 /// 悬停 0.5 秒后显示详情卡，移开即消失；显示期间该行置顶避免被相邻行盖住。
 struct HoverDetailCard: ViewModifier {
     let makeContent: () -> BalanceHoverContent
+    var isSuppressed: () -> Bool = { false }
     @Environment(\.hoverCardPreview) private var preview
     @State private var pending = false
     @State private var visible = false
 
-    private var showsCard: Bool { visible || preview }
+    /// 鼠标压在状态点上或正在拖拽时，卡片一律不出现，别挡拖拽的道。
+    private var showsCard: Bool { (visible || preview) && !isSuppressed() }
 
     func body(content: Content) -> some View {
         content
@@ -699,6 +701,12 @@ struct SentinelBalancesSection: View {
     /// 拖拽中的行 key 与拖动起始下标；同一时刻只有一行在拖。
     @State private var draggingKey: String?
     @State private var dragBaseIndex: Int?
+    /// 鼠标正压在哪个状态点上；压着的时候该行详情卡不出现。
+    @State private var suppressCardKey: String?
+    /// 拖拽预览：过程只动这两份本地状态（弹簧动画换位），松手一次性落库。
+    @State private var dragPreviewOrder: [String]?
+    @State private var dragTargetIndex: Int?
+    @State private var dragLastCommittedDy: CGFloat = 0
     /// 点空白处时把焦点挪过来，正在编辑的行名随之失焦提交。
     @FocusState private var renameSinkFocused: Bool
 
@@ -764,6 +772,7 @@ struct SentinelBalancesSection: View {
 
     /// 行首状态点：颜色即额度状态（providerDotSignal）。按住上下拖给同组排序，
     /// 仅 GLM / Command Code 行有手势；拖动中点放大提示。Falcon 2026-09-11 令。
+    /// 拖拽过程只更新本地预览顺序（弹簧动画换位 + 死区防手抖），松手才落库。
     private func providerDot(
         color: Color,
         namespace: String,
@@ -781,27 +790,50 @@ struct SentinelBalancesSection: View {
             .scaleEffect(draggingKey == key ? 1.5 : 1)
             .animation(.easeOut(duration: 0.12), value: draggingKey)
             .contentShape(Rectangle().inset(by: -6))
+            .onHover { hovering in
+                suppressCardKey = hovering ? key : (suppressCardKey == key ? nil : suppressCardKey)
+            }
             .gesture(
                 DragGesture(minimumDistance: 2)
                     .onChanged { value in
                         if draggingKey == nil {
                             draggingKey = key
                             dragBaseIndex = index
+                            dragTargetIndex = index
+                            dragLastCommittedDy = 0
                         }
                         guard draggingKey == key, let base = dragBaseIndex else { return }
-                        let target = base + Int((value.translation.height / pitch).rounded())
-                        store.moveProvider(
-                            namespace: namespace,
-                            keys: keys,
-                            key: key,
-                            toIndex: target
-                        )
+                        let candidate = base + Int((value.translation.height / pitch).rounded())
+                        guard candidate != dragTargetIndex,
+                              candidate >= 0, candidate < keys.count,
+                              abs(value.translation.height - dragLastCommittedDy) >= pitch * 0.3
+                        else { return }
+                        let next = ProviderOrdering.moved(keys: keys, key: key, toIndex: candidate)
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                            dragTargetIndex = candidate
+                            dragPreviewOrder = next
+                            dragLastCommittedDy = value.translation.height
+                        }
                     }
                     .onEnded { _ in
-                        draggingKey = nil
-                        dragBaseIndex = nil
+                        defer {
+                            draggingKey = nil
+                            dragBaseIndex = nil
+                            dragTargetIndex = nil
+                            dragLastCommittedDy = 0
+                        }
+                        guard draggingKey == key, let preview = dragPreviewOrder else { return }
+                        store.setProviderOrder(namespace: namespace, keys: preview)
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                            dragPreviewOrder = nil
+                        }
                     }
             )
+    }
+
+    /// 行序：拖拽中有预览用预览，没有用落库顺序。
+    private func orderedRows<T: ProviderAccount>(_ accounts: [T], namespace: String) -> [T] {
+        store.orderedProviders(accounts, namespace: namespace, previewOrder: dragPreviewOrder)
     }
 
     /// Command Code 额度：一把 key 一行（5h / 周 / 月），排在 GLM 前面。
@@ -811,12 +843,13 @@ struct SentinelBalancesSection: View {
             commandCodeGuideRow
         } else {
             VStack(spacing: SentinelTheme.Metrics.balanceRowSpacing) {
-                let ordered = store.orderedProviders(
+                let ordered = orderedRows(
                     store.commandCodeUsage.accounts,
                     namespace: ProviderRenameNamespace.commandCode
                 )
                 ForEach(Array(ordered.enumerated()), id: \.element.id) { index, account in
                     commandCodeRow(account, index: index, keys: ordered.map(\.key))
+                        .zIndex(draggingKey == account.key ? 10 : 0)
                 }
                 if store.commandCodeUsage.accounts.isEmpty {
                     commandCodeWaitingRow
@@ -980,7 +1013,10 @@ struct SentinelBalancesSection: View {
         }
         .frame(height: SentinelTheme.Metrics.usageRowHeight)
         .contentShape(Rectangle())
-        .modifier(HoverDetailCard(makeContent: { self.commandCodeDetailContent(account) }))
+        .modifier(HoverDetailCard(
+            makeContent: { self.commandCodeDetailContent(account) },
+            isSuppressed: { self.suppressCardKey == account.key || self.draggingKey != nil }
+        ))
     }
 
     /// 无任何可显示数字时的右侧文案：优先报错；接口通了但什么都没有显示未知。
@@ -1172,12 +1208,13 @@ struct SentinelBalancesSection: View {
             EmptyView()
         } else {
             VStack(spacing: SentinelTheme.Metrics.balanceRowSpacing) {
-                let ordered = store.orderedProviders(
+                let ordered = orderedRows(
                     store.glmUsage.accounts,
                     namespace: ProviderRenameNamespace.glm
                 )
                 ForEach(Array(ordered.enumerated()), id: \.element.id) { index, account in
                     glmUsageRow(account, index: index, keys: ordered.map(\.key))
+                        .zIndex(draggingKey == account.key ? 10 : 0)
                 }
             }
         }
@@ -1269,7 +1306,10 @@ struct SentinelBalancesSection: View {
         }
         .frame(height: SentinelTheme.Metrics.usageRowHeight)
         .contentShape(Rectangle())
-        .modifier(HoverDetailCard(makeContent: { self.glmDetailContent(account) }))
+        .modifier(HoverDetailCard(
+            makeContent: { self.glmDetailContent(account) },
+            isSuppressed: { self.suppressCardKey == account.key || self.draggingKey != nil }
+        ))
     }
 
     /// 无任何可显示数字时的右侧文案：优先报错；接口通了但两头都空显示未知。

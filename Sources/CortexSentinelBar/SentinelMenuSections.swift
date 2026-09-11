@@ -1059,7 +1059,8 @@ struct SentinelBalancesSection: View {
         .modifier(HoverDetailCard(
             makeContent: { self.commandCodeDetailContent(account) },
             isSuppressed: { self.suppressCardKey == account.key || self.draggingKey != nil },
-            branchID: "cc"
+            branchID: "cc",
+            previewRowMatch: self.rowMatchesPreviewSelection(displayName)
         ))
     }
 

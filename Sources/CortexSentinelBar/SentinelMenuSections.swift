@@ -974,7 +974,7 @@ struct SentinelBalancesSection: View {
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
                 } else {
-                    HStack(alignment: .top, spacing: SentinelTheme.Spacing.xxs) {
+                    HStack(alignment: .top, spacing: SentinelTheme.Metrics.usageSegmentGap) {
                         if let fiveHourRemaining {
                             quotaSegmentWithBar(
                                 label: "5h",
@@ -1056,7 +1056,7 @@ struct SentinelBalancesSection: View {
             .fixedSize(horizontal: true, vertical: false)
             if let barFraction {
                 UsageTimeBar(fraction: barFraction)
-                    .frame(width: SentinelTheme.Metrics.timeBarWidth)
+                    .frame(width: columnWidth - SentinelTheme.Metrics.usageBarInset)
             }
         }
         .frame(width: columnWidth, alignment: .leading)
@@ -1274,7 +1274,7 @@ struct SentinelBalancesSection: View {
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
                 } else {
-                    HStack(alignment: .top, spacing: SentinelTheme.Spacing.xxs) {
+                    HStack(alignment: .top, spacing: SentinelTheme.Metrics.usageSegmentGap) {
                         if hasFiveHour, let fiveHour = account.fiveHourWindow {
                             quotaSegmentWithBar(
                                 label: "5h",

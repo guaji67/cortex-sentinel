@@ -83,7 +83,7 @@ enum SentinelTheme {
     }
 
     enum Metrics {
-        static let compactMenuWidth: CGFloat = 380
+        static let compactMenuWidth: CGFloat = 400
         static let menuWidth: CGFloat = compactMenuWidth
         static let menuHeight: CGFloat = 620
         static let historyBarHeight: CGFloat = 12
@@ -93,12 +93,18 @@ enum SentinelTheme {
         /// 额度行（数字 + 时间横条）加宽一丢丢的行高。
         static let usageRowHeight: CGFloat = 46
         /// 数字/横条固定宽度：左对齐防数字变化抖动，CC 与 GLM 行统一。
-        static let usageBlockWidth: CGFloat = 224
+        static let usageBlockWidth: CGFloat = 256
         static let timeBarHeight: CGFloat = 3
         static let timeBarWidth: CGFloat = 60
-        static let usageColWidth1: CGFloat = 76
-        static let usageColWidth2: CGFloat = 58
-        static let usageColWidth3: CGFloat = 78
+        // 三列等宽：横条随列宽走，条与条的间隔才能恒定（0.1.22 前列宽不一，
+        // 周 / 月余两根条直接贴上，Falcon 点名）。
+        static let usageColWidth1: CGFloat = 80
+        static let usageColWidth2: CGFloat = 80
+        static let usageColWidth3: CGFloat = 80
+        /// 组内相邻列的间隔。
+        static let usageSegmentGap: CGFloat = 8
+        /// 横条比所在列窄的量（条右缘留白，保证相邻条间隙一致）。
+        static let usageBarInset: CGFloat = 12
         static let balanceRowSpacing: CGFloat = 2
         static let balanceDot: CGFloat = 8
         static let disclosureChevron: CGFloat = 12

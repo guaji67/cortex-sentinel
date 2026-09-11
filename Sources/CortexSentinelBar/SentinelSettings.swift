@@ -49,13 +49,13 @@ enum SentinelSettingsCopy {
     static let versionPrefix = "版本"
     static let versionDevLabel = "开发版"
 
-    static let glmGroupTitle = "GLM 额度 Key"
+    static let glmGroupTitle = "GLM Key"
     static let glmAddButton = "添加"
     static let glmDeleteButton = "删除"
     static let glmNameFieldPlaceholder = "名称（如 pro）"
     static let glmKeyFieldPlaceholder = "粘贴智谱 API Key"
     static let glmEmptyHint = "还没识别到智谱 key，可以在下面手动添加。"
-    static let glmHint = "自动识别本机已有的智谱 Coding Plan key（键池、ClaudeZ 网关、环境变量）。删掉的自动识别 key 会记住，不会再回来。"
+    static let glmHint = "粘贴智谱 API Key 即用；删掉的 key 会记住。"
 
     static let commandCodeGroupTitle = "Command Code Key"
     static let commandCodeAddButton = "添加"
@@ -63,7 +63,7 @@ enum SentinelSettingsCopy {
     static let commandCodeNameFieldPlaceholder = "名称（账号1）"
     static let commandCodeKeyFieldPlaceholder = "粘贴 Command Code API Key"
     static let commandCodeEmptyHint = "没识别到本机的 Command Code key，可以在下面手动添加。"
-    static let commandCodeHint = "自动识别官方 CLI 登录（~/.commandcode/auth.json）和环境变量；只用 API 的直接粘贴 key。删掉的自动识别 key 会记住，不会再回来。查询只走账务接口，不消耗 credits。"
+    static let commandCodeHint = "粘贴 Command Code API Key 即用；删掉的 key 会记住。"
 }
 
 enum SentinelAppVersion {

@@ -367,14 +367,14 @@ struct SentinelSettingsView: View {
     /// 设置内容栈：真窗口包进 ScrollView 滚动，离屏出图直接取它（不套滚动）。
     var settingsContent: some View {
             VStack(alignment: .leading, spacing: SentinelTheme.Spacing.panel) {
-            settingsGroup(title: SentinelSettingsCopy.notifyGroupTitle) {
-                notifyGroup
-            }
             settingsGroup(title: SentinelSettingsCopy.glmGroupTitle) {
                 glmKeyGroup
             }
             settingsGroup(title: SentinelSettingsCopy.commandCodeGroupTitle) {
                 commandCodeKeyGroup
+            }
+            settingsGroup(title: SentinelSettingsCopy.notifyGroupTitle) {
+                notifyGroup
             }
             settingsGroup(title: SentinelSettingsCopy.refreshGroupTitle) {
                 refreshGroup
@@ -794,9 +794,10 @@ struct SentinelSettingsView: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: SentinelTheme.Spacing.sm) {
+            // 分组标题是整个卡片的标题，要比卡片里的行标题更醒目。
             Text(title)
-                .font(SentinelTheme.Fonts.section)
-                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                .font(SentinelTheme.Fonts.rowTitle)
+                .foregroundStyle(SentinelTheme.Colors.foreground)
             VStack(alignment: .leading, spacing: SentinelTheme.Spacing.md) {
                 content()
             }

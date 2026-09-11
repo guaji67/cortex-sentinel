@@ -171,16 +171,19 @@ final class SentinelUpdaterTests: XCTestCase {
         })
         // 移交成功后 DMG 保持挂载（任务自己卸），这里不许 detach。
         XCTAssertFalse(shell.invocations.contains { $0.arguments.first == "detach" })
-        // 任务 plist 指向 DMG 里的安装脚本，自带失败自愈和自我清理。
+        // 任务 plist 内联换装：卸主任务 → ditto 换 app → 主任务在就挂回（顺带拉起），
+        // 没有主任务就直接 open；DMG 里不再带安装脚本。
         let plistData = try Data(contentsOf: plistURL)
         let plist = try PropertyListSerialization.propertyList(from: plistData, format: nil) as! [String: Any]
         let arguments = try XCTUnwrap(plist["ProgramArguments"] as? [String])
         XCTAssertEqual(arguments.first, "/bin/bash")
         let script = try XCTUnwrap(arguments.last)
-        XCTAssertTrue(script.contains("/Volumes/Cortex 哨兵/scripts/install-app.sh"))
-        XCTAssertTrue(script.contains("--app-source '/Volumes/Cortex 哨兵/Cortex哨兵.app'"))
-        XCTAssertTrue(script.contains("install-app.sh"))
+        XCTAssertFalse(script.contains("install-app.sh"))
+        XCTAssertTrue(script.contains("bootout gui/"))
+        XCTAssertTrue(script.contains("rm -rf '/Applications/Cortex哨兵.app'"))
+        XCTAssertTrue(script.contains("ditto '/Volumes/Cortex 哨兵/Cortex哨兵.app' '/Applications/Cortex哨兵.app'"))
         XCTAssertTrue(script.contains("bootstrap"))
+        XCTAssertTrue(script.contains("open '/Applications/Cortex哨兵.app'"))
         XCTAssertTrue(script.contains("detach"))
     }
 

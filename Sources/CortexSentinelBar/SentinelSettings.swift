@@ -40,6 +40,7 @@ enum SentinelSettingsCopy {
     static let startupGroupTitle = "启动与文件夹"
     static let loginItemTitle = "开机时自动启动"
     static let loginItemManagedHint = "由系统服务托管，改这里没用"
+    static let loginItemDisabledHint = "关掉后下次开机不再自动启动"
     static let updateAutoInstallTitle = "自动下载并安装更新"
     static let updateAutoInstallHint = "下载完自动换装重启，全程免点。关着时下载好了在面板顶部点「重启更新」。"
     static let watchTitle = "盯这个文件夹"

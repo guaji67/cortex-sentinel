@@ -254,6 +254,7 @@ struct SentinelUpdateInstaller: Sendable {
     /// DMG 挂载点解析；独立出来是为了测试替身。
     private let mountPointResolver: @Sendable (String) -> String?
 
+    static let mainJobLabel = "com.cortex.sentinelbar"
     static let updateJobLabel = "com.cortex.sentinelbar.update"
 
     init(
@@ -321,11 +322,17 @@ struct SentinelUpdateInstaller: Sendable {
     /// 失败补拉主任务、卸载 DMG、删自己的 plist、bootout 自己。
     private func handOffToLaunchdInstaller(mountPoint: String, appPath: String) throws -> Bool {
         let uid = getuid()
+        // DMG 里不再带安装脚本：卸主任务 → 换 app → 主任务在就挂回（顺带拉起新版），
+        // 没有主任务（用户关了自启）就直接 open 一次，这轮更新照常用。
         let script = """
-        '\(mountPoint)/scripts/install-app.sh' --app-source '\(appPath)'
+        launchctl bootout gui/\(uid)/\(Self.mainJobLabel) >/dev/null 2>&1 || true
+        rm -rf '/Applications/Cortex哨兵.app'
+        /usr/bin/ditto '\(appPath)' '/Applications/Cortex哨兵.app'
         rc=$?
-        if [ $rc -ne 0 ]; then
+        if [ -f '\(mainJobPlistPath)' ]; then
           launchctl bootstrap gui/\(uid) '\(mainJobPlistPath)' >/dev/null 2>&1 || true
+        else
+          /usr/bin/open '/Applications/Cortex哨兵.app' >/dev/null 2>&1 || true
         fi
         /usr/bin/hdiutil detach '\(mountPoint)' >/dev/null 2>&1 || true
         rm -f '\(updateJobPlistURL.path)'

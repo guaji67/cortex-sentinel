@@ -47,10 +47,8 @@ trap cleanup EXIT
 mkdir -p "$volume_dir"
 ditto "$source_app" "$volume_dir/Cortex哨兵.app"
 ln -s /Applications "$volume_dir/Applications"
-mkdir -p "$volume_dir/scripts"
-cp "$package_dir/Install-Cortex-Sentinel.command" "$volume_dir/Install-Cortex-Sentinel.command"
-cp "$package_dir/scripts/install-app.sh" "$volume_dir/scripts/install-app.sh"
-cp "$package_dir/scripts/restart-sentinel.command" "$volume_dir/scripts/restart-sentinel.command"
+# 盘里只放 app 和 Applications 快捷方式：LaunchAgent 由 app 首启自装，
+# 不再往用户盘里塞脚本（Falcon 2026-09-11 定，对齐 Cortex 主仓的盘面）。
 
 binary_sha256="$(shasum -a 256 "$source_app/Contents/MacOS/CortexSentinelBar" | awk '{print $1}')"
 installer_sha256="$(shasum -a 256 "$package_dir/scripts/install-app.sh" | awk '{print $1}')"

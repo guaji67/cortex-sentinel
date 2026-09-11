@@ -107,9 +107,13 @@ final class SentinelStore {
     }
 
     var loginItemSettingsPresentation: LoginItemSettingsPresentation {
-        LoginItemSettingsPresentation.make(
-            signals: LaunchdSupervisionProbe.collectFromCurrentProcess().signals,
-            wantsEnabled: SentinelSettings.loginItemEnabled(defaults: defaults)
+        // LaunchAgent 由 app 自己托管：开关常开可点，isOn 跟着 plist 走。
+        LoginItemSettingsPresentation(
+            isOn: LaunchAgentManager.isInstalled(),
+            isControlEnabled: true,
+            trailingHint: LaunchAgentManager.isInstalled()
+                ? nil
+                : SentinelSettingsCopy.loginItemDisabledHint
         )
     }
 
@@ -204,9 +208,12 @@ final class SentinelStore {
         self.lineStatusCache = lineStatusCache
         let settingsModel = SentinelSettingsModel(
             defaults: defaults,
-            loginItem: LoginItemSettingsPresentation.make(
-                signals: LaunchdSupervisionProbe.collectFromCurrentProcess().signals,
-                wantsEnabled: SentinelSettings.loginItemEnabled(defaults: defaults)
+            loginItem: LoginItemSettingsPresentation(
+                isOn: LaunchAgentManager.isInstalled(),
+                isControlEnabled: true,
+                trailingHint: LaunchAgentManager.isInstalled()
+                    ? nil
+                    : SentinelSettingsCopy.loginItemDisabledHint
             ),
             historyRetainCount: self.historyRetainCount,
             preferences: SentinelNotifyPreferences.load(defaults: defaults),
@@ -302,6 +309,7 @@ final class SentinelStore {
             return
         }
         hasStarted = true
+        LaunchAgentManager.installOnFirstLaunch()
         reconcileLoginItem()
         notifier.requestAuthorization()
         Task { @MainActor [weak self] in
@@ -340,9 +348,14 @@ final class SentinelStore {
     }
 
     func setLoginItemEnabled(_ enabled: Bool) {
-        // COR-2550：开机注册唯一由 LaunchAgent 安装器负责，app 侧只保留用户偏好。
         SentinelSettings.setLoginItemEnabled(enabled, defaults: defaults)
-        loginItemPresentation = .systemManaged
+        if enabled {
+            LaunchAgentManager.install()
+        } else {
+            // 只删 plist 不 bootout：bootout 会把正在跑的哨兵杀掉，下次开机生效。
+            LaunchAgentManager.removePlist()
+        }
+        loginItemPresentation = LaunchAgentManager.isInstalled() ? .enabled : .disabled
         settingsModel.loginItem = loginItemSettingsPresentation
     }
 
@@ -410,8 +423,7 @@ final class SentinelStore {
     }
 
     private func reconcileLoginItem() {
-        let details = LaunchdSupervisionProbe.collectFromCurrentProcess()
-        loginItemPresentation = details.signals.isLaunchdManaged ? .systemManaged : .disabled
+        loginItemPresentation = LaunchAgentManager.isInstalled() ? .enabled : .disabled
     }
 
     func statusPollInterval() -> TimeInterval {

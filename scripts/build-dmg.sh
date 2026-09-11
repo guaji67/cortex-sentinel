@@ -215,7 +215,7 @@ echo "==> 卸载可写盘"
   || /usr/bin/hdiutil detach "$DEV_NODE" -force -quiet
 DEV_NODE=""
 
-echo "==> 压缩成只读 DMG（$DMG_FORMAT）"
+echo "==> 压缩成只读 DMG（${DMG_FORMAT}）"
 /bin/rm -f "$OUTPUT_PATH"
 /usr/bin/hdiutil convert "$RW_DMG" -format "$DMG_FORMAT" -o "$OUTPUT_PATH" -quiet
 /bin/rm -f "$RW_DMG"

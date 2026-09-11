@@ -232,7 +232,7 @@ struct BalanceHoverDetail: View {
             }
         }
         .padding(SentinelTheme.Spacing.md)
-        .frame(width: 330, alignment: .leading)
+        .frame(width: 296, alignment: .leading)
         .background(SentinelTheme.Colors.panel)
         .clipShape(RoundedRectangle(cornerRadius: SentinelTheme.Radius.panel))
         .overlay(
@@ -271,10 +271,11 @@ struct HoverDetailCard: ViewModifier {
                     visible = false
                 }
             }
-            .overlay(alignment: .leading) {
+            .overlay(alignment: .trailing) {
                 if showsCard {
                     BalanceHoverDetail(content: makeContent())
-                        .offset(y: -30)
+                        // 卡片挂右侧：左边整列状态点是拖拽热区，任何时候不许被卡片盖住。
+                        .offset(x: -10, y: -30)
                         // 淡入淡出要短；不许拦截鼠标事件，否则卡片弹出来正好
                         // 压住鼠标位置，onHover 立刻 false，卡片忽隐忽现。
                         .transition(.opacity.animation(.easeInOut(duration: 0.18)))

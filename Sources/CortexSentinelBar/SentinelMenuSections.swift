@@ -243,7 +243,7 @@ struct BalanceHoverDetail: View {
             }
         }
         .padding(SentinelTheme.Spacing.md)
-        .frame(width: 304, alignment: .leading)
+        .frame(width: 312, alignment: .leading)
         .background(SentinelTheme.Colors.panel)
         .clipShape(RoundedRectangle(cornerRadius: SentinelTheme.Radius.panel))
         .overlay(

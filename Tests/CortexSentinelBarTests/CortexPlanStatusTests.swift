@@ -253,7 +253,8 @@ final class CortexPlanStatusTests: XCTestCase {
         XCTAssertTrue(allText.contains("2 条 / 上限 5"))
         XCTAssertTrue(allText.contains("执行者 1"))
         XCTAssertTrue(allText.contains("可以派"))
-        XCTAssertTrue(allText.contains("现在是免费时段（北京 23:00 到 09:00）"))
+        XCTAssertTrue(allText.contains("北京 23:00 到 09:00"), "免费时段的值不带重复的词")
+        XCTAssertFalse(allText.contains("现在是免费时段"))
         XCTAssertTrue(allText.contains("读不到看板，在跑几条暂时不知道"))
         XCTAssertTrue(allText.contains("¥0.62"))
         XCTAssertTrue(allText.contains("套餐派工不花现金"))
@@ -288,6 +289,30 @@ final class CortexPlanStatusTests: XCTestCase {
 
     private func state(payload: CortexPlanStatusPayload?, fetchedAt: Date?, failureText: String?) -> CortexPlanStatusDisplayState {
         CortexPlanStatusDisplayState(payload: payload, fetchedAt: fetchedAt, failureText: failureText)
+    }
+
+    /// 冷却中详情卡「派工」行写到几点；免费时段的值去掉与标签重复的词。
+    func testCooldownDispatchLineAndFreeWindowText() throws {
+        let now = Date()
+        let cooling = plan(cooldownUntil: now.addingTimeInterval(30 * 60))
+        let lines = CortexPlanStatusDisplay.detailLines(
+            plan: cooling,
+            payload: try samplePayload(),
+            failureText: nil,
+            fetchedAt: nil,
+            cashBalance: nil,
+            now: now
+        )
+        let dispatch = try XCTUnwrap(lines.first { $0.label == "派工" })
+        XCTAssertEqual(
+            dispatch.value,
+            "冷却到 \(CortexPlanStatusDisplay.clockText(try XCTUnwrap(cooling.cooldownUntil)))，暂不派工"
+        )
+        let free = try XCTUnwrap(lines.first { $0.label == "免费时段" })
+        XCTAssertEqual(free.value, "北京 23:00 到 09:00")
+        // cortex 两种真实文案形态都去干净。
+        XCTAssertEqual(CortexPlanStatusDisplay.freeWindowText("免费时段北京 23:00 开始"), "北京 23:00 开始")
+        XCTAssertEqual(CortexPlanStatusDisplay.freeWindowText("现在是免费时段（北京 23:00 到 09:00）"), "北京 23:00 到 09:00")
     }
 
     /// 成功后 30 分钟内失败：数照用，详情卡末尾加「HH:MM 读到的，这次没读到（原因）」。

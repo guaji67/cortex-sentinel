@@ -401,8 +401,7 @@ enum DemoBalancesPreview {
                     key: "demo-key-trial",
                     label: "测试套餐",
                     running: nil,
-                    cooldownMinutes: 45,
-                    skipTextZH: "冷却中，暂不派工"
+                    cooldownMinutes: 45
                 ),
             ],
             "errors": [],

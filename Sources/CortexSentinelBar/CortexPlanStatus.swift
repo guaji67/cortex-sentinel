@@ -241,35 +241,29 @@ struct CortexProcessSubprocessRunner: CortexSubprocessRunning {
             // 输出一上来就并发读：进程写满管道缓冲（64KB）时若等退出才读，
             // 子进程会卡在 write 上不退出，直到超时被杀（脚本导出 100KB 实踩）。
             let reads = DispatchGroup()
-            let outputLock = NSLock()
-            var outData = Data()
-            var errData = Data()
+            let box = OutputBox()
             reads.enter()
             DispatchQueue.global().async {
                 let data = output.fileHandleForReading.readDataToEndOfFile()
-                outputLock.lock()
-                outData = data
-                outputLock.unlock()
+                box.store(data, stderr: false)
                 reads.leave()
             }
             reads.enter()
             DispatchQueue.global().async {
                 let data = errorPipe.fileHandleForReading.readDataToEndOfFile()
-                outputLock.lock()
-                errData = data
-                outputLock.unlock()
+                box.store(data, stderr: true)
                 reads.leave()
             }
             process.terminationHandler = { finished in
                 timeoutItem.cancel()
                 let timedOut = state.consumeTimedOut()
                 reads.wait()
-                outputLock.lock()
-                defer { outputLock.unlock() }
+                let out = box.stdout
+                let err = box.stderr
                 continuation.resume(returning: CortexSubprocessResult(
                     exitCode: finished.terminationStatus,
-                    standardOutput: outData,
-                    standardError: errData,
+                    standardOutput: out,
+                    standardError: err,
                     timedOut: timedOut
                 ))
             }
@@ -290,6 +284,26 @@ struct CortexProcessSubprocessRunner: CortexSubprocessRunning {
                 ))
             }
         }
+    }
+
+    /// 管道读出内容的加锁小盒：读线程写、退出回调读。
+    private final class OutputBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var out = Data()
+        private var err = Data()
+
+        func store(_ data: Data, stderr: Bool) {
+            lock.lock()
+            defer { lock.unlock() }
+            if stderr {
+                err = data
+            } else {
+                out = data
+            }
+        }
+
+        var stdout: Data { lock.lock(); defer { lock.unlock() }; return out }
+        var stderr: Data { lock.lock(); defer { lock.unlock() }; return err }
     }
 
     /// 超时旗标：超时回调和退出回调并发，加锁读写。
@@ -718,7 +732,8 @@ enum CortexPlanStatusDisplay {
         payload: CortexPlanStatusPayload?,
         failureText: String?,
         fetchedAt: Date?,
-        cashBalance: Double?
+        cashBalance: Double?,
+        now: Date = Date()
     ) -> [BalanceHoverLine] {
         var lines: [BalanceHoverLine] = []
         let runningText = plan.running.map { "\($0) 条" } ?? "—"
@@ -735,13 +750,22 @@ enum CortexPlanStatusDisplay {
                 note: nil
             ))
         }
-        lines.append(BalanceHoverLine(
-            label: "派工",
-            value: plan.skipTextZH ?? "可以派",
-            note: nil
-        ))
+        // 冷却中写到几点，跟行上「冷却 HH:MM」一致；不冷却才看 cortex 的拦人理由。
+        if plan.isCoolingDown(now: now), let until = plan.cooldownUntil {
+            lines.append(BalanceHoverLine(
+                label: "派工",
+                value: "冷却到 \(clockText(until))，暂不派工",
+                note: nil
+            ))
+        } else {
+            lines.append(BalanceHoverLine(
+                label: "派工",
+                value: plan.skipTextZH ?? "可以派",
+                note: nil
+            ))
+        }
         if let freeWindow = payload?.freeWindow, let text = freeWindow.textZH {
-            lines.append(BalanceHoverLine(label: "免费时段", value: text, note: nil))
+            lines.append(BalanceHoverLine(label: "免费时段", value: freeWindowText(text), note: nil))
         }
         for error in payload?.errors ?? [] {
             if let text = error.textZH {
@@ -831,6 +855,26 @@ enum CortexPlanStatusDisplay {
             runner: runner
         )
         return dumpStateText(outcome)
+    }
+
+    /// 免费时段的标签已经写了「免费时段」，值里把重复的词去掉：
+    /// 「免费时段北京 23:00 开始」→「北京 23:00 开始」；
+    /// 「现在是免费时段（北京 23:00 到 09:00）」→「北京 23:00 到 09:00」。
+    static func freeWindowText(_ text: String) -> String {
+        guard text.contains("免费时段") else {
+            return text
+        }
+        var result = text
+            .replacingOccurrences(of: "免费时段", with: "")
+            .replacingOccurrences(of: "现在是", with: "")
+            .trimmingCharacters(in: .whitespaces)
+        for prefix in ["：", ":", "（", "("] where result.hasPrefix(prefix) {
+            result.removeFirst()
+        }
+        for suffix in ["）", ")"] where result.hasSuffix(suffix) {
+            result.removeLast()
+        }
+        return result.trimmingCharacters(in: .whitespaces)
     }
 
     /// 冷却时间用本机时间显示。

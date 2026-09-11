@@ -209,7 +209,7 @@ struct BalanceHoverDetail: View {
                             Text(line.label)
                                 .font(SentinelTheme.Fonts.balanceMeta)
                                 .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
-                                .frame(width: 58, alignment: .leading)
+                                .frame(width: 76, alignment: .leading)
                             Text(line.value)
                                 .font(SentinelTheme.Fonts.subtitle)
                                 .foregroundStyle(SentinelTheme.Colors.foreground)
@@ -243,7 +243,7 @@ struct BalanceHoverDetail: View {
             }
         }
         .padding(SentinelTheme.Spacing.md)
-        .frame(width: 296, alignment: .leading)
+        .frame(width: 304, alignment: .leading)
         .background(SentinelTheme.Colors.panel)
         .clipShape(RoundedRectangle(cornerRadius: SentinelTheme.Radius.panel))
         .overlay(
@@ -255,10 +255,21 @@ struct BalanceHoverDetail: View {
     }
 }
 
+/// 有详情卡在显示的余额区分支集合：行级 zIndex 只在分支内兄弟间排序，
+/// 跨分支（GLM 卡盖 Cursor 行等）要靠这个把 zIndex 提到余额区顶层。
+private struct BalanceCardBranchKey: PreferenceKey {
+    static var defaultValue: Set<String> = []
+    static func reduce(value: inout Set<String>, nextValue: () -> Set<String>) {
+        value.formUnion(nextValue())
+    }
+}
+
 /// 悬停 0.5 秒后显示详情卡，移开即消失；显示期间该行置顶避免被相邻行盖住。
 struct HoverDetailCard: ViewModifier {
     let makeContent: () -> BalanceHoverContent
     var isSuppressed: () -> Bool = { false }
+    /// 本行所属余额区分支（"cc" / "glm"），卡显示时上报给顶层排 z 序。
+    var branchID: String = ""
     /// 选行出图用：本行是否命中 --preview-hover-row。选行模式下没传的行不出卡。
     var previewRowMatch: Bool = false
     @Environment(\.hoverCardPreview) private var preview
@@ -303,6 +314,7 @@ struct HoverDetailCard: ViewModifier {
                 }
             }
             .zIndex(showsCard ? 99 : 0)
+            .preference(key: BalanceCardBranchKey.self, value: showsCard ? [branchID] : [])
     }
 }
 
@@ -749,6 +761,9 @@ struct SentinelBalancesSection: View {
         }
     }
 
+    /// 有卡在显示的分支；分支容器据此顶到余额区所有行之上（行级 zIndex 跨不过分支）。
+    @State private var branchesWithHoverCard: Set<String> = []
+
     private var expandedSection: some View {
         VStack(alignment: .leading, spacing: SentinelTheme.Spacing.sm) {
             SentinelSectionChrome.sectionTitle(
@@ -757,8 +772,10 @@ struct SentinelBalancesSection: View {
             )
 
             commandCodeEntryRows
+                .zIndex(branchesWithHoverCard.contains("cc") ? 1 : 0)
 
             glmUsageRows
+                .zIndex(branchesWithHoverCard.contains("glm") ? 1 : 0)
 
             cursorUsageRow
 
@@ -779,6 +796,7 @@ struct SentinelBalancesSection: View {
                 }
             }
         }
+        .onPreferenceChange(BalanceCardBranchKey.self) { branchesWithHoverCard = $0 }
         .background {
             // 焦点垃圾桶：点空白处把焦点从正在编辑的行名上挪走，触发失焦提交。
             TextField("", text: .constant(""))
@@ -1040,7 +1058,8 @@ struct SentinelBalancesSection: View {
         .contentShape(Rectangle())
         .modifier(HoverDetailCard(
             makeContent: { self.commandCodeDetailContent(account) },
-            isSuppressed: { self.suppressCardKey == account.key || self.draggingKey != nil }
+            isSuppressed: { self.suppressCardKey == account.key || self.draggingKey != nil },
+            branchID: "cc"
         ))
     }
 
@@ -1354,6 +1373,7 @@ struct SentinelBalancesSection: View {
         .modifier(HoverDetailCard(
             makeContent: { self.glmDetailContent(account) },
             isSuppressed: { self.suppressCardKey == account.key || self.draggingKey != nil },
+            branchID: "glm",
             previewRowMatch: self.rowMatchesPreviewSelection(displayName)
         ))
     }

@@ -78,3 +78,9 @@
 
 - 用 python 批量改源码时，每处替换必须断言锚点存在且唯一（`old in s` 且 `count == 1`），写入放最后。切片起止界写反会切出空串，replace 空串会把文件撑爆几百万行（2026-09-11 实踩，靠 git checkout 救回）。
 - 一次改多个文件时别把 A 文件的锚点拿到 B 文件上 replace，断言能挡住但白跑一趟。
+
+## 自更新与盘面版本断层（2026-09-11 实踩）
+
+- 0.1.28 起安装盘只带 app + Applications，交接脚本改为内联换装。但旧版（≤0.1.27）的交接脚本要从 DMG 里跑 scripts/install-app.sh——它下载到新盘后必然报 No such file or directory，每小时重试永远失败。
+- 跨这个断层只能手动换装：bootout 主任务 → rm 旧 app → ditto dist 的新 app → bootstrap 主任务。装上 0.1.28 后自更新回归自洽。
+- 以后再改 DMG 盘面或交接脚本，先想一遍「旧版更新器拿到新盘会发生什么」。

@@ -658,6 +658,25 @@ final class CortexPlanStatusTests: XCTestCase {
         XCTAssertEqual(outcome, .failure(reason: "没找到可用的 Python"))
     }
 
+    /// 大输出要一启动就并发读：等退出才读的实现会卡死在管道缓冲上，
+    /// 直到超时被杀（导出脚本 100KB 实踩）。变异跑时这条必须红。
+    func testRunnerCapturesLargeOutputWithoutDeadlock() async {
+        let runner = CortexProcessSubprocessRunner()
+        let started = Date()
+        let result = await runner.run(
+            executablePath: "/bin/sh",
+            arguments: ["-c", "/bin/dd if=/dev/zero bs=1024 count=200 2>/dev/null"],
+            workingDirectory: nil,
+            environment: nil,
+            stdin: nil,
+            timeout: 10
+        )
+        XCTAssertFalse(result.timedOut, "不该卡到超时被杀")
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertEqual(result.standardOutput.count, 204_800, "200KB 要一字不少拿到")
+        XCTAssertLessThan(Date().timeIntervalSince(started), 8, "要在短超时内按时退出")
+    }
+
     func testScriptTimeoutFailsAndDoesNotHang() async throws {
         let repo = try await makeScriptRepo(makeSleepingInterpreter: true)
         var configuration = cacheConfiguration()

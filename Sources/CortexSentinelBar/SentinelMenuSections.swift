@@ -273,7 +273,10 @@ struct HoverDetailCard: ViewModifier {
                 if showsCard {
                     BalanceHoverDetail(content: makeContent())
                         .offset(y: -30)
-                        .transition(.opacity)
+                        // 淡入淡出要短；不许拦截鼠标事件，否则卡片弹出来正好
+                        // 压住鼠标位置，onHover 立刻 false，卡片忽隐忽现。
+                        .transition(.opacity.animation(.easeInOut(duration: 0.18)))
+                        .allowsHitTesting(false)
                 }
             }
             .zIndex(showsCard ? 99 : 0)

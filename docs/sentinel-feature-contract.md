@@ -63,3 +63,7 @@
 按住状态点上下拖 = 同组内排序（GLM 一组、CC 一组，互不混排），顺序持久化到 `com.falcon.cortex.sentinelbar.providerOrder.*`。Cursor / AIO 行的点无手势。守卫：`CommandCodeUsageTests.testProviderOrderingPureLogic`。
 
 组与组之间不许再放无含义的小圆点分隔符（已随 0.1.17 删除，别加回来）。改名：点行名编辑，回车或点任意空白处提交，Esc 取消。详情卡：标签/数值/重置时间三列，重置时间越近越醒目（≥60% 流逝黄、≥85% 红）。
+
+## 悬浮详情卡交互（2026-09-11 定）
+
+详情卡淡入淡出 0.18 秒；卡片必须 `allowsHitTesting(false)`——不然卡片弹出压住鼠标位置，onHover 立刻退出，忽隐忽现。悬浮热区 = 整行一长条（行高 46，contentShape(Rectangle())），不是只有文字。

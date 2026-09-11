@@ -629,6 +629,39 @@ final class CortexPlanStatusTests: XCTestCase {
         )
     }
 
+    /// 清单本身变了（补列文件）也要换新缓存目录——不然命中的还是旧导出。
+    func testManifestChangeRotatesCache() async throws {
+        guard FileManager.default.fileExists(atPath: "/usr/bin/python3") else {
+            throw XCTSkip("本机没有 /usr/bin/python3")
+        }
+        let repo = try await makeScriptRepo()
+        let cacheRoot = tempRoot.appendingPathComponent("cache", isDirectory: true)
+        let configuration = CortexPlanStatusFetcher.Configuration(cacheRoot: cacheRoot)
+
+        let first = await fetch(repo: repo, configuration: configuration)
+        guard case .success = first else {
+            XCTFail("第一次取数应该成功：\(first)")
+            return
+        }
+        let firstDirs = try FileManager.default.contentsOfDirectory(at: cacheRoot, includingPropertiesForKeys: nil)
+        XCTAssertEqual(firstDirs.count, 1)
+
+        // 脚本一个字没动，只往清单里补一行注释 → 新键、新目录。
+        let changedManifest = "# 清单\n# v2 补一行\nscripts/glm_plan_status.py\n"
+        try changedManifest.write(to: repo.appendingPathComponent("scripts/glm_plan_status.files"), atomically: true, encoding: .utf8)
+        try await runGit(["add", "."], at: repo)
+        try await runGit(["-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-m", "manifest bump", "--no-gpg-sign"], at: repo)
+        try await runGit(["update-ref", "refs/remotes/origin/main", "HEAD"], at: repo)
+
+        let second = await fetch(repo: repo, configuration: configuration)
+        guard case .success = second else {
+            XCTFail("清单变更后取数应该成功：\(second)")
+            return
+        }
+        let bothDirs = try FileManager.default.contentsOfDirectory(at: cacheRoot, includingPropertiesForKeys: nil)
+        XCTAssertEqual(bothDirs.count, 2, "清单变更后换了新目录，旧目录还在")
+    }
+
     func testMissingManifestFailsWithPlainReason() async throws {
         // 仓里连清单文件都没有：git show 失败 → 还没有这个脚本。
         let repoWithoutManifest = tempRoot.appendingPathComponent("no-manifest-\(UUID().uuidString)", isDirectory: true)

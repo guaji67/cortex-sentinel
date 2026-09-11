@@ -238,15 +238,38 @@ struct CortexProcessSubprocessRunner: CortexSubprocessRunning {
                 }
             }
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timeoutItem)
+            // 输出一上来就并发读：进程写满管道缓冲（64KB）时若等退出才读，
+            // 子进程会卡在 write 上不退出，直到超时被杀（脚本导出 100KB 实踩）。
+            let reads = DispatchGroup()
+            let outputLock = NSLock()
+            var outData = Data()
+            var errData = Data()
+            reads.enter()
+            DispatchQueue.global().async {
+                let data = output.fileHandleForReading.readDataToEndOfFile()
+                outputLock.lock()
+                outData = data
+                outputLock.unlock()
+                reads.leave()
+            }
+            reads.enter()
+            DispatchQueue.global().async {
+                let data = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                outputLock.lock()
+                errData = data
+                outputLock.unlock()
+                reads.leave()
+            }
             process.terminationHandler = { finished in
                 timeoutItem.cancel()
                 let timedOut = state.consumeTimedOut()
-                let out = output.fileHandleForReading.readDataToEndOfFile()
-                let err = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                reads.wait()
+                outputLock.lock()
+                defer { outputLock.unlock() }
                 continuation.resume(returning: CortexSubprocessResult(
                     exitCode: finished.terminationStatus,
-                    standardOutput: out,
-                    standardError: err,
+                    standardOutput: outData,
+                    standardError: errData,
                     timedOut: timedOut
                 ))
             }

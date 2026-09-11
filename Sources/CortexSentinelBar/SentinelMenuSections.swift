@@ -794,7 +794,9 @@ struct SentinelBalancesSection: View {
                 suppressCardKey = hovering ? key : (suppressCardKey == key ? nil : suppressCardKey)
             }
             .gesture(
-                DragGesture(minimumDistance: 2)
+                // 零阈值：按住那一刻就进拖拽模式（点放大、卡 suppressed），
+                // 不等鼠标位移，跟手。Falcon 2026-09-11 令。
+                DragGesture(minimumDistance: 0)
                     .onChanged { value in
                         if draggingKey == nil {
                             draggingKey = key

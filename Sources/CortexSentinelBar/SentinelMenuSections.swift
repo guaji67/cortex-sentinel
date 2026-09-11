@@ -1663,20 +1663,41 @@ struct SentinelBalancesSection: View {
                     .lineLimit(1)
                     .layoutPriority(1)
                 Spacer(minLength: SentinelTheme.Spacing.xs)
-                // 三组余额：小灰标签 + 大数字，各组按剩余独立变色——
-                // 哪组快用完一眼扫出来，而不是整行一个颜色糊在一起。
-                HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
-                    cursorUsageSegment("Grok", snapshot.autoPercentUsed)
-                    cursorUsageSegment("API", snapshot.apiPercentUsed)
-                    cursorUsageSegment("Bot", snapshot.botPercentUsed)
+                // 三组余额并入等宽网格（跟 GLM / CC 同列对齐）；
+                // Cursor 没有时间窗，不放横条。Falcon 2026-09-11 定。
+                VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xxs) {
+                    HStack(alignment: .top, spacing: SentinelTheme.Metrics.usageSegmentGap) {
+                        cursorGridSegment("Grok", snapshot.autoPercentUsed)
+                        cursorGridSegment("API", snapshot.apiPercentUsed)
+                        cursorGridSegment("Bot", snapshot.botPercentUsed)
+                    }
                 }
-                .fixedSize(horizontal: true, vertical: false)
+                .frame(
+                    width: SentinelTheme.Metrics.usageBlockWidth,
+                    alignment: .leading
+                )
                 .layoutPriority(2)
             }
-            .frame(height: 38)
+            .frame(height: SentinelTheme.Metrics.usageRowHeight)
             .contentShape(Rectangle())
             .help(cursorUsageTooltip(snapshot))
         }
+    }
+
+    /// Cursor 行的网格段：剩余百分比换算跟老段一致，交给等宽网格渲染（无条）。
+    private func cursorGridSegment(
+        _ label: String,
+        _ percentUsed: Double?
+    ) -> some View {
+        let remaining = percentUsed.map { min(100, max(0, 100 - $0)) }
+        return quotaSegmentWithBar(
+            label: label,
+            valueText: remaining.map(cursorUsageRemainingText) ?? "—",
+            valueColor: remaining.map(cursorUsageRemainingColor)
+                ?? SentinelTheme.Colors.secondaryForeground,
+            columnWidth: SentinelTheme.Metrics.usageColWidth1,
+            barFraction: nil
+        )
     }
 
     private func cursorUsageSegment(

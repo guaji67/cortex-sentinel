@@ -241,9 +241,11 @@ final class GLMUsageTests: XCTestCase {
             accountsFileURL: accountsURL,
             proxyEnvFileURL: proxyEnvURL,
             claudeGSettingsFileURL: tempDir.appendingPathComponent("missing.json"),
+            zcodeConfigDirectoryURL: tempDir.appendingPathComponent("missing-zcode"),
             fileManager: .default
         )
         XCTAssertEqual(detected.map(\.label), ["ZAI_API_KEY", "Lite", "pro"])
+        XCTAssertEqual(detected.map(\.source), ["env:ZAI_API_KEY", "keypool", "keypool"])
         // 同一把 key 在键池和 .env 都出现时只留先识别到的来源命名。
         XCTAssertFalse(detected.contains { $0.label == "ClaudeZ" })
     }
@@ -262,9 +264,217 @@ final class GLMUsageTests: XCTestCase {
             accountsFileURL: accountsURL,
             proxyEnvFileURL: tempDir.appendingPathComponent("missing.env"),
             claudeGSettingsFileURL: tempDir.appendingPathComponent("missing.json"),
+            zcodeConfigDirectoryURL: tempDir.appendingPathComponent("missing-zcode"),
             fileManager: .default
         )
         XCTAssertTrue(detected.isEmpty)
+    }
+
+    // MARK: - ZCode 配置识别（--glm-usage-json 与面板共用）
+
+    /// 新加的识别测试一律显式传临时目录当 zcode 配置目录：默认值指向本机
+    /// 家目录的 .zcode/cli，真机上有两份真配置，不传会多认出两行还把真钥匙读进测试。
+    @discardableResult
+    private func makeDetectorTempDir() throws -> URL {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("glm-detector-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        return tempDir
+    }
+
+    private func missingZCodeDir(in tempDir: URL) -> URL {
+        tempDir.appendingPathComponent("missing-zcode")
+    }
+
+    private func zcodeConfigData(key: String) -> Data {
+        Data(#"{"provider":{"bigmodel":{"options":{"apiKey":"\#(key)"}}}}"#.utf8)
+    }
+
+    func testDetectorReadsZCodeMainAndNamedConfigs() throws {
+        let tempDir = try makeDetectorTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let zcodeDir = tempDir.appendingPathComponent("zcode", isDirectory: true)
+        try FileManager.default.createDirectory(at: zcodeDir, withIntermediateDirectories: true)
+        try zcodeConfigData(key: "key-zcode-main-aaaaaaaaaaaaaa")
+            .write(to: zcodeDir.appendingPathComponent("config.json"))
+        try zcodeConfigData(key: "key-zcode-alt-bbbbbbbbbbbbbb")
+            .write(to: zcodeDir.appendingPathComponent("config.alt.json"))
+
+        let detected = GLMKeyDetector.detect(
+            environment: [:],
+            accountsFileURL: tempDir.appendingPathComponent("missing-accounts.json"),
+            proxyEnvFileURL: tempDir.appendingPathComponent("missing.env"),
+            claudeGSettingsFileURL: tempDir.appendingPathComponent("missing.json"),
+            zcodeConfigDirectoryURL: zcodeDir,
+            fileManager: .default
+        )
+        XCTAssertEqual(detected.map(\.label), ["ZCode", "ZCode alt"])
+        XCTAssertEqual(detected.map(\.source), ["zcode", "zcode:alt"])
+    }
+
+    func testDetectorKeepsEarlierSourceWhenZCodeConfigRepeatsKey() throws {
+        let tempDir = try makeDetectorTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let sharedKey = "key-shared-pool-zcode-cccccccc"
+        let accountsURL = tempDir.appendingPathComponent("accounts.json")
+        try Data(#"{"main": {"label": "PoolName", "key": "\#(sharedKey)"}}"#.utf8)
+            .write(to: accountsURL)
+        let zcodeDir = tempDir.appendingPathComponent("zcode", isDirectory: true)
+        try FileManager.default.createDirectory(at: zcodeDir, withIntermediateDirectories: true)
+        try zcodeConfigData(key: sharedKey).write(to: zcodeDir.appendingPathComponent("config.json"))
+
+        let detected = GLMKeyDetector.detect(
+            environment: [:],
+            accountsFileURL: accountsURL,
+            proxyEnvFileURL: tempDir.appendingPathComponent("missing.env"),
+            claudeGSettingsFileURL: tempDir.appendingPathComponent("missing.json"),
+            zcodeConfigDirectoryURL: zcodeDir,
+            fileManager: .default
+        )
+        XCTAssertEqual(detected.map(\.label), ["PoolName"])
+        XCTAssertEqual(detected.map(\.source), ["keypool"])
+    }
+
+    func testDetectorSkipsInvalidZCodeConfigFiles() throws {
+        let tempDir = try makeDetectorTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let zcodeDir = tempDir.appendingPathComponent("zcode", isDirectory: true)
+        try FileManager.default.createDirectory(at: zcodeDir, withIntermediateDirectories: true)
+        // 名字不合规、.bak、坏 JSON、缺字段：一律跳过不报错，不挡认得出的那把。
+        try zcodeConfigData(key: "key-zcode-skipped-spaceeeeeeeee")
+            .write(to: zcodeDir.appendingPathComponent("config.Bad Name.json"))
+        try zcodeConfigData(key: "key-zcode-skipped-bakbbbbbbbb")
+            .write(to: zcodeDir.appendingPathComponent("config.alt.json.bak"))
+        try zcodeConfigData(key: "key-zcode-skipped-upperUpper")
+            .write(to: zcodeDir.appendingPathComponent("config.Upper.json"))
+        try Data("not-json-at-all".utf8)
+            .write(to: zcodeDir.appendingPathComponent("config.broken.json"))
+        try Data(#"{"provider":{"bigmodel":{"options":{}}}}"#.utf8)
+            .write(to: zcodeDir.appendingPathComponent("config.nofield.json"))
+        try zcodeConfigData(key: "key-zcode-ok-dddddddddddddddd")
+            .write(to: zcodeDir.appendingPathComponent("config.ok.json"))
+
+        let detected = GLMKeyDetector.detect(
+            environment: [:],
+            accountsFileURL: tempDir.appendingPathComponent("missing-accounts.json"),
+            proxyEnvFileURL: tempDir.appendingPathComponent("missing.env"),
+            claudeGSettingsFileURL: tempDir.appendingPathComponent("missing.json"),
+            zcodeConfigDirectoryURL: zcodeDir,
+            fileManager: .default
+        )
+        XCTAssertEqual(detected.map(\.label), ["ZCode ok"])
+        XCTAssertEqual(detected.map(\.source), ["zcode:ok"])
+    }
+
+    func testGLMKeyEntryDecodesLegacyJSONWithoutSource() throws {
+        let entry = try JSONDecoder().decode(
+            GLMKeyEntry.self,
+            from: Data(#"{"label":"pro","key":"key-legacy-aaaaaaaaaaaaaaaa"}"#.utf8)
+        )
+        XCTAssertEqual(entry.label, "pro")
+        XCTAssertNil(entry.source)
+    }
+
+    // MARK: - --glm-usage-json 的纯函数（渲染与退出码）
+
+    private func makeUsageJSONFixture() -> (entry: GLMKeyEntry, account: GLMAccountUsage) {
+        let fakeKey = "sentinel-test-key-0123456789abcdef"
+        let entry = GLMKeyEntry(label: "ZCode alt", key: fakeKey, source: "zcode:alt")
+        let account = GLMAccountUsage(
+            key: fakeKey,
+            label: entry.label,
+            level: "pro",
+            fiveHourWindow: GLMUsageWindow(
+                totalPoints: 12000,
+                usedPoints: 1500,
+                percentUsed: 19,
+                resetAt: Date(timeIntervalSince1970: 1_788_471_923.332)
+            ),
+            weeklyWindow: nil,
+            cashBalance: 12.5,
+            totalSpendAmount: nil,
+            checkedAt: checkedAt,
+            stale: false,
+            errorMessage: nil
+        )
+        return (entry, account)
+    }
+
+    func testUsageJSONRendersFingerprintsWithoutRawKey() throws {
+        let fixture = makeUsageJSONFixture()
+        let data = GLMUsageCLI.renderJSON(
+            entries: [fixture.entry],
+            accounts: [fixture.account],
+            checkedAt: checkedAt
+        )
+        let text = try XCTUnwrap(String(data: data, encoding: .utf8))
+        let payload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        XCTAssertEqual(payload["schema"] as? Int, 1)
+        let rows = try XCTUnwrap(payload["accounts"] as? [[String: Any]])
+        XCTAssertEqual(rows.count, 1)
+        let row = rows[0]
+        XCTAssertEqual(row["key_sha12"] as? String, "12d0a2e27aaf")
+        XCTAssertEqual(row["source"] as? String, "zcode:alt")
+        XCTAssertEqual(row["label"] as? String, "ZCode alt")
+        XCTAssertEqual(row["level"] as? String, "pro")
+        let fiveHour = try XCTUnwrap(row["five_hour"] as? [String: Any])
+        XCTAssertEqual((fiveHour["reset_at_ms"] as? NSNumber)?.int64Value, 1_788_471_923_332)
+        XCTAssertTrue(row["weekly"] is NSNull)
+        XCTAssertEqual((row["cash_balance"] as? NSNumber)?.doubleValue, 12.5)
+        XCTAssertTrue(row["error"] is NSNull)
+        // 钥匙原文和它的头尾掩码都不许出现在输出里。
+        XCTAssertFalse(text.contains(fixture.entry.key))
+        XCTAssertFalse(text.contains(String(fixture.entry.key.prefix(6))))
+        XCTAssertFalse(text.contains(fixture.entry.maskedKeyText))
+    }
+
+    func testUsageJSONKeepsUsedPercentageNotRemaining() throws {
+        let fakeKey = "sentinel-test-key-0123456789abcdef"
+        let entry = GLMKeyEntry(label: "ZCode", key: fakeKey, source: "zcode")
+        let account = GLMAccountUsage(
+            key: fakeKey,
+            label: entry.label,
+            level: nil,
+            fiveHourWindow: GLMUsageWindow(
+                totalPoints: 12000,
+                usedPoints: 1500,
+                percentUsed: 12.5,
+                resetAt: nil
+            ),
+            weeklyWindow: nil,
+            cashBalance: nil,
+            totalSpendAmount: nil,
+            checkedAt: checkedAt,
+            stale: false,
+            errorMessage: nil
+        )
+        let data = GLMUsageCLI.renderJSON(entries: [entry], accounts: [account], checkedAt: checkedAt)
+        let payload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        let row = try XCTUnwrap((payload["accounts"] as? [[String: Any]])?.first)
+        let fiveHour = try XCTUnwrap(row["five_hour"] as? [String: Any])
+        // 接口是已用口径，直接取 percentUsed；按面板剩余口径反成 87.5 就是回归。
+        XCTAssertEqual((fiveHour["percent_used"] as? NSNumber)?.doubleValue, 12.5)
+        XCTAssertNotEqual((fiveHour["percent_used"] as? NSNumber)?.doubleValue, 87.5)
+        XCTAssertNil(fiveHour["reset_at_ms"] as? NSNumber)
+        XCTAssertTrue(fiveHour["reset_at_ms"] is NSNull)
+    }
+
+    func testUsageJSONEmptyEntriesRenderEmptyAccounts() throws {
+        let data = GLMUsageCLI.renderJSON(entries: [], accounts: [], checkedAt: checkedAt)
+        let payload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        XCTAssertEqual(payload["schema"] as? Int, 1)
+        XCTAssertEqual((payload["accounts"] as? [Any])?.count, 0)
+    }
+
+    func testExitCodeTwoWithoutKeysElseZero() {
+        XCTAssertEqual(GLMUsageCLI.exitCode(entryCount: 0), 2)
+        XCTAssertEqual(GLMUsageCLI.exitCode(entryCount: 3), 0)
     }
 
     private func makeGoodAccount() -> GLMAccountUsage {

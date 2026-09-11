@@ -21,6 +21,8 @@ enum CortexSentinelBarMain {
     /// 配合 --render-panel-png：注入一套中性演示余额再出图（README 用）。
     static let demoBalancesArgument = "--demo-balances"
     static let dumpStateArgument = "--dump-state"
+    /// GLM 额度读数 JSON 给程序吃（实现和字段说明在 GLMUsageCLI.swift）。
+    static let glmUsageJSONArgument = "--glm-usage-json"
     static let idleRefreshArgument = "--idle-refresh"
     static let smokeSettingsArgument = "--smoke-settings"
     static let openSettingsArgument = "--open-settings"
@@ -38,6 +40,10 @@ enum CortexSentinelBarMain {
         let arguments = ProcessInfo.processInfo.arguments
         if arguments.contains(dumpStateArgument) {
             runDumpStateCLI()
+            return
+        }
+        if arguments.contains(glmUsageJSONArgument) {
+            await GLMUsageCLI.run()
             return
         }
         if arguments.contains(idleRefreshArgument) {

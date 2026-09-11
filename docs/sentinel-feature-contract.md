@@ -56,6 +56,8 @@
 
 数字一律剩余口径，像电量：GLM 的 `remainingPercentage` 已经是剩余，显示时禁止再 `100 - $0`（0.1.15 曾双重反转成已用口径）。横条一律已流逝方向，正向走：重置时 0 起步绿条，快到重置点变黄（>=0.6），压线变红（>=0.85）。函数入口 `timeElapsedFraction` / `periodElapsedFraction`。守卫：`CommandCodeUsageTests.testTimeAndPeriodFractions`。
 
+GLM 钥匙自动识别多认 ZCode CLI 的两份配置（`~/.zcode/cli/config.json` 与 `config.<名>.json`，字段 `provider.bigmodel.options.apiKey`）。`--glm-usage-json` 是给程序读的接口，`percent_used` 是已用口径、直接取 `percentUsed`；面板显示照旧剩余口径，别按本段把接口改反。守卫：`GLMUsageTests.testUsageJSONKeepsUsedPercentageNotRemaining`。
+
 ## 状态点与排序（2026-09-11 定）
 
 余额区 GLM / Command Code 行首的点 = 额度状态，综合判定取最严重一档：5 小时窗剩余 ≤20% 黄、≤1% 红；周窗剩余 ≤10% 黄、≤1% 红；余额类（现金/月余）<10 黄、<1 红；stale 至少黄；没数据灰。Cursor / AIO / 官方不参与这套。守卫：`CommandCodeUsageTests.testProviderDotSignalThresholds`。

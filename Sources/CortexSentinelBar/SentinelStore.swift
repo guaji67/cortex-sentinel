@@ -813,13 +813,9 @@ final class SentinelStore {
     /// 并把结果同步给设置窗。识别很便宜（读两三个小文件），每次刷新前都跑一遍，
     /// 这样在设置里删/加 key 之后不用重启就生效。
     func reloadGLMKeys() {
-        let detected = GLMKeyDetector.detect(environment: environment)
-        let user = SentinelSettings.glmUserKeys(defaults: defaults)
-        let removed = SentinelSettings.glmRemovedKeys(defaults: defaults)
-        let effective = GLMKeyStore.effectiveEntries(
-            detected: detected,
-            user: user,
-            removedKeys: removed
+        let effective = GLMKeyStore.resolvedEntries(
+            environment: environment,
+            defaults: defaults
         )
         if glmKeyEntries != effective {
             glmKeyEntries = effective

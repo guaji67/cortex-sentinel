@@ -495,6 +495,9 @@ private extension KeyedDecodingContainer {
 struct GLMKeyEntry: Equatable, Codable, Sendable, Identifiable {
     let label: String
     let key: String
+    /// 钥匙从哪认出来的：env:<变量名> / keypool / claudeg / proxy / zcode / zcode:<名>；
+    /// 设置里手加的是 user。老数据没这个字段，解出来是 nil，只在 --glm-usage-json 里露出。
+    var source: String? = nil
 
     var id: String { key }
 
@@ -532,6 +535,12 @@ enum GLMKeyConstants {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".claude/settings-claudeg.json")
     }
+    /// ZCode CLI 的配置目录。config.json 与 config.<名>.json 的
+    /// provider.bigmodel.options.apiKey 是派工执行者真正在烧的两份钥匙。
+    static var zcodeConfigDirectoryURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".zcode/cli", isDirectory: true)
+    }
 }
 
 /// 从本机已有的配置里把智谱 key 认出来。只读文件，不写不改；
@@ -542,6 +551,7 @@ enum GLMKeyDetector {
         accountsFileURL: URL = GLMKeyConstants.accountsFileURL,
         proxyEnvFileURL: URL = GLMKeyConstants.proxyEnvFileURL,
         claudeGSettingsFileURL: URL = GLMKeyConstants.claudeGSettingsFileURL,
+        zcodeConfigDirectoryURL: URL = GLMKeyConstants.zcodeConfigDirectoryURL,
         fileManager: FileManager = .default
     ) -> [GLMKeyEntry] {
         var byKey: [String: GLMKeyEntry] = [:]
@@ -553,14 +563,14 @@ enum GLMKeyDetector {
                 return
             }
             if byKey[key] == nil {
-                byKey[key] = GLMKeyEntry(label: entry.label, key: key)
+                byKey[key] = GLMKeyEntry(label: entry.label, key: key, source: entry.source)
                 order.append(key)
             }
         }
 
         for name in GLMKeyConstants.environmentKeyNames {
             if let value = environment[name] {
-                add(GLMKeyEntry(label: name, key: value))
+                add(GLMKeyEntry(label: name, key: value, source: "env:\(name)"))
             }
         }
 
@@ -572,7 +582,7 @@ enum GLMKeyDetector {
                 guard let account = accounts[name], let key = account.key else {
                     continue
                 }
-                add(GLMKeyEntry(label: account.label ?? name, key: key))
+                add(GLMKeyEntry(label: account.label ?? name, key: key, source: "keypool"))
             }
         }
 
@@ -580,7 +590,7 @@ enum GLMKeyDetector {
            let data = try? Data(contentsOf: claudeGSettingsFileURL),
            let payload = try? JSONDecoder().decode([String: String].self, from: data),
            let token = payload["ANTHROPIC_AUTH_TOKEN"] {
-            add(GLMKeyEntry(label: "免费池", key: token))
+            add(GLMKeyEntry(label: "免费池", key: token, source: "claudeg"))
         }
 
         if fileManager.fileExists(atPath: proxyEnvFileURL.path),
@@ -590,11 +600,77 @@ enum GLMKeyDetector {
                 guard parts.count == 2, parts[0].trimmingCharacters(in: .whitespaces) == "OPENAI_API_KEY" else {
                     continue
                 }
-                add(GLMKeyEntry(label: "ClaudeZ", key: String(parts[1])))
+                add(GLMKeyEntry(label: "ClaudeZ", key: String(parts[1]), source: "proxy"))
             }
         }
 
+        addZCodeConfigKeys(
+            in: zcodeConfigDirectoryURL,
+            fileManager: fileManager,
+            add: add
+        )
+
         return order.compactMap { byKey[$0] }
+    }
+
+    /// 读 ZCode CLI 配置里的 GLM key（provider.bigmodel.options.apiKey）。
+    /// 先 config.json（名字「ZCode」），再按文件名排序认 config.<名>.json
+    /// （名字「ZCode <名>」）；.bak、名字不合规、解析不了、缺字段的文件一律跳过。
+    /// 只读不写，同一把 key 前面来源已认到时沿用原名。
+    private static func addZCodeConfigKeys(
+        in directoryURL: URL,
+        fileManager: FileManager,
+        add: (GLMKeyEntry) -> Void
+    ) {
+        if let key = zcodeAPIKey(at: directoryURL.appendingPathComponent("config.json")) {
+            add(GLMKeyEntry(label: "ZCode", key: key, source: "zcode"))
+        }
+        let fileURLs = ((try? fileManager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: nil
+        )) ?? []).sorted { $0.lastPathComponent < $1.lastPathComponent }
+        for fileURL in fileURLs {
+            guard let name = zcodeConfigName(fromFileName: fileURL.lastPathComponent),
+                  let key = zcodeAPIKey(at: fileURL)
+            else {
+                continue
+            }
+            add(GLMKeyEntry(label: "ZCode \(name)", key: key, source: "zcode:\(name)"))
+        }
+    }
+
+    /// config.<名>.json 里的 <名>：整段匹配 [a-z0-9][a-z0-9_-]{0,31}，不合规则返回 nil。
+    private static func zcodeConfigName(fromFileName fileName: String) -> String? {
+        let prefix = "config."
+        let suffix = ".json"
+        guard fileName.hasPrefix(prefix), fileName.hasSuffix(suffix),
+              fileName.count > prefix.count + suffix.count
+        else {
+            return nil
+        }
+        let name = String(fileName.dropFirst(prefix.count).dropLast(suffix.count))
+        guard let regex = zcodeConfigNameRegex,
+              regex.firstMatch(in: name, range: NSRange(name.startIndex..., in: name)) != nil
+        else {
+            return nil
+        }
+        return name
+    }
+
+    private static let zcodeConfigNameRegex = try? NSRegularExpression(
+        pattern: "^[a-z0-9][a-z0-9_-]{0,31}$"
+    )
+
+    private static func zcodeAPIKey(at fileURL: URL) -> String? {
+        guard let data = try? Data(contentsOf: fileURL),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return nil
+        }
+        let provider = payload["provider"] as? [String: Any]
+        let bigmodel = provider?["bigmodel"] as? [String: Any]
+        let options = bigmodel?["options"] as? [String: Any]
+        return options?["apiKey"] as? String
     }
 
     private struct GLMKeyPoolAccount: Decodable {
@@ -620,5 +696,18 @@ enum GLMKeyStore {
             }
         }
         return order.compactMap { byKey[$0] }
+    }
+
+    /// 本机生效的钥匙清单：自动识别 + 用户手加 − 用户删掉。
+    /// 面板刷新（SentinelStore.reloadGLMKeys）和 --glm-usage-json 都吃这一份，同一件事只写一处。
+    static func resolvedEntries(
+        environment: [String: String],
+        defaults: UserDefaults
+    ) -> [GLMKeyEntry] {
+        effectiveEntries(
+            detected: GLMKeyDetector.detect(environment: environment),
+            user: SentinelSettings.glmUserKeys(defaults: defaults),
+            removedKeys: SentinelSettings.glmRemovedKeys(defaults: defaults)
+        )
     }
 }

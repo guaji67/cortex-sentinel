@@ -364,9 +364,9 @@ struct SentinelSettingsView: View {
     @State private var historyTextOverride: String?
     @State private var expandedMenu: SettingsDropdownID?
 
-    var body: some View {
-        let _ = bodyCounter?.increment()
-        VStack(alignment: .leading, spacing: SentinelTheme.Spacing.panel) {
+    /// 设置内容栈：真窗口包进 ScrollView 滚动，离屏出图直接取它（不套滚动）。
+    var settingsContent: some View {
+            VStack(alignment: .leading, spacing: SentinelTheme.Spacing.panel) {
             settingsGroup(title: SentinelSettingsCopy.notifyGroupTitle) {
                 notifyGroup
             }
@@ -386,9 +386,17 @@ struct SentinelSettingsView: View {
                 startupGroup
             }
             versionFooter
+            }
+            .padding(SentinelTheme.Spacing.sheet)
+            .frame(width: SentinelTheme.Metrics.settingsWindowWidth, alignment: .leading)
+    }
+
+    var body: some View {
+        let _ = bodyCounter?.increment()
+        ScrollView(.vertical) {
+            settingsContent
         }
-        .padding(SentinelTheme.Spacing.sheet)
-        .frame(width: SentinelTheme.Metrics.settingsWindowWidth, alignment: .leading)
+        .frame(width: SentinelTheme.Metrics.settingsWindowWidth)
         .background(SentinelTheme.Colors.canvas)
         .tint(SentinelTheme.Colors.primary)
         .preferredColorScheme(.dark)
@@ -984,21 +992,30 @@ final class SentinelSettingsWindowController: NSObject, NSWindowDelegate {
 
     private var window: NSWindow?
 
+    /// 默认高度：屏幕装得下就全显，装不下就给个带滚动的窗口。
+    /// Falcon 2026-09-11 令：设置窗口不许比屏幕高，要能拉高矮、能滚动。
+    static let defaultSettingsHeight: CGFloat = 920
+    static let minSettingsHeight: CGFloat = 420
+
     func show(model: SentinelSettingsModel) {
         let hosting = NSHostingController(rootView: SentinelSettingsView(model: model))
-        hosting.sizingOptions = [.intrinsicContentSize]
+        hosting.sizingOptions = []
         if let window {
             window.contentViewController = hosting
-            sizeToFit(window, hosting: hosting)
             present(window)
             return
         }
         let window = NSWindow(contentViewController: hosting)
         window.title = SentinelSettingsCopy.windowTitle
-        window.styleMask = [.titled, .closable]
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.isReleasedWhenClosed = false
         window.delegate = self
-        sizeToFit(window, hosting: hosting)
+        let screenHeight = NSScreen.main?.visibleFrame.height ?? Self.defaultSettingsHeight
+        let defaultHeight = min(Self.defaultSettingsHeight, screenHeight - 40)
+        window.setContentSize(NSSize(width: SentinelTheme.Metrics.settingsWindowWidth, height: defaultHeight))
+        window.contentMinSize = NSSize(width: SentinelTheme.Metrics.settingsWindowWidth, height: Self.minSettingsHeight)
+        window.contentMaxSize = NSSize(width: SentinelTheme.Metrics.settingsWindowWidth, height: .greatestFiniteMagnitude)
+        window.setFrameAutosaveName("SentinelSettingsWindow")
         self.window = window
         present(window)
     }
@@ -1007,24 +1024,19 @@ final class SentinelSettingsWindowController: NSObject, NSWindowDelegate {
         // 窗口复用，关掉不清引用。
     }
 
-    private func sizeToFit(_ window: NSWindow, hosting: NSHostingController<SentinelSettingsView>) {
-        hosting.view.layoutSubtreeIfNeeded()
-        var size = hosting.view.fittingSize
-        if size.width < SentinelTheme.Metrics.settingsWindowWidth {
-            size.width = SentinelTheme.Metrics.settingsWindowWidth
+    private func clampToScreen(_ window: NSWindow) {
+        // 保存的框架如果比当前屏幕还高，压回屏幕内。
+        guard let screen = NSScreen.main?.visibleFrame else { return }
+        var frame = window.frame
+        if frame.height > screen.height - 24 {
+            frame.size.height = screen.height - 24
         }
-        if size.height < 1 {
-            size.height = hosting.view.intrinsicContentSize.height
-        }
-        window.setContentSize(
-            NSSize(
-                width: SentinelTheme.Metrics.settingsWindowWidth,
-                height: max(size.height, 1)
-            )
-        )
+        frame.origin.y = max(screen.minY, frame.origin.y)
+        window.setFrame(frame, display: false)
     }
 
     private func present(_ window: NSWindow) {
+        clampToScreen(window)
         window.center()
         NSApplication.shared.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
@@ -1045,8 +1057,7 @@ enum SettingsPNGRenderer {
         _ = NSApplication.shared
         let model = SentinelSettingsModel.preview(fixture: fixture)
         let view = SentinelSettingsView(model: model, rendersOffscreen: true)
-            .frame(width: SentinelTheme.Metrics.settingsWindowWidth)
-            .fixedSize(horizontal: true, vertical: true)
+            .settingsContent
         let renderer = ImageRenderer(content: view)
         renderer.scale = 2
         renderer.proposedSize = ProposedViewSize(width: SentinelTheme.Metrics.settingsWindowWidth, height: nil)

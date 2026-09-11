@@ -134,12 +134,10 @@ codesign --verify --deep --strict "$app_dir"
 echo "== 构建 DMG =="
 mkdir -p "$dist_dir"
 rm -f "$dmg_path" "$dmg_path.sha256"
-volume_dir="$work_dir/Cortex 哨兵"
-mkdir -p "$volume_dir"
-ditto "$app_dir" "$volume_dir/Cortex哨兵.app"
-ln -s /Applications "$volume_dir/Applications"
-hdiutil create -quiet -ov -format UDZO -volname "Cortex 哨兵" \
-  -srcfolder "$volume_dir" "$dmg_path"
+bash "$package_dir/scripts/build-dmg.sh" \
+  --app "$app_dir" \
+  --output "$dmg_path" \
+  --volume-name "Cortex 哨兵"
 hdiutil verify "$dmg_path"
 
 echo "== 签名 DMG =="

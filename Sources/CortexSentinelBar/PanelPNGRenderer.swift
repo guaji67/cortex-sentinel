@@ -186,6 +186,9 @@ enum PanelPNGRenderer {
 enum DemoBalancesPreview {
     static func inject(into store: SentinelStore, planStatusStale: Bool = false) {
         let checked = Date()
+        // 附加钥匙出错演示态的开关：出图 CLI 没有专属旗标，用环境变量最小切换
+        // （CORTEX_SENTINEL_DEMO_PROXY_ERROR=1，只进离屏渲染）。
+        let proxyErrored = ProcessInfo.processInfo.environment["CORTEX_SENTINEL_DEMO_PROXY_ERROR"] == "1"
 
         let official = OfficialUsageSnapshot(
             planType: "plus",
@@ -241,6 +244,21 @@ enum DemoBalancesPreview {
                     checkedAt: checked,
                     stale: false,
                     errorMessage: nil
+                ),
+                // 同账号附加钥匙：读数跟主钥匙同一份，面板上并进套餐行不单独成行。
+                // 出错演示态下窗口读不到，报错走详情卡。行名要短：
+                // 卡里标签列 76 放不下长名（量宽实锤，真机那行 72pt 压线）。
+                GLMAccountUsage(
+                    key: "demo-key-pro-proxy",
+                    label: "代理",
+                    level: "pro",
+                    fiveHourWindow: proxyErrored ? nil : glmWindow(total: 12000, used: 2400, resetIn: 3600 * 2),
+                    weeklyWindow: proxyErrored ? nil : glmWindow(total: 60000, used: 3000, resetIn: 3600 * 96),
+                    cashBalance: 86.4,
+                    totalSpendAmount: 113.6,
+                    checkedAt: checked,
+                    stale: false,
+                    errorMessage: proxyErrored ? "智谱 key 无效或已过期" : nil
                 ),
                 GLMAccountUsage(
                     key: "demo-key-lite",
@@ -366,9 +384,10 @@ enum DemoBalancesPreview {
             label: String,
             running: Int?,
             cooldownMinutes: Double?,
-            skipTextZH: String? = nil
+            skipTextZH: String? = nil,
+            alsoKeys: [String] = []
         ) -> [String: Any] {
-            [
+            var object: [String: Any] = [
                 "id": "demo-plan-\(label)",
                 "label": label,
                 "key_sha12": GLMUsageCLI.keySHA12(key),
@@ -385,6 +404,10 @@ enum DemoBalancesPreview {
                 } ?? NSNull(),
                 "usage_known": true,
             ]
+            if !alsoKeys.isEmpty {
+                object["also_key_sha12"] = alsoKeys.map { GLMUsageCLI.keySHA12($0) }
+            }
+            return object
         }
         let payloadObject: [String: Any] = [
             "schema": 1,
@@ -396,7 +419,13 @@ enum DemoBalancesPreview {
                 "text_zh": "现在是免费时段（北京 23:00 到 09:00）",
             ],
             "plans": [
-                planObject(key: "demo-key-pro", label: "Sample 套餐", running: 2, cooldownMinutes: nil),
+                planObject(
+                    key: "demo-key-pro",
+                    label: "Sample 套餐",
+                    running: 2,
+                    cooldownMinutes: nil,
+                    alsoKeys: ["demo-key-pro-proxy"]
+                ),
                 planObject(
                     key: "demo-key-trial",
                     label: "测试套餐",

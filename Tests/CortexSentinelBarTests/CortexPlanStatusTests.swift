@@ -234,6 +234,393 @@ final class CortexPlanStatusTests: XCTestCase {
         )
     }
 
+    // MARK: - 同账号附加钥匙归并
+
+    /// 附加钥匙 / 无关行 / 双重身份行的钥匙原文：指纹现算，不写死指纹。
+    private static let sampleProxyKey = "proxy-key-9876543210"
+    private static let sampleThirdKey = "third-party-key-000000"
+    private static let sampleDualKey = "dual-role-key-123456"
+
+    /// 套餐对象按字典造，方便带/不带 also_key_sha12。
+    private static func planObject(
+        id: String = "plan-a",
+        label: String = "Sample 套餐",
+        keySHA12: String,
+        alsoKeySHA12: [String]? = nil
+    ) -> [String: Any] {
+        var object: [String: Any] = [
+            "id": id,
+            "label": label,
+            "key_sha12": keySHA12,
+            "max_parallel": 5,
+            "running": 2,
+            "executors": [[String: Any]](),
+            "dispatchable": true,
+            "skip_code": NSNull(),
+            "skip_text_zh": NSNull(),
+            "cooldown_until": NSNull(),
+            "usage_known": true,
+        ]
+        if let alsoKeySHA12 {
+            object["also_key_sha12"] = alsoKeySHA12
+        }
+        return object
+    }
+
+    private static func payloadData(plans: [[String: Any]]) -> Data {
+        let payload: [String: Any] = [
+            "schema": 1,
+            "generated_at": "2026-09-11T01:30:00Z",
+            "free_window": NSNull(),
+            "plans": plans,
+            "errors": [[String: Any]](),
+        ]
+        return try! JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+    }
+
+    private func decodePayload(plans: [[String: Any]]) throws -> CortexPlanStatusPayload {
+        try JSONDecoder().decode(CortexPlanStatusPayload.self, from: Self.payloadData(plans: plans))
+    }
+
+    /// 套餐清单：Sample 套餐主钥匙是 sampleKey，可带附加钥匙。
+    private func payloadWithSamplePlan(alsoKeySHA12: [String]? = nil) throws -> CortexPlanStatusPayload {
+        try decodePayload(plans: [
+            Self.planObject(
+                keySHA12: GLMUsageCLI.keySHA12(Self.sampleKey),
+                alsoKeySHA12: alsoKeySHA12
+            ),
+        ])
+    }
+
+    /// 附加钥匙行的用量，读数可逐项给。
+    private func proxyUsage(
+        fiveHour: GLMUsageWindow?,
+        weekly: GLMUsageWindow?,
+        cash: Double? = nil,
+        stale: Bool = false,
+        errorMessage: String? = nil
+    ) -> GLMAccountUsage {
+        GLMAccountUsage(
+            key: Self.sampleProxyKey,
+            label: "Sample 代理",
+            level: "pro",
+            fiveHourWindow: fiveHour,
+            weeklyWindow: weekly,
+            cashBalance: cash,
+            totalSpendAmount: nil,
+            checkedAt: nil,
+            stale: stale,
+            errorMessage: errorMessage
+        )
+    }
+
+    private func usageWindow(percent: Double, resetAt: Date?) -> GLMUsageWindow {
+        GLMUsageWindow(
+            totalPoints: 12000,
+            usedPoints: 12000 * percent / 100,
+            percentUsed: percent,
+            resetAt: resetAt
+        )
+    }
+
+    /// 解码：有 also_key_sha12 解出列表；没有解出空数组，其他字段照旧。
+    func testAlsoKeySHA12DecodesListAndDefaultsToEmpty() throws {
+        let withField = try JSONDecoder().decode(
+            CortexPlanStatusPayload.self,
+            from: Self.payloadData(plans: [
+                Self.planObject(keySHA12: "0123456789ab", alsoKeySHA12: ["aaaaaaaaaaaa", "bbbbbbbbbbbb"]),
+            ])
+        ).plans[0]
+        XCTAssertEqual(withField.alsoKeySHA12, ["aaaaaaaaaaaa", "bbbbbbbbbbbb"])
+
+        let withoutField = try JSONDecoder().decode(
+            CortexPlanStatusPayload.self,
+            from: Self.payloadData(plans: [Self.planObject(keySHA12: "0123456789ab")])
+        ).plans[0]
+        XCTAssertEqual(withoutField.alsoKeySHA12, [], "旧输出没有这个字段，解出来是空数组")
+        XCTAssertEqual(withoutField.label, "Sample 套餐")
+        XCTAssertEqual(withoutField.keySHA12, "0123456789ab")
+        XCTAssertEqual(withoutField.running, 2)
+        XCTAssertEqual(withoutField.maxParallel, 5)
+    }
+
+    /// 归并目标：附加钥匙指回套餐；主钥匙和谁都不是的行不归并。
+    func testMergeTargetFindsPlanByAdditionalFingerprint() throws {
+        let payload = try payloadWithSamplePlan(
+            alsoKeySHA12: [GLMUsageCLI.keySHA12(Self.sampleProxyKey)]
+        )
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.mergeTarget(forAccountKey: Self.sampleProxyKey, in: payload)?.label,
+            "Sample 套餐"
+        )
+        XCTAssertNil(
+            CortexPlanStatusDisplay.mergeTarget(forAccountKey: Self.sampleKey, in: payload),
+            "主钥匙行永不归并"
+        )
+        XCTAssertNil(
+            CortexPlanStatusDisplay.mergeTarget(forAccountKey: Self.sampleThirdKey, in: payload),
+            "谁都不是的行不归并"
+        )
+        XCTAssertNil(
+            CortexPlanStatusDisplay.mergeTarget(forAccountKey: Self.sampleProxyKey, in: nil),
+            "一次都没读到过时没有归并"
+        )
+    }
+
+    /// 可见行：附加钥匙行被藏，主钥匙行和无关行一个不少。
+    func testVisibleRowsHideAdditionalKeyRow() throws {
+        let payload = try payloadWithSamplePlan(
+            alsoKeySHA12: [GLMUsageCLI.keySHA12(Self.sampleProxyKey)]
+        )
+        let primary = account()
+        let additional = account(key: Self.sampleProxyKey, cash: nil)
+        let bystander = account(key: Self.sampleThirdKey, cash: 5)
+        let visible = CortexPlanStatusDisplay.visibleAccounts([primary, additional, bystander], payload: payload)
+        XCTAssertEqual(visible.map(\.key), [primary.key, bystander.key], "附加钥匙行被藏，其他一行不少")
+    }
+
+    /// 可见行：主钥匙行不在列表里时附加行不藏，免得整个套餐从面板上消失。
+    func testVisibleRowsKeepAdditionalWhenPrimaryMissing() throws {
+        let payload = try payloadWithSamplePlan(
+            alsoKeySHA12: [GLMUsageCLI.keySHA12(Self.sampleProxyKey)]
+        )
+        let additional = account(key: Self.sampleProxyKey)
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.visibleAccounts([additional], payload: payload).map(\.key),
+            [additional.key]
+        )
+    }
+
+    /// 可见行：同一指纹既是 B 套餐主钥匙又被 A 套餐列为附加 → 按 B 的套餐行显示，不藏。
+    func testVisibleRowsPrimaryMatchBeatsAdditionalListing() throws {
+        let payload = try decodePayload(plans: [
+            Self.planObject(
+                id: "plan-a",
+                label: "Sample 套餐",
+                keySHA12: GLMUsageCLI.keySHA12(Self.sampleKey),
+                alsoKeySHA12: [GLMUsageCLI.keySHA12(Self.sampleDualKey)]
+            ),
+            Self.planObject(id: "plan-b", label: "测试套餐", keySHA12: GLMUsageCLI.keySHA12(Self.sampleDualKey)),
+        ])
+        let dual = account(key: Self.sampleDualKey)
+        let primary = account()
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.visibleAccounts([primary, dual], payload: payload).map(\.key),
+            [primary.key, dual.key],
+            "A 的主钥匙行在场，双重身份行仍按 B 的套餐行显示，不被 A 归并藏掉"
+        )
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.plan(forAccountKey: Self.sampleDualKey, in: payload)?.label,
+            "测试套餐",
+            "这一行还是 B 的套餐行"
+        )
+    }
+
+    /// 可见行：不属于任何套餐的行一个不少；payload 为 nil 一行不动。
+    func testVisibleRowsKeepUnaffiliatedRows() throws {
+        let payload = try payloadWithSamplePlan(
+            alsoKeySHA12: [GLMUsageCLI.keySHA12(Self.sampleProxyKey)]
+        )
+        let bystander = account(key: Self.sampleThirdKey)
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.visibleAccounts([bystander], payload: payload).map(\.key),
+            [bystander.key]
+        )
+        let additional = account(key: Self.sampleProxyKey)
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.visibleAccounts([additional, bystander], payload: nil).map(\.key),
+            [additional.key, bystander.key]
+        )
+    }
+
+    /// 附加钥匙状况：出错 > 过时 > 读不到额度 > 读数对不上；对得上的出 nil。
+    func testAdditionalKeyStatusPhrases() {
+        let reset = Date(timeIntervalSince1970: 1_800_000_000)
+        let weeklyReset = reset.addingTimeInterval(7 * 24 * 3600)
+        // 主钥匙：5h 61%、周 49%（票面同款形状，值是假的）。
+        let primary = GLMAccountUsage(
+            key: Self.sampleKey,
+            label: "pro",
+            level: "pro",
+            fiveHourWindow: usageWindow(percent: 61, resetAt: reset),
+            weeklyWindow: usageWindow(percent: 49, resetAt: weeklyReset),
+            cashBalance: 79.34,
+            totalSpendAmount: nil,
+            checkedAt: nil,
+            stale: false,
+            errorMessage: nil
+        )
+
+        // 出错最优先（读不到额度也先报错）。
+        let errored = proxyUsage(fiveHour: nil, weekly: nil, errorMessage: "智谱 key 无效或已过期")
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.additionalKeyStatus(primary: primary, additional: errored),
+            "读数出错：智谱 key 无效或已过期"
+        )
+
+        // 过时次之。
+        let outdated = proxyUsage(
+            fiveHour: usageWindow(percent: 61, resetAt: reset),
+            weekly: usageWindow(percent: 49, resetAt: weeklyReset),
+            stale: true
+        )
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.additionalKeyStatus(primary: primary, additional: outdated),
+            "读数过时"
+        )
+
+        // 主钥匙有窗、附加读不到 → 读不到额度。
+        let noQuota = proxyUsage(fiveHour: nil, weekly: nil)
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.additionalKeyStatus(primary: primary, additional: noQuota),
+            "读不到额度"
+        )
+
+        // 重置时刻差 61 秒 → 对不上；差 30 秒 → nil（两次请求不在同一瞬间）。
+        let resetDrift = proxyUsage(
+            fiveHour: usageWindow(percent: 61, resetAt: reset.addingTimeInterval(61)),
+            weekly: usageWindow(percent: 49, resetAt: weeklyReset)
+        )
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.additionalKeyStatus(primary: primary, additional: resetDrift),
+            "跟套餐读数对不上"
+        )
+        let resetClose = proxyUsage(
+            fiveHour: usageWindow(percent: 61, resetAt: reset.addingTimeInterval(30)),
+            weekly: usageWindow(percent: 49, resetAt: weeklyReset)
+        )
+        XCTAssertNil(CortexPlanStatusDisplay.additionalKeyStatus(primary: primary, additional: resetClose))
+
+        // 百分比差 3 个点 → 对不上；差 1 个点 → nil。
+        let percentDrift = proxyUsage(
+            fiveHour: usageWindow(percent: 64, resetAt: reset),
+            weekly: usageWindow(percent: 49, resetAt: weeklyReset)
+        )
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.additionalKeyStatus(primary: primary, additional: percentDrift),
+            "跟套餐读数对不上"
+        )
+        let percentClose = proxyUsage(
+            fiveHour: usageWindow(percent: 62, resetAt: reset),
+            weekly: usageWindow(percent: 49, resetAt: weeklyReset)
+        )
+        XCTAssertNil(CortexPlanStatusDisplay.additionalKeyStatus(primary: primary, additional: percentClose))
+    }
+
+    /// 状态点：附加钥匙出错 → 至少黄；两边正常 → 绿；已红保持红
+    /// （跟 testPlanRowDotIgnoresCashBalance 同一套造数）。
+    func testPlanRowDotTurnsYellowWhenAdditionalKeyHasProblem() throws {
+        let now = Date()
+        let planRow = try payloadWithSamplePlan(
+            alsoKeySHA12: [GLMUsageCLI.keySHA12(Self.sampleProxyKey)]
+        ).plans[0]
+        let healthyPrimary = account(cash: 0.5, fiveHourPercent: 10)
+        let healthy = proxyUsage(
+            fiveHour: usageWindow(percent: 10, resetAt: nil),
+            weekly: usageWindow(percent: 10, resetAt: nil)
+        )
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.dotColor(
+                plan: planRow,
+                account: healthyPrimary,
+                additionalAccounts: [healthy],
+                planState: nil,
+                now: now
+            ),
+            SentinelTheme.Colors.success
+        )
+        let errored = proxyUsage(fiveHour: nil, weekly: nil, errorMessage: "智谱 key 无效或已过期")
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.dotColor(
+                plan: planRow,
+                account: healthyPrimary,
+                additionalAccounts: [errored],
+                planState: nil,
+                now: now
+            ),
+            SentinelTheme.Colors.warning
+        )
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.dotColor(
+                plan: planRow,
+                account: account(cash: 0.5, fiveHourPercent: 99.9),
+                additionalAccounts: [errored],
+                planState: nil,
+                now: now
+            ),
+            SentinelTheme.Colors.danger,
+            "已经红保持红"
+        )
+    }
+
+    /// 详情卡的附加钥匙行：人话里没有钥匙原文、指纹、套餐 id。
+    func testAdditionalKeyCardLinesCarryPlainPhrasesOnly() throws {
+        let planRow = try payloadWithSamplePlan(
+            alsoKeySHA12: [GLMUsageCLI.keySHA12(Self.sampleProxyKey)]
+        ).plans[0]
+        let primary = account()
+        let healthy = proxyUsage(fiveHour: primary.fiveHourWindow, weekly: nil)
+        let lines = CortexPlanStatusDisplay.additionalKeyLines(
+            plan: planRow,
+            primary: primary,
+            accounts: [primary, healthy]
+        ) { $0.displayTitle }
+        XCTAssertEqual(lines.count, 1)
+        let line = try XCTUnwrap(lines.first)
+        XCTAssertEqual(line.label, healthy.displayTitle, "没改过名用 displayTitle")
+        XCTAssertEqual(line.value, "同账号，额度共用")
+
+        let errored = proxyUsage(fiveHour: nil, weekly: nil, errorMessage: "智谱 key 无效或已过期")
+        let errorLines = CortexPlanStatusDisplay.additionalKeyLines(
+            plan: planRow,
+            primary: primary,
+            accounts: [primary, errored]
+        ) { $0.displayTitle }
+        XCTAssertEqual(errorLines.count, 1)
+        XCTAssertEqual(try XCTUnwrap(errorLines.first).value, "读数出错：智谱 key 无效或已过期")
+
+        let allText = (lines + errorLines)
+            .map { [$0.label, $0.value, $0.note ?? ""].joined(separator: " ") }
+            .joined(separator: "\n")
+        XCTAssertFalse(allText.contains(Self.sampleProxyKey))
+        XCTAssertFalse(allText.contains(GLMUsageCLI.keySHA12(Self.sampleProxyKey)))
+        XCTAssertFalse(allText.contains("plan-a"))
+    }
+
+    /// 套餐卡现金：主钥匙行没有、附加行有时用附加行的数；主钥匙有就用自己的。
+    func testPlanCashFallsBackToAdditionalRow() throws {
+        let planRow = try payloadWithSamplePlan(
+            alsoKeySHA12: [GLMUsageCLI.keySHA12(Self.sampleProxyKey)]
+        ).plans[0]
+        let primaryNoCash = account(cash: nil)
+        let additionalWithCash = proxyUsage(fiveHour: nil, weekly: nil, cash: 79.34)
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.planCashBalance(
+                plan: planRow,
+                primary: primaryNoCash,
+                accounts: [primaryNoCash, additionalWithCash]
+            ),
+            79.34
+        )
+        let primaryWithCash = account(cash: 0.62)
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.planCashBalance(
+                plan: planRow,
+                primary: primaryWithCash,
+                accounts: [primaryWithCash, additionalWithCash]
+            ),
+            0.62
+        )
+        let additionalNoCash = proxyUsage(fiveHour: nil, weekly: nil)
+        XCTAssertNil(
+            CortexPlanStatusDisplay.planCashBalance(
+                plan: planRow,
+                primary: primaryNoCash,
+                accounts: [primaryNoCash, additionalNoCash]
+            )
+        )
+    }
+
     // MARK: - 详情卡
 
     func testDetailLinesHideFingerprintIDAndCode() throws {

@@ -1248,13 +1248,18 @@ struct SentinelBalancesSection: View {
 
     /// 智谱 GLM Coding Plan 额度：每把 key 一行（5 小时窗 + 周窗两组剩余百分比），
     /// 排在 Cursor 前面。没识别到 key 就不占位。
+    /// 同账号附加钥匙并进套餐行：先过可见行再排序，拖拽 keys 跟着对齐。
     @ViewBuilder private var glmUsageRows: some View {
         if store.glmUsage.accounts.isEmpty {
             EmptyView()
         } else {
             VStack(spacing: SentinelTheme.Metrics.balanceRowSpacing) {
-                let ordered = orderedRows(
+                let visible = CortexPlanStatusDisplay.visibleAccounts(
                     store.glmUsage.accounts,
+                    payload: store.glmPlanStatus?.payload
+                )
+                let ordered = orderedRows(
+                    visible,
                     namespace: ProviderRenameNamespace.glm
                 )
                 ForEach(Array(ordered.enumerated()), id: \.element.id) { index, account in
@@ -1435,13 +1440,19 @@ struct SentinelBalancesSection: View {
 
     private func glmUsageStatusColor(_ account: GLMAccountUsage) -> Color {
         // 套餐行只看订阅窗口和冷却，现金不参与（套餐派工不花现金）；其余行照旧。
-        // 数据过时后冷却判不了，只看订阅窗口。
+        // 数据过时后冷却判不了，只看订阅窗口。任一附加钥匙有状况 → 至少黄。
         let planState = store.glmPlanStatus
         if let plan = CortexPlanStatusDisplay.plan(forAccountKey: account.key, in: planState?.payload) {
-            if CortexPlanStatusDisplay.freshness(planState, now: Date()) == .stale {
-                return CortexPlanStatusDisplay.staleDotColor(account: account)
-            }
-            return CortexPlanStatusDisplay.dotColor(plan: plan, account: account, now: Date())
+            return CortexPlanStatusDisplay.dotColor(
+                plan: plan,
+                account: account,
+                additionalAccounts: CortexPlanStatusDisplay.additionalAccounts(
+                    for: plan,
+                    in: store.glmUsage.accounts
+                ),
+                planState: planState,
+                now: Date()
+            )
         }
         return Self.glmDotSignal(
             fiveHourRemaining: account.fiveHourWindow?.remainingPercentage,
@@ -1502,12 +1513,18 @@ struct SentinelBalancesSection: View {
         // 套餐行追加派工状态；不是套餐的行一个字不变。
         // 数据过时后只留在跑/现金/派工状态三行，执行者、派工、免费时段不显示。
         if let plan {
+            // 现金主钥匙行没有时用附加钥匙行的数（同账号现金是同一份）。
+            let cash = CortexPlanStatusDisplay.planCashBalance(
+                plan: plan,
+                primary: account,
+                accounts: store.glmUsage.accounts
+            )
             if CortexPlanStatusDisplay.freshness(planState, now: now) == .stale,
                let failureText = planState?.failureText {
                 lines.append(contentsOf: CortexPlanStatusDisplay.staleDetailLines(
                     plan: plan,
                     failureText: failureText,
-                    cashBalance: account.cashBalance
+                    cashBalance: cash
                 ))
             } else {
                 lines.append(contentsOf: CortexPlanStatusDisplay.detailLines(
@@ -1515,9 +1532,22 @@ struct SentinelBalancesSection: View {
                     payload: planState?.payload,
                     failureText: planState?.failureText,
                     fetchedAt: planState?.fetchedAt,
-                    cashBalance: account.cashBalance
+                    cashBalance: cash
                 ))
             }
+            // 同账号附加钥匙：正常时只在这里报一句「同账号，额度共用」，
+            // 行上不重复显示；出错或读数对不上在这里说出来。
+            lines.append(contentsOf: CortexPlanStatusDisplay.additionalKeyLines(
+                plan: plan,
+                primary: account,
+                accounts: store.glmUsage.accounts
+            ) { additional in
+                store.providerDisplayName(
+                    namespace: ProviderRenameNamespace.glm,
+                    id: additional.key,
+                    fallback: additional.displayTitle
+                )
+            })
         }
         var subtitle = "GLM Coding Plan"
         if let level = account.level, !level.isEmpty {

@@ -90,6 +90,9 @@ struct CortexPlanStatusPlan: Decodable, Equatable, Sendable {
     /// UTC ISO 时刻或 nil。
     let cooldownUntilText: String?
     let usageKnown: Bool?
+    /// 同账号其他钥匙的指纹前 12 位：这一行在面板上把它们一并代表。
+    /// 旧输出没有这个字段，解出来是空数组。
+    let alsoKeySHA12: [String]
 
     var cooldownUntil: Date? {
         cooldownUntilText.flatMap(CortexPlanStatusDate.parse)
@@ -112,6 +115,7 @@ struct CortexPlanStatusPlan: Decodable, Equatable, Sendable {
         case skip_text_zh
         case cooldown_until
         case usage_known
+        case also_key_sha12
     }
 
     init(from decoder: Decoder) throws {
@@ -127,6 +131,7 @@ struct CortexPlanStatusPlan: Decodable, Equatable, Sendable {
         skipTextZH = try container.decodeIfPresent(String.self, forKey: .skip_text_zh)
         cooldownUntilText = try container.decodeIfPresent(String.self, forKey: .cooldown_until)
         usageKnown = try container.decodeIfPresent(Bool.self, forKey: .usage_known)
+        alsoKeySHA12 = try container.decodeIfPresent([String].self, forKey: .also_key_sha12) ?? []
     }
 
     struct Executor: Decodable, Equatable, Sendable {
@@ -646,6 +651,142 @@ enum CortexPlanStatusDisplay {
         }
         let sha = GLMUsageCLI.keySHA12(key)
         return payload.plans.first { $0.keySHA12 == sha }
+    }
+
+    // MARK: 同账号附加钥匙归并（cortex 登记的 also_key_sha12，只管面板显示）
+
+    /// 归并目标：某行钥匙指纹不是任何套餐的主钥匙、但被某个套餐列为附加钥匙
+    /// 时，返回那个套餐——这行在面板上并进那个套餐行，不单独成行。
+    /// 主钥匙匹配优先：同一指纹既是 A 套餐主钥匙又被 B 套餐列为附加，
+    /// 返回 nil，这行按 A 的套餐行显示。
+    static func mergeTarget(forAccountKey key: String, in payload: CortexPlanStatusPayload?) -> CortexPlanStatusPlan? {
+        guard let payload else {
+            return nil
+        }
+        let sha = GLMUsageCLI.keySHA12(key)
+        guard !payload.plans.contains(where: { $0.keySHA12 == sha }) else {
+            return nil
+        }
+        return payload.plans.first { $0.alsoKeySHA12.contains(sha) }
+    }
+
+    /// 余额区可见行：被归并的附加钥匙行藏起来，其余一行不少；payload 为 nil
+    /// （开 App 以来一次都没读到过）时一行不动。套餐主钥匙行不在列表里时
+    /// （本机没认出主钥匙）附加行不藏，免得整个套餐从面板上消失。
+    static func visibleAccounts(
+        _ accounts: [GLMAccountUsage],
+        payload: CortexPlanStatusPayload?
+    ) -> [GLMAccountUsage] {
+        guard let payload else {
+            return accounts
+        }
+        let listedSHAs = Set(accounts.map { GLMUsageCLI.keySHA12($0.key) })
+        return accounts.filter { account in
+            guard let target = mergeTarget(forAccountKey: account.key, in: payload) else {
+                return true
+            }
+            return !listedSHAs.contains(target.keySHA12)
+        }
+    }
+
+    /// 套餐的附加钥匙行：alsoKeySHA12 对上的账号行（主钥匙本身不算）。
+    static func additionalAccounts(
+        for plan: CortexPlanStatusPlan,
+        in accounts: [GLMAccountUsage]
+    ) -> [GLMAccountUsage] {
+        accounts.filter { account in
+            let sha = GLMUsageCLI.keySHA12(account.key)
+            return sha != plan.keySHA12 && plan.alsoKeySHA12.contains(sha)
+        }
+    }
+
+    /// 附加钥匙状况：nil = 跟套餐读数一致（同账号额度共用，面板不用管）。
+    /// 按顺序判：出错 > 过时 > 读不到额度 > 读数对不上。两把钥匙的用量不在
+    /// 同一瞬间读，重置时刻差 60 秒以内、百分比差 2 个点以内都算同一份。
+    static func additionalKeyStatus(primary: GLMAccountUsage?, additional: GLMAccountUsage) -> String? {
+        if let errorMessage = additional.errorMessage, !errorMessage.isEmpty {
+            return "读数出错：\(errorMessage)"
+        }
+        if additional.stale {
+            return "读数过时"
+        }
+        if let primary,
+           (primary.fiveHourWindow != nil && additional.fiveHourWindow == nil)
+               || (primary.weeklyWindow != nil && additional.weeklyWindow == nil) {
+            return "读不到额度"
+        }
+        if windowReadingsDiverge(primary?.fiveHourWindow, additional.fiveHourWindow)
+            || windowReadingsDiverge(primary?.weeklyWindow, additional.weeklyWindow) {
+            return "跟套餐读数对不上"
+        }
+        return nil
+    }
+
+    /// 同一个窗两把钥匙的读数对不对得上。
+    private static func windowReadingsDiverge(_ lhs: GLMUsageWindow?, _ rhs: GLMUsageWindow?) -> Bool {
+        guard let lhs, let rhs else {
+            return false
+        }
+        if let lhsReset = lhs.resetAt, let rhsReset = rhs.resetAt,
+           abs(lhsReset.timeIntervalSince(rhsReset)) > 60 {
+            return true
+        }
+        if let lhsPercent = lhs.percentUsed, let rhsPercent = rhs.percentUsed,
+           abs(lhsPercent - rhsPercent) > 2 {
+            return true
+        }
+        return false
+    }
+
+    /// 套餐详情卡的附加钥匙行：每把一行，状况 nil 写「同账号，额度共用」，
+    /// 有状况写那句人话。行名由调用方给（用户改过名用改过的，没改过用 displayTitle）。
+    static func additionalKeyLines(
+        plan: CortexPlanStatusPlan,
+        primary: GLMAccountUsage,
+        accounts: [GLMAccountUsage],
+        rowName: (GLMAccountUsage) -> String
+    ) -> [BalanceHoverLine] {
+        additionalAccounts(for: plan, in: accounts).map { additional in
+            BalanceHoverLine(
+                label: rowName(additional),
+                value: additionalKeyStatus(primary: primary, additional: additional) ?? "同账号，额度共用",
+                note: nil
+            )
+        }
+    }
+
+    /// 套餐卡里的现金：主钥匙行没有现金、附加钥匙行有时用附加行的数
+    /// （同账号现金是同一份）；主钥匙行有就用自己的。
+    static func planCashBalance(
+        plan: CortexPlanStatusPlan,
+        primary: GLMAccountUsage,
+        accounts: [GLMAccountUsage]
+    ) -> Double? {
+        if primary.cashBalance != nil {
+            return primary.cashBalance
+        }
+        return additionalAccounts(for: plan, in: accounts).lazy.compactMap(\.cashBalance).first
+    }
+
+    /// 套餐行状态点（含附加钥匙）：任一附加钥匙有状况 → 至少黄（绿变黄，
+    /// 已黄或红保持）。过时态冷却判不了，照旧只看订阅窗口。
+    static func dotColor(
+        plan: CortexPlanStatusPlan,
+        account: GLMAccountUsage,
+        additionalAccounts: [GLMAccountUsage],
+        planState: CortexPlanStatusDisplayState?,
+        now: Date
+    ) -> Color {
+        let base = freshness(planState, now: now) == .stale
+            ? staleDotColor(account: account)
+            : dotColor(plan: plan, account: account, now: now)
+        let additionalHasProblem = additionalAccounts.contains {
+            additionalKeyStatus(primary: account, additional: $0) != nil
+        }
+        if additionalHasProblem, base == SentinelTheme.Colors.success {
+            return SentinelTheme.Colors.warning
+        }
+        return base
     }
 
     /// 行名：用户改过名照旧用用户的（外层 providerDisplayName 管覆盖），

@@ -113,7 +113,7 @@ bash scripts/build-release.sh   # 签名 + 公证 + DMG（需要本机证书配�
 .build/debug/CortexSentinelBar --render-live-panel-png /tmp/panel.png --settle-seconds 20
 ```
 
-其他开发辅助入口：`--dump-state`（把此刻从磁盘读到的东西原样打印）、`--render-panel-png`（按 fixture 出图）、`--smoke-popover`（交互验收）、`--cleanup-dry-run`（日志清理演练）。
+其他开发辅助入口：`--dump-state`（把此刻从磁盘读到的东西原样打印）、`--glm-usage-json`（把本机认到的 GLM 钥匙查一轮额度，出一个固定形状的 JSON 给程序吃：每把钥匙一行，`key_sha12` 是钥匙 sha256 十六进制小写前 12 位的指纹，`source` 是认到来源（`zcode` / `zcode:<名>` / `keypool` / `claudeg` / `proxy` / `env:<变量名>` / `user`），`five_hour` / `weekly` 里的 `percent_used` 是已用口径、直接取 API 的百分比，`error` 是这一行的最新报错；没有钥匙退出码 2，查完退出码 0，单把钥匙查挂不影响退出码；输出里只有指纹没有钥匙原文）、`--render-panel-png`（按 fixture 出图）、`--smoke-popover`（交互验收）、`--cleanup-dry-run`（日志清理演练）。
 
 ## 仓库里有什么
 

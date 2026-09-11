@@ -237,7 +237,7 @@ final class SentinelSettingsModel: ObservableObject {
         }
         let label = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let added = SentinelSettings.addGLMUserKey(
-            GLMKeyEntry(label: label.isEmpty ? "自定义" : label, key: trimmedKey),
+            GLMKeyEntry(label: label.isEmpty ? "自定义" : label, key: trimmedKey, source: "user"),
             defaults: defaults
         )
         // 手动加回来的 key 同时从删除名单里捞回来。

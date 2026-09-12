@@ -84,3 +84,21 @@
 - 0.1.28 起安装盘只带 app + Applications，交接脚本改为内联换装。但旧版（≤0.1.27）的交接脚本要从 DMG 里跑 scripts/install-app.sh——它下载到新盘后必然报 No such file or directory，每小时重试永远失败。
 - 跨这个断层只能手动换装：bootout 主任务 → rm 旧 app → ditto dist 的新 app → bootstrap 主任务。装上 0.1.28 后自更新回归自洽。
 - 以后再改 DMG 盘面或交接脚本，先想一遍「旧版更新器拿到新盘会发生什么」。
+
+## LaunchAgent KeepAlive 无限弹窗案（2026-09-12，Me Max 实锤）
+
+- 症状：手动双击 app 后无限弹「Cortex 哨兵已在运行」。链条：首启装 LaunchAgent 并 bootstrap → KeepAlive bool true 无条件重启 → 被单实例守卫拦下的实例干净退出 → launchd 又拉 → 再弹，永不收敛。
+- 修法三条（0.1.31 起）：
+  1. KeepAlive 一律写 `{"SuccessfulExit": false}`，只在崩溃（非零退出）时拉回；正常退出不重启
+  2. launchd 直接拉起（getppid() == 1）的实例撞单实例守卫时静默退出，不弹窗
+  3. 启动时把老 plist 的 bool KeepAlive 原地迁移成字典
+- 通用规则：给 launchd KeepAlive 托管的进程配 bool true 之前，先想清楚「这个进程会不会主动退出」。会主动退出的进程（单实例守卫、正常收尾）配 bool true 就是无限重启。
+- 判断某台机器是否在风暴中：`launchctl print gui/$UID/<label>` 看 runs 计数持续增长 + 同名进程反复换 pid。
+
+## 打盘脚本坑（2026-09-12，0.1.30 三连）
+
+- bash 变量后面贴全角字符（`$VAR）`、`$VAR：`）会把全角字符吃进变量名报 unbound variable。变量后跟非 ASCII 一律加花括号 `${VAR}`。
+- `hdiutil imageinfo -format <盘>` 的输出只有一行（如 ULMO），取第 1 行；取第 2 行拿到空串。
+- DMG 装载时源 app 名（.build/CortexSentinelBar.app）不等于盘面名（Cortex哨兵.app），必须在舞台目录改名。盘内叫英文名会断 launchd / 自更新 / 面板所有按 `/Applications/Cortex哨兵.app` 找它的路径。
+- 往目标机部署时卷名会撞车：机器上已挂同名卷时新卷挂成「卷名 1」，按固定卷路径拷贝会拷到旧盘。拷之前 `ls /Volumes` 清干净，拷完读盘内 Info.plist 的版本号确认拷对了。
+- 手动补发布尾部流程（公证 Accepted 后 68）：app/DMG 分别 stapler validate 重试 → 挂载卷 spctl + stapler validate → 核 commit 和版本 → 写 sha256 + manifest → publish-release.sh。

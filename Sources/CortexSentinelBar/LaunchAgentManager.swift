@@ -16,14 +16,37 @@ enum LaunchAgentManager {
         fileManager.fileExists(atPath: plistURL.path)
     }
 
-    /// 生成 LaunchAgent 内容：KeepAlive + Interactive，跟老安装器一致。
+    /// 生成 LaunchAgent 内容：KeepAlive 只管崩溃（非零退出才拉回）。
+    /// 0.1.30 及之前是 bool true：单实例守卫干净退出也会被立刻重启，
+    /// 手动双击 + 守卫拦 = 无限弹「已在运行」（Me Max 实锤）。Falcon 2026-09-12 令。
     static func makePlist(executablePath: String) -> [String: Any] {
         [
             "Label": label,
             "ProgramArguments": [executablePath],
-            "KeepAlive": true,
+            "KeepAlive": ["SuccessfulExit": false],
             "ProcessType": "Interactive",
         ]
+    }
+
+    /// 老 plist 里 KeepAlive 是 bool true 的，原地迁成崩溃才拉回的字典。
+    /// 已加载的任务不受影响（下次 bootout/bootstrap 自然用新配置）。
+    @discardableResult
+    static func migrateKeepAliveIfNeeded(fileManager: FileManager = .default) -> Bool {
+        guard fileManager.fileExists(atPath: plistURL.path),
+              let data = try? Data(contentsOf: plistURL),
+              var plist = try? PropertyListSerialization.propertyList(
+                  from: data, format: nil
+              ) as? [String: Any],
+              plist["KeepAlive"] is Bool else {
+            return false
+        }
+        plist["KeepAlive"] = ["SuccessfulExit": false]
+        guard let updated = try? PropertyListSerialization.data(
+            fromPropertyList: plist, format: .xml, options: 0
+        ) else {
+            return false
+        }
+        return (try? updated.write(to: plistURL, options: .atomic)) != nil
     }
 
     /// 自装条件：以 /Applications 里的 bundle 形态运行，且不是诊断 CLI。

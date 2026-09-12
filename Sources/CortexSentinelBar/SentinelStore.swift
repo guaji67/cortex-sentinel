@@ -309,6 +309,7 @@ final class SentinelStore {
             return
         }
         hasStarted = true
+        LaunchAgentManager.migrateKeepAliveIfNeeded()
         LaunchAgentManager.installOnFirstLaunch()
         reconcileLoginItem()
         notifier.requestAuthorization()

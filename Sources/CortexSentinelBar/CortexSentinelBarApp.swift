@@ -367,6 +367,12 @@ enum CortexSentinelBarMain {
             fallbackRepositoryRoot: paths.repositoryRoot,
             defaults: SentinelSettings.resolvedDefaults()
         ))
+        // 派工路由（哨兵每轮确保最新）：现场跑一轮。路由一直没跟上的话，排查看这行。
+        print(await CortexGateRuntimeStatusDisplay.dumpStateLine(
+            environment: ProcessInfo.processInfo.environment,
+            watchDirectory: paths.logsDirectory,
+            fallbackRepositoryRoot: paths.repositoryRoot
+        ))
         print("  裁剪判据：\(SentinelBoardWindow.recencyCriterion)")
         if let footerText = board.footerText {
             print("  脚注：\(footerText)")

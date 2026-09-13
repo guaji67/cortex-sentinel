@@ -343,10 +343,9 @@ struct CortexProcessSubprocessRunner: CortexSubprocessRunning {
 }
 
 /// 从 cortex 仓 origin/main 取套餐状态脚本并跑一轮。
-/// 对仓只跑只读四命令（rev-parse / show / ls-tree / archive），不 fetch、
-/// 不 checkout、不往那个仓写任何东西；脚本按 blob 哈希缓存在本 App 的
-/// Caches 子目录，没变就不重写盘（思路同 cortex 自己的 land_pr.sh 取
-/// origin/main，多一层按内容寻址的缓存）。
+/// 导出流程（认仓 / 清单 / 内容寻址缓存 / 解释器）走与派工路由共用的
+/// CortexGitScriptExport 核心，这里只多「跑脚本 + 解码」两步；脚本按
+/// blob 哈希缓存在本 App 的 Caches 子目录，没变就不重写盘。
 enum CortexPlanStatusFetcher {
     struct Configuration: Sendable {
         var gitExecutablePath: String = "/usr/bin/git"
@@ -369,38 +368,7 @@ enum CortexPlanStatusFetcher {
 
     /// 缓存根：用户 Caches 下本 App 自己的子目录。
     static func defaultCacheRoot(fileManager: FileManager = .default) -> URL {
-        let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
-            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Caches", isDirectory: true)
-        return caches.appendingPathComponent("CortexSentinel/plan-status", isDirectory: true)
-    }
-
-    /// 脚本进程只给 HOME 和一条固定 PATH，不吃哨兵进程的整个环境。
-    static func scriptEnvironment(homeDirectory: String) -> [String: String] {
-        [
-            "HOME": homeDirectory,
-            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin:\(homeDirectory)/.local/bin:/opt/homebrew/bin",
-        ]
-    }
-
-    /// 认仓候选（按顺序）：环境变量 CORTEX_REPO_ROOT、监视目录解析软链后的上一级、
-    /// 装机版 WatchDirectoryResolution 给的 repositoryRoot（软链没解析，往往不是
-    /// git 仓，只当兜底）。
-    static func repositoryRootCandidates(
-        environment: [String: String],
-        watchDirectory: URL?,
-        fallbackRepositoryRoot: URL?
-    ) -> [URL] {
-        var candidates: [URL] = []
-        if let configured = environment["CORTEX_REPO_ROOT"], !configured.isEmpty {
-            candidates.append(URL(fileURLWithPath: configured, isDirectory: true))
-        }
-        if let watchDirectory {
-            candidates.append(watchDirectory.resolvingSymlinksInPath().deletingLastPathComponent())
-        }
-        if let fallbackRepositoryRoot {
-            candidates.append(fallbackRepositoryRoot)
-        }
-        return candidates
+        CortexGitScriptExport.defaultCacheRoot("plan-status", fileManager: fileManager)
     }
 
     static func fetch(
@@ -413,133 +381,38 @@ enum CortexPlanStatusFetcher {
         runner: any CortexSubprocessRunning,
         fileManager: FileManager = .default
     ) async -> CortexPlanStatusOutcome {
-        // 1. 认仓：第一个能跑通 rev-parse 的候选。
-        var repoRoot: URL?
-        for candidate in repositoryRootCandidates(
+        // 1-4. 认仓、清单、内容寻址缓存、解释器：与派工路由共用的导出核心，
+        //      失败折人话的沿途 return 都在那边，原样透传。
+        let exported: CortexGitScriptExport.Exported
+        switch await CortexGitScriptExport.run(
+            manifestPath: configuration.manifestPath,
+            configuration: CortexGitScriptExport.Configuration(
+                gitExecutablePath: configuration.gitExecutablePath,
+                tarExecutablePath: configuration.tarExecutablePath,
+                ref: configuration.ref,
+                gitTimeout: configuration.gitTimeout,
+                cacheRoot: configuration.cacheRoot ?? defaultCacheRoot(fileManager: fileManager),
+                maxCacheCopies: configuration.maxCacheCopies,
+                interpreterCandidates: configuration.interpreterCandidates
+            ),
             environment: environment,
             watchDirectory: watchDirectory,
-            fallbackRepositoryRoot: fallbackRepositoryRoot
+            fallbackRepositoryRoot: fallbackRepositoryRoot,
+            runner: runner,
+            fileManager: fileManager
         ) {
-            let probe = await runner.run(
-                executablePath: configuration.gitExecutablePath,
-                arguments: ["-C", candidate.path, "rev-parse", "--show-toplevel"],
-                workingDirectory: nil,
-                environment: nil,
-                stdin: nil,
-                timeout: configuration.gitTimeout
-            )
-            if probe.exitCode == 0,
-               let line = String(data: probe.standardOutput, encoding: .utf8)?
-                   .split(separator: "\n", omittingEmptySubsequences: true)
-                   .first,
-               fileManager.fileExists(atPath: String(line))
-            {
-                repoRoot = URL(fileURLWithPath: String(line), isDirectory: true)
-                break
-            }
-        }
-        guard let repoRoot else {
-            return .failure(reason: "找不到 cortex 仓")
-        }
-
-        // 2. 清单：跳过 # 行和空行；每条必须是 scripts/ 下、不含 .. 的相对路径，
-        //    一条不合法整份当没有。
-        let manifest = await runner.run(
-            executablePath: configuration.gitExecutablePath,
-            arguments: ["-C", repoRoot.path, "show", "\(configuration.ref):\(configuration.manifestPath)"],
-            workingDirectory: nil,
-            environment: nil,
-            stdin: nil,
-            timeout: configuration.gitTimeout
-        )
-        guard manifest.exitCode == 0 else {
-            return .failure(reason: "cortex 仓里还没有这个脚本")
-        }
-        guard let paths = manifestPaths(from: manifest.standardOutput) else {
-            return .failure(reason: "脚本清单不合法")
-        }
-
-        // 3. 缓存键：ls-tree 整段输出的 sha256，脚本内容没变就不重导。
-        let lsTree = await runner.run(
-            executablePath: configuration.gitExecutablePath,
-            arguments: ["-C", repoRoot.path, "ls-tree", configuration.ref, "--"] + paths,
-            workingDirectory: nil,
-            environment: nil,
-            stdin: nil,
-            timeout: configuration.gitTimeout
-        )
-        guard lsTree.exitCode == 0 else {
-            return .failure(reason: "对不上脚本版本")
-        }
-        let cacheKey = sha256Hex(lsTree.standardOutput)
-        let cacheRoot = configuration.cacheRoot ?? defaultCacheRoot(fileManager: fileManager)
-        let cacheDirectory = cacheRoot.appendingPathComponent(cacheKey, isDirectory: true)
-
-        if !fileManager.fileExists(atPath: cacheDirectory.path) {
-            // 先解到同级临时目录再改名，半截的目录不许留成缓存。
-            let stagingDirectory = cacheRoot.appendingPathComponent(
-                ".tmp-\(UUID().uuidString)",
-                isDirectory: true
-            )
-            do {
-                try fileManager.createDirectory(at: stagingDirectory, withIntermediateDirectories: true)
-            } catch {
-                return .failure(reason: "缓存目录建不了")
-            }
-            let archive = await runner.run(
-                executablePath: configuration.gitExecutablePath,
-                arguments: ["-C", repoRoot.path, "archive", "--format=tar", configuration.ref, "--"] + paths,
-                workingDirectory: nil,
-                environment: nil,
-                stdin: nil,
-                timeout: configuration.gitTimeout
-            )
-            var extractionSucceeded = false
-            if archive.exitCode == 0 {
-                let extraction = await runner.run(
-                    executablePath: configuration.tarExecutablePath,
-                    arguments: ["-x", "-C", stagingDirectory.path],
-                    workingDirectory: nil,
-                    environment: nil,
-                    stdin: archive.standardOutput,
-                    timeout: configuration.gitTimeout
-                )
-                if extraction.exitCode == 0 {
-                    do {
-                        if fileManager.fileExists(atPath: cacheDirectory.path) {
-                            // 并发轮已经先放好了同一份，丢掉自己这份。
-                            try fileManager.removeItem(at: stagingDirectory)
-                            extractionSucceeded = true
-                        } else {
-                            try fileManager.moveItem(at: stagingDirectory, to: cacheDirectory)
-                            extractionSucceeded = true
-                        }
-                    } catch {
-                        extractionSucceeded = false
-                    }
-                }
-            }
-            // 半截的临时目录一律清掉，成功与否都不留。
-            try? fileManager.removeItem(at: stagingDirectory)
-            guard extractionSucceeded else {
-                return .failure(reason: "脚本导不出来")
-            }
-            pruneCache(at: cacheRoot, keeping: configuration.maxCacheCopies, fileManager: fileManager)
-        }
-
-        // 4. 解释器：仓里自带的 venv 优先，然后 Homebrew、系统。
-        let interpreter = configuration.interpreterCandidates(repoRoot)
-            .first { fileManager.fileExists(atPath: $0) }
-        guard let interpreter else {
-            return .failure(reason: "没找到可用的 Python")
+        case let .exported(value):
+            exported = value
+        case let .failed(reason):
+            return .failure(reason: reason)
         }
 
         // 5. 在缓存目录里跑脚本，stdin 喂 --glm-usage-json 同一份字节。
         let run = await runner.run(
-            executablePath: interpreter,
+            executablePath: exported.interpreterPath,
             arguments: ["scripts/glm_plan_status.py", "--json"],
-            workingDirectory: cacheDirectory,
-            environment: scriptEnvironment(homeDirectory: homeDirectory),
+            workingDirectory: exported.cacheDirectory,
+            environment: CortexGitScriptExport.scriptEnvironment(homeDirectory: homeDirectory),
             stdin: usageJSON,
             timeout: configuration.scriptTimeout
         )
@@ -558,55 +431,6 @@ enum CortexPlanStatusFetcher {
             return .failure(reason: "脚本版本不认识")
         }
         return .success(payload)
-    }
-
-    /// 清单文本 → 相对路径列表。有一条不合法整份作废（返回 nil）。
-    static func manifestPaths(from data: Data) -> [String]? {
-        guard let text = String(data: data, encoding: .utf8) else {
-            return nil
-        }
-        var paths: [String] = []
-        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: true) {
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
-            if line.isEmpty || line.hasPrefix("#") {
-                continue
-            }
-            guard line.hasPrefix("scripts/"), !line.contains(".."), !line.hasPrefix("/") else {
-                return nil
-            }
-            paths.append(line)
-        }
-        return paths.isEmpty ? nil : paths
-    }
-
-    /// 只留最新 N 份缓存目录，.tmp 半成品不参与。
-    static func pruneCache(at cacheRoot: URL, keeping keep: Int, fileManager: FileManager) {
-        guard keep > 0,
-              let contents = try? fileManager.contentsOfDirectory(
-                  at: cacheRoot,
-                  includingPropertiesForKeys: [.contentModificationDateKey]
-              )
-        else {
-            return
-        }
-        let cacheDirectories = contents.filter { !$0.lastPathComponent.hasPrefix(".tmp-") }
-        let sorted = cacheDirectories.sorted { left, right in
-            let leftDate = (try? left.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-            let rightDate = (try? right.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-            if leftDate == rightDate {
-                return left.lastPathComponent > right.lastPathComponent
-            }
-            return leftDate > rightDate
-        }
-        for url in sorted.dropFirst(max(0, keep)) {
-            try? fileManager.removeItem(at: url)
-        }
-    }
-
-    static func sha256Hex(_ data: Data) -> String {
-        SHA256.hash(data: data)
-            .map { String(format: "%02x", $0) }
-            .joined()
     }
 }
 

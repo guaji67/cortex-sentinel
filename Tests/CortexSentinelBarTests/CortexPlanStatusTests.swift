@@ -1155,6 +1155,203 @@ final class CortexPlanStatusTests: XCTestCase {
         XCTAssertEqual(payload.plans.first?.label, "Sample 套餐")
     }
 
+    // MARK: - 认仓候选：闸运行时 repo 文件
+
+    /// 闸运行时根下有 repo 文件且指向真 git 仓：前两条候选全落空（不设
+    /// CORTEX_REPO_ROOT、不给监视目录和 fallback），只靠这一条也要认到。
+    func testGateRuntimeRepoFileResolvesRepo() async throws {
+        guard FileManager.default.fileExists(atPath: "/usr/bin/python3") else {
+            throw XCTSkip("本机没有 /usr/bin/python3")
+        }
+        let repo = try await makeScriptRepo()
+        let gateBase = tempRoot.appendingPathComponent("gate-runtime-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: gateBase, withIntermediateDirectories: true)
+        try repo.path.write(
+            to: gateBase.appendingPathComponent("repo"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let outcome = await CortexPlanStatusFetcher.fetch(
+            environment: ["CORTEX_GATE_RUNTIME_BASE": gateBase.path],
+            watchDirectory: nil,
+            fallbackRepositoryRoot: nil,
+            homeDirectory: tempRoot.path,
+            usageJSON: sampleUsageJSON,
+            configuration: cacheConfiguration(),
+            runner: realRunner
+        )
+        guard case .success = outcome else {
+            XCTFail("repo 文件指向真 git 仓应该认到：\(outcome)")
+            return
+        }
+    }
+
+    /// repo 文件不存在：跳过这条候选，落空后继续往下走 fallback。
+    func testGateRuntimeRepoFileMissingFallsThroughToFallback() async throws {
+        guard FileManager.default.fileExists(atPath: "/usr/bin/python3") else {
+            throw XCTSkip("本机没有 /usr/bin/python3")
+        }
+        let repo = try await makeScriptRepo()
+        let gateBase = tempRoot.appendingPathComponent("gate-runtime-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: gateBase, withIntermediateDirectories: true)
+        let outcome = await CortexPlanStatusFetcher.fetch(
+            environment: ["CORTEX_GATE_RUNTIME_BASE": gateBase.path],
+            watchDirectory: nil,
+            fallbackRepositoryRoot: repo,
+            homeDirectory: tempRoot.path,
+            usageJSON: sampleUsageJSON,
+            configuration: cacheConfiguration(),
+            runner: realRunner
+        )
+        guard case .success = outcome else {
+            XCTFail("repo 文件不在应该跳过这条、落到 fallback：\(outcome)")
+            return
+        }
+    }
+
+    /// repo 文件是空的（只有空白）：跳过这条候选，落到 fallback。
+    func testGateRuntimeRepoFileEmptyFallsThroughToFallback() async throws {
+        guard FileManager.default.fileExists(atPath: "/usr/bin/python3") else {
+            throw XCTSkip("本机没有 /usr/bin/python3")
+        }
+        let repo = try await makeScriptRepo()
+        let gateBase = tempRoot.appendingPathComponent("gate-runtime-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: gateBase, withIntermediateDirectories: true)
+        try "  \n".write(
+            to: gateBase.appendingPathComponent("repo"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let outcome = await CortexPlanStatusFetcher.fetch(
+            environment: ["CORTEX_GATE_RUNTIME_BASE": gateBase.path],
+            watchDirectory: nil,
+            fallbackRepositoryRoot: repo,
+            homeDirectory: tempRoot.path,
+            usageJSON: sampleUsageJSON,
+            configuration: cacheConfiguration(),
+            runner: realRunner
+        )
+        guard case .success = outcome else {
+            XCTFail("repo 文件为空应该跳过这条、落到 fallback：\(outcome)")
+            return
+        }
+    }
+
+    /// repo 文件指向的不是 git 仓：认仓校验不过就跳过，落到 fallback，不许放宽。
+    func testGateRuntimeRepoFileNonGitDirectoryFallsThroughToFallback() async throws {
+        guard FileManager.default.fileExists(atPath: "/usr/bin/python3") else {
+            throw XCTSkip("本机没有 /usr/bin/python3")
+        }
+        let repo = try await makeScriptRepo()
+        let plainDirectory = tempRoot.appendingPathComponent("plain-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: plainDirectory, withIntermediateDirectories: true)
+        let gateBase = tempRoot.appendingPathComponent("gate-runtime-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: gateBase, withIntermediateDirectories: true)
+        try plainDirectory.path.write(
+            to: gateBase.appendingPathComponent("repo"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let outcome = await CortexPlanStatusFetcher.fetch(
+            environment: ["CORTEX_GATE_RUNTIME_BASE": gateBase.path],
+            watchDirectory: nil,
+            fallbackRepositoryRoot: repo,
+            homeDirectory: tempRoot.path,
+            usageJSON: sampleUsageJSON,
+            configuration: cacheConfiguration(),
+            runner: realRunner
+        )
+        guard case .success = outcome else {
+            XCTFail("repo 文件指向非 git 目录应该跳过这条、落到 fallback：\(outcome)")
+            return
+        }
+    }
+
+    /// 候选顺序：环境变量 CORTEX_REPO_ROOT 永远第一，监视目录上一级第二，
+    /// 闸运行时 repo 文件第三，装机版兜底最后；缺哪条跳哪条。
+    func testRepositoryRootCandidateOrder() {
+        let envRepo = URL(fileURLWithPath: "/tmp/candidate-env", isDirectory: true)
+        let watchDirectory = URL(fileURLWithPath: "/tmp/candidate-watch/logs", isDirectory: true)
+        let gateRepo = URL(fileURLWithPath: "/tmp/candidate-gate", isDirectory: true)
+        let fallback = URL(fileURLWithPath: "/tmp/candidate-fallback", isDirectory: true)
+
+        let all = CortexGitScriptExport.repositoryRootCandidates(
+            environment: ["CORTEX_REPO_ROOT": envRepo.path],
+            watchDirectory: watchDirectory,
+            gateRuntimeRepoRoot: gateRepo,
+            fallbackRepositoryRoot: fallback
+        )
+        XCTAssertEqual(all.count, 4)
+        XCTAssertEqual(all[0], envRepo, "CORTEX_REPO_ROOT 有值时仍排第一")
+        XCTAssertEqual(all[1], watchDirectory.resolvingSymlinksInPath().deletingLastPathComponent())
+        XCTAssertEqual(all[2], gateRepo, "闸运行时 repo 文件排第三")
+        XCTAssertEqual(all[3], fallback)
+
+        // 环境变量为空串、监视目录和 repo 文件都不在：只剩兜底。
+        let onlyFallback = CortexGitScriptExport.repositoryRootCandidates(
+            environment: ["CORTEX_REPO_ROOT": ""],
+            watchDirectory: nil,
+            gateRuntimeRepoRoot: nil,
+            fallbackRepositoryRoot: fallback
+        )
+        XCTAssertEqual(onlyFallback, [fallback])
+    }
+
+    /// 读 repo 文件：CORTEX_GATE_RUNTIME_BASE 有值就取它下面的 repo，
+    /// 读第一行、去首尾空白；第一行是空的整条不算，哪怕后面还有内容。
+    func testGateRuntimeRepoRootReadsBaseFromEnvironment() throws {
+        let base = tempRoot.appendingPathComponent("gate-runtime-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        let repoFile = base.appendingPathComponent("repo")
+        let repoPath = tempRoot.appendingPathComponent("some-repo", isDirectory: true).path
+
+        try "  \(repoPath)  \n第二行不算\n".write(to: repoFile, atomically: true, encoding: .utf8)
+        XCTAssertEqual(
+            CortexGitScriptExport.gateRuntimeRepoRoot(
+                environment: ["CORTEX_GATE_RUNTIME_BASE": base.path],
+                homeDirectory: "/nonexistent-home"
+            ),
+            URL(fileURLWithPath: repoPath, isDirectory: true)
+        )
+
+        // 第一行是空的：整条跳过，不往第二行找。
+        try "\n\(repoPath)\n".write(to: repoFile, atomically: true, encoding: .utf8)
+        XCTAssertNil(
+            CortexGitScriptExport.gateRuntimeRepoRoot(
+                environment: ["CORTEX_GATE_RUNTIME_BASE": base.path],
+                homeDirectory: "/nonexistent-home"
+            )
+        )
+
+        // 文件不在：nil。
+        try FileManager.default.removeItem(at: repoFile)
+        XCTAssertNil(
+            CortexGitScriptExport.gateRuntimeRepoRoot(
+                environment: ["CORTEX_GATE_RUNTIME_BASE": base.path],
+                homeDirectory: "/nonexistent-home"
+            )
+        )
+    }
+
+    /// 不设 CORTEX_GATE_RUNTIME_BASE：根落在家目录下的
+    /// Library/Application Support/Cortex/GateRuntime，照样只认 repo 文件。
+    func testGateRuntimeRepoRootDefaultsToHomeLocation() throws {
+        let home = tempRoot.appendingPathComponent("Home-\(UUID().uuidString)", isDirectory: true)
+        let runtimeDirectory = home.appendingPathComponent("Library/Application Support/Cortex/GateRuntime", isDirectory: true)
+        try FileManager.default.createDirectory(at: runtimeDirectory, withIntermediateDirectories: true)
+        let repoPath = tempRoot.appendingPathComponent("home-repo", isDirectory: true).path
+        try "\(repoPath)\n".write(to: runtimeDirectory.appendingPathComponent("repo"), atomically: true, encoding: .utf8)
+
+        XCTAssertEqual(
+            CortexGitScriptExport.gateRuntimeRepoRoot(environment: [:], homeDirectory: home.path),
+            URL(fileURLWithPath: repoPath, isDirectory: true)
+        )
+        // 家目录下没有运行时根：nil，不报错。
+        XCTAssertNil(
+            CortexGitScriptExport.gateRuntimeRepoRoot(environment: [:], homeDirectory: tempRoot.path)
+        )
+    }
+
     // MARK: - 子命令白名单
 
     /// 注入命令执行器：对 cortex 仓只准出现 rev-parse / show / ls-tree / archive 四种只读命令。

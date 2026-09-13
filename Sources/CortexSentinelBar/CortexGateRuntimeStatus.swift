@@ -146,6 +146,7 @@ enum CortexGateRuntimeStatusFetcher {
             environment: environment,
             watchDirectory: watchDirectory,
             fallbackRepositoryRoot: fallbackRepositoryRoot,
+            homeDirectory: homeDirectory,
             runner: runner,
             fileManager: fileManager
         ) {

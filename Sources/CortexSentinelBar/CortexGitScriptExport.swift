@@ -42,6 +42,38 @@ enum CortexGitScriptExport {
         case failed(reason: String)
     }
 
+    /// 闸运行时根下的 repo 文件：装机时写进去的本机 cortex 检出位置（一行路径）。
+    /// 根取环境变量 CORTEX_GATE_RUNTIME_BASE，没设就用家目录下的
+    /// Library/Application Support/Cortex/GateRuntime。只读这一个文件，
+    /// 不往闸运行时目录写任何东西。读第一行去首尾空白，空或读不到给 nil，
+    /// 认仓流程就跳过这条候选。
+    static func gateRuntimeRepoRoot(
+        environment: [String: String],
+        homeDirectory: String,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        let runtimeBase: URL
+        if let configured = environment["CORTEX_GATE_RUNTIME_BASE"], !configured.isEmpty {
+            runtimeBase = URL(fileURLWithPath: configured, isDirectory: true)
+        } else {
+            runtimeBase = URL(fileURLWithPath: homeDirectory, isDirectory: true)
+                .appendingPathComponent("Library/Application Support/Cortex/GateRuntime", isDirectory: true)
+        }
+        let repoFile = runtimeBase.appendingPathComponent("repo", isDirectory: false)
+        guard let data = fileManager.contents(atPath: repoFile.path),
+              let text = String(data: data, encoding: .utf8)
+        else {
+            return nil
+        }
+        let firstLine = text.split(separator: "\n", omittingEmptySubsequences: false)
+            .first
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
+        guard !firstLine.isEmpty else {
+            return nil
+        }
+        return URL(fileURLWithPath: firstLine, isDirectory: true)
+    }
+
     /// 缓存根：用户 Caches 下本 App 自己的子目录（每个调用方一个子目录名）。
     static func defaultCacheRoot(_ subdirectory: String, fileManager: FileManager = .default) -> URL {
         let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
@@ -56,6 +88,7 @@ enum CortexGitScriptExport {
         environment: [String: String],
         watchDirectory: URL?,
         fallbackRepositoryRoot: URL?,
+        homeDirectory: String,
         runner: any CortexSubprocessRunning,
         fileManager: FileManager = .default
     ) async -> Outcome {
@@ -64,6 +97,11 @@ enum CortexGitScriptExport {
         for candidate in repositoryRootCandidates(
             environment: environment,
             watchDirectory: watchDirectory,
+            gateRuntimeRepoRoot: gateRuntimeRepoRoot(
+                environment: environment,
+                homeDirectory: homeDirectory,
+                fileManager: fileManager
+            ),
             fallbackRepositoryRoot: fallbackRepositoryRoot
         ) {
             let probe = await runner.run(
@@ -190,11 +228,14 @@ enum CortexGitScriptExport {
     }
 
     /// 认仓候选（按顺序）：环境变量 CORTEX_REPO_ROOT、监视目录解析软链后的上一级、
-    /// 装机版 WatchDirectoryResolution 给的 repositoryRoot（软链没解析，往往不是
-    /// git 仓，只当兜底）。
+    /// 闸运行时 repo 文件记下的仓库位置（装机时落盘，跟着闸运行时走，换机器装完
+    /// 就有）、装机版 WatchDirectoryResolution 给的 repositoryRoot（软链没解析，
+    /// 往往不是 git 仓，只当兜底）。每条候选照样过 rev-parse 认仓校验，不是
+    /// git 仓的落空往下一跳。
     static func repositoryRootCandidates(
         environment: [String: String],
         watchDirectory: URL?,
+        gateRuntimeRepoRoot: URL?,
         fallbackRepositoryRoot: URL?
     ) -> [URL] {
         var candidates: [URL] = []
@@ -203,6 +244,9 @@ enum CortexGitScriptExport {
         }
         if let watchDirectory {
             candidates.append(watchDirectory.resolvingSymlinksInPath().deletingLastPathComponent())
+        }
+        if let gateRuntimeRepoRoot {
+            candidates.append(gateRuntimeRepoRoot)
         }
         if let fallbackRepositoryRoot {
             candidates.append(fallbackRepositoryRoot)

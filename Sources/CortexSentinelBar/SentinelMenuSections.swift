@@ -777,6 +777,8 @@ struct SentinelBalancesSection: View {
             glmUsageRows
                 .zIndex(branchesWithHoverCard.contains("glm") ? 1 : 0)
 
+            gateRuntimeStatusRow
+
             cursorUsageRow
 
             officialUsageRow
@@ -1244,6 +1246,22 @@ struct SentinelBalancesSection: View {
         formatter.locale = Locale(identifier: "zh_CN")
         formatter.dateFormat = "M/d HH:mm"
         return formatter.string(from: date)
+    }
+
+    /// 派工路由状态行：哨兵每轮确保路由最新，这里亮结果（套餐详情卡同区域）。
+    /// 整句由显示层纯函数给（含「派工路由：」前缀），state 为 ok 用普通色，
+    /// 其余态用面板现有提醒色。还没跑过任何一轮不占位。
+    @ViewBuilder private var gateRuntimeStatusRow: some View {
+        if let row = CortexGateRuntimeStatusDisplay.rowLine(store.gateRuntimeStatus, now: Date()) {
+            Text(row.text)
+                .font(SentinelTheme.Fonts.balanceMeta)
+                .foregroundStyle(row.isWarning
+                    ? SentinelTheme.Colors.warning
+                    : SentinelTheme.Colors.foreground)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityLabel(row.text)
+        }
     }
 
     /// 智谱 GLM Coding Plan 额度：每把 key 一行（5 小时窗 + 周窗两组剩余百分比），

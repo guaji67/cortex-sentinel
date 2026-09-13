@@ -413,7 +413,7 @@ enum CortexPlanStatusFetcher {
             executablePath: exported.interpreterPath,
             arguments: ["scripts/glm_plan_status.py", "--json"],
             workingDirectory: exported.cacheDirectory,
-            environment: CortexGitScriptExport.scriptEnvironment(homeDirectory: homeDirectory),
+            environment: CortexGitScriptExport.scriptEnvironment(homeDirectory: homeDirectory, repoRoot: exported.repoRoot),
             stdin: usageJSON,
             timeout: configuration.scriptTimeout
         )

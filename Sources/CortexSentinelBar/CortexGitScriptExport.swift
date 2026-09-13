@@ -219,11 +219,15 @@ enum CortexGitScriptExport {
         return .exported(Exported(repoRoot: repoRoot, cacheDirectory: cacheDirectory, interpreterPath: interpreter))
     }
 
-    /// 脚本进程只给 HOME 和一条固定 PATH，不吃哨兵进程的整个环境。
-    static func scriptEnvironment(homeDirectory: String) -> [String: String] {
+    /// 脚本进程只给 HOME、一条固定 PATH 和认到的 cortex 仓根，不吃哨兵进程
+    /// 的整个环境。仓根来自本轮认仓通过 rev-parse 校验的那个根，判据脚本拿
+    /// CORTEX_REPO_ROOT 直接认仓，没装过闸运行时的机器上不用再猜；套餐脚本
+    /// 不读这个变量，多个键无害。
+    static func scriptEnvironment(homeDirectory: String, repoRoot: URL) -> [String: String] {
         [
             "HOME": homeDirectory,
             "PATH": "/usr/bin:/bin:/usr/sbin:/sbin:\(homeDirectory)/.local/bin:/opt/homebrew/bin",
+            "CORTEX_REPO_ROOT": repoRoot.path,
         ]
     }
 

@@ -253,6 +253,81 @@ final class CortexGateRuntimeStatusTests: XCTestCase {
         XCTAssertEqual(outcome, .failure(reason: "找不到 cortex 仓"))
     }
 
+    /// 起脚本的环境：注入的 runner 收到的 CORTEX_REPO_ROOT 是本轮认到并通过
+    /// rev-parse 校验的仓根，PATH 仍在，HOME 照旧。
+    func testScriptEnvironmentCarriesRecognizedRepoRoot() async throws {
+        guard FileManager.default.fileExists(atPath: "/usr/bin/python3") else {
+            throw XCTSkip("本机没有 /usr/bin/python3")
+        }
+        let repo = try await makeScriptRepo()
+        let runner = RecordingSubprocessRunner()
+        let outcome = await CortexGateRuntimeStatusFetcher.fetch(
+            environment: [:],
+            watchDirectory: repo.appendingPathComponent("logs"),
+            fallbackRepositoryRoot: repo,
+            homeDirectory: repo.path,
+            configuration: cacheConfiguration(),
+            runner: runner
+        )
+        guard case .success = outcome else {
+            XCTFail("取数应该成功：\(outcome)")
+            return
+        }
+
+        // 期望的仓根 = 对夹具仓跑同一条 rev-parse 的结果（生产代码认仓就这么认的）。
+        let probe = await realRunner.run(
+            executablePath: "/usr/bin/git",
+            arguments: ["-C", repo.path, "rev-parse", "--show-toplevel"],
+            workingDirectory: nil,
+            environment: nil,
+            stdin: nil,
+            timeout: 60
+        )
+        let expectedRoot = String(data: probe.standardOutput, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        XCTAssertFalse(expectedRoot.isEmpty)
+
+        // 起脚本那次调用（解释器路径，非 git / tar）收到的环境。
+        let scriptCalls = runner.calls.filter { $0.executablePath != "/usr/bin/git" && $0.executablePath != "/usr/bin/tar" }
+        XCTAssertEqual(scriptCalls.count, 1, "脚本只起一次")
+        let environment = try XCTUnwrap(scriptCalls.first?.environment)
+        XCTAssertEqual(environment["CORTEX_REPO_ROOT"], expectedRoot, "仓根就是本轮认到的那个")
+        XCTAssertEqual(
+            environment["PATH"],
+            "/usr/bin:/bin:/usr/sbin:/sbin:\(repo.path)/.local/bin:/opt/homebrew/bin",
+            "PATH 还是那条固定路径"
+        )
+        XCTAssertEqual(environment["HOME"], repo.path)
+    }
+
+    /// 起脚本的纯函数：HOME、固定 PATH、CORTEX_REPO_ROOT 三样，不多不少。
+    func testScriptEnvironmentDictionary() {
+        let root = URL(fileURLWithPath: "/tmp/fixture-repo", isDirectory: true)
+        let environment = CortexGitScriptExport.scriptEnvironment(homeDirectory: "/tmp/fixture-home", repoRoot: root)
+        XCTAssertEqual(environment["HOME"], "/tmp/fixture-home")
+        XCTAssertEqual(environment["PATH"], "/usr/bin:/bin:/usr/sbin:/sbin:/tmp/fixture-home/.local/bin:/opt/homebrew/bin")
+        XCTAssertEqual(environment["CORTEX_REPO_ROOT"], "/tmp/fixture-repo")
+        XCTAssertEqual(environment.count, 3)
+    }
+
+    /// 认仓失败：不起脚本（原行为），只有认仓的 git 探测。
+    func testRepoRecognitionFailureDoesNotStartScript() async throws {
+        let nowhere = tempRoot.appendingPathComponent("nowhere-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: nowhere, withIntermediateDirectories: true)
+        let runner = RecordingSubprocessRunner()
+        let outcome = await CortexGateRuntimeStatusFetcher.fetch(
+            environment: [:],
+            watchDirectory: nowhere,
+            fallbackRepositoryRoot: nowhere,
+            homeDirectory: nowhere.path,
+            configuration: cacheConfiguration(),
+            runner: runner
+        )
+        XCTAssertEqual(outcome, .failure(reason: "找不到 cortex 仓"))
+        let nonGitCalls = runner.calls.filter { $0.executablePath != "/usr/bin/git" }
+        XCTAssertTrue(nonGitCalls.isEmpty, "认仓失败就不该起脚本")
+    }
+
     /// schema 不是 1：整份当没有。
     func testSchemaOtherThanOneTreatedAsAbsent() async throws {
         guard FileManager.default.fileExists(atPath: "/usr/bin/python3") else {
@@ -408,6 +483,46 @@ final class CortexGateRuntimeStatusTests: XCTestCase {
         XCTAssertEqual(
             CortexGateRuntimeStatusDisplay.dumpStateText(.failure(reason: "cortex 仓里还没有这个脚本")),
             "派工路由：这次没读到（cortex 仓里还没有这个脚本）"
+        )
+    }
+}
+
+/// 记录型执行器：每一次调用原样转交真执行器，只把收到的环境记下来供断言。
+private final class RecordingSubprocessRunner: CortexSubprocessRunning, @unchecked Sendable {
+    struct Call {
+        let executablePath: String
+        let arguments: [String]
+        let environment: [String: String]?
+    }
+
+    private let lock = NSLock()
+    private var _calls: [Call] = []
+    var calls: [Call] {
+        lock.lock()
+        defer { lock.unlock() }
+        return _calls
+    }
+
+    private let realRunner = CortexProcessSubprocessRunner()
+
+    func run(
+        executablePath: String,
+        arguments: [String],
+        workingDirectory: URL?,
+        environment: [String: String]?,
+        stdin: Data?,
+        timeout: TimeInterval
+    ) async -> CortexSubprocessResult {
+        lock.lock()
+        _calls.append(Call(executablePath: executablePath, arguments: arguments, environment: environment))
+        lock.unlock()
+        return await realRunner.run(
+            executablePath: executablePath,
+            arguments: arguments,
+            workingDirectory: workingDirectory,
+            environment: environment,
+            stdin: stdin,
+            timeout: timeout
         )
     }
 }

@@ -161,7 +161,7 @@ enum CortexGateRuntimeStatusFetcher {
             executablePath: exported.interpreterPath,
             arguments: configuration.scriptArguments,
             workingDirectory: exported.cacheDirectory,
-            environment: CortexGitScriptExport.scriptEnvironment(homeDirectory: homeDirectory),
+            environment: CortexGitScriptExport.scriptEnvironment(homeDirectory: homeDirectory, repoRoot: exported.repoRoot),
             stdin: nil,
             timeout: configuration.scriptTimeout
         )

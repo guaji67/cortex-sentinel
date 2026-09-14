@@ -135,12 +135,14 @@ struct EngineCounts: Equatable {
     var grok: Int
     var codex: Int
     var claudeOxAlpha: Int
+    var codebuddy: Int
     var unknown: Int
 
     init(_ items: [LinePresentation]) {
         var grok = 0
         var codex = 0
         var claudeOxAlpha = 0
+        var codebuddy = 0
         var unknown = 0
         for item in items {
             switch item.engine {
@@ -151,8 +153,7 @@ struct EngineCounts: Equatable {
             case .claudeOxAlpha:
                 claudeOxAlpha += 1
             case .codeBuddy:
-                // 没有专属通道行，计入「其它」，不冒充 Grok 通道条数。
-                unknown += 1
+                codebuddy += 1
             case .unknown:
                 unknown += 1
             }
@@ -160,13 +161,21 @@ struct EngineCounts: Equatable {
         self.grok = grok
         self.codex = codex
         self.claudeOxAlpha = claudeOxAlpha
+        self.codebuddy = codebuddy
         self.unknown = unknown
     }
 
-    init(grok: Int = 0, codex: Int = 0, claudeOxAlpha: Int = 0, unknown: Int = 0) {
+    init(
+        grok: Int = 0,
+        codex: Int = 0,
+        claudeOxAlpha: Int = 0,
+        codebuddy: Int = 0,
+        unknown: Int = 0
+    ) {
         self.grok = grok
         self.codex = codex
         self.claudeOxAlpha = claudeOxAlpha
+        self.codebuddy = codebuddy
         self.unknown = unknown
     }
 }

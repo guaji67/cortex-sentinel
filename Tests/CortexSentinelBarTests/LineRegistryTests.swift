@@ -183,7 +183,7 @@ final class LineRegistryTests: XCTestCase {
                 codex: ChannelVerdict(status: .alive, evidence: "闲", running: 0),
                 liveCounts: groups.localActiveEngineCounts(localHost: localHost)
             ).render.primaryRow,
-            ["Codex 通 闲", "Grok 通 1 条"]
+            ["Codex 通 闲", "CodeBuddy 还没有记录", "Grok 通 1 条"]
         )
     }
 

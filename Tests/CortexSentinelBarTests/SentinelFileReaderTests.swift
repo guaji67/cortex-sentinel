@@ -1189,13 +1189,14 @@ final class SentinelFileReaderTests: XCTestCase {
         XCTAssertEqual(snapshot.grok.status, .alive)
         XCTAssertEqual(snapshot.codex.unknownKind, .noRecord)
         XCTAssertEqual(snapshot.codex.statusText, "还没有记录")
+        XCTAssertEqual(snapshot.codebuddy.unknownKind, .noRecord)
         XCTAssertEqual(
             ChannelSectionPresentation(
                 grok: snapshot.grok,
                 codex: snapshot.codex,
                 liveCounts: EngineCounts()
             ).render.primaryRow,
-            ["Codex 还没有记录", "Grok 通 闲"]
+            ["Codex 还没有记录", "CodeBuddy 还没有记录", "Grok 通 闲"]
         )
     }
 
@@ -1214,7 +1215,7 @@ final class SentinelFileReaderTests: XCTestCase {
         XCTAssertEqual(
             ChannelSectionPresentation(grok: missing.grok, codex: missing.codex, liveCounts: EngineCounts())
                 .render.primaryRow,
-            ["Codex 还没有记录", "Grok 还没有记录"]
+            ["Codex 还没有记录", "CodeBuddy 还没有记录", "Grok 还没有记录"]
         )
 
         let unreadableURL = root.appendingPathComponent("unreadable.json")
@@ -1225,9 +1226,10 @@ final class SentinelFileReaderTests: XCTestCase {
             ChannelSectionPresentation(
                 grok: unreadable.grok,
                 codex: unreadable.codex,
+                codebuddy: unreadable.codebuddy,
                 liveCounts: EngineCounts()
             ).render.primaryRow,
-            ["Codex 状态读不出", "Grok 状态读不出"]
+            ["Codex 状态读不出", "CodeBuddy 状态读不出", "Grok 状态读不出"]
         )
 
         let unrecognizedURL = root.appendingPathComponent("unrecognized.json")
@@ -1250,7 +1252,7 @@ final class SentinelFileReaderTests: XCTestCase {
                 codex: unrecognized.codex,
                 liveCounts: EngineCounts()
             ).render.primaryRow,
-            ["Codex 状态看不懂", "Grok 状态看不懂"]
+            ["Codex 状态看不懂", "CodeBuddy 还没有记录", "Grok 状态看不懂"]
         )
 
         let undeterminedURL = root.appendingPathComponent("undetermined.json")
@@ -1273,7 +1275,7 @@ final class SentinelFileReaderTests: XCTestCase {
                 codex: undetermined.codex,
                 liveCounts: EngineCounts()
             ).render.primaryRow,
-            ["Codex 查不出", "Grok 查不出"]
+            ["Codex 查不出", "CodeBuddy 还没有记录", "Grok 查不出"]
         )
     }
 
@@ -1343,7 +1345,7 @@ final class SentinelFileReaderTests: XCTestCase {
                 codex: snapshot.codex,
                 liveCounts: EngineCounts()
             ).render.primaryRow,
-            ["Codex 状态看不懂", "Grok 状态看不懂"]
+            ["Codex 状态看不懂", "CodeBuddy 还没有记录", "Grok 状态看不懂"]
         )
     }
 

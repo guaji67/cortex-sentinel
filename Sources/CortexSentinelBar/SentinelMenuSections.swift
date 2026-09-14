@@ -517,8 +517,8 @@ struct SentinelPackagingSection: View {
     }
 }
 
-/// 通道两卡（Codex / Grok）。读：channelStatus、lineGroups（本机引擎计数）、localHost。
-/// 2026-09-04 Falcon 令：ox-alpha 卡从面板撤掉，只留 Codex 和 Grok；
+/// 通道三卡（Codex / CodeBuddy / Grok）。读：channelStatus、lineGroups（本机引擎计数）、localHost。
+/// 2026-09-14 Falcon 令：ox-alpha 卡下架，Codex 与 Grok 之间补 CodeBuddy 一档；
 /// 磁盘摘要里的 claude-oxalpha 键继续解析，只是不再画卡。
 struct SentinelChannelSection: View {
     var store: SentinelStore
@@ -527,6 +527,7 @@ struct SentinelChannelSection: View {
         let presentation = ChannelSectionPresentation(
             grok: store.channelStatus.grok,
             codex: store.channelStatus.codex,
+            codebuddy: store.channelStatus.codebuddy,
             liveCounts: store.lineGroups.localActiveEngineCounts(localHost: store.localHost)
         )
         VStack(alignment: .leading, spacing: SentinelTheme.Spacing.sm) {
@@ -534,6 +535,8 @@ struct SentinelChannelSection: View {
 
             HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
                 channelItem(presentation.codex)
+                Spacer(minLength: SentinelTheme.Spacing.md)
+                channelItem(presentation.codebuddy)
                 Spacer(minLength: SentinelTheme.Spacing.md)
                 channelItem(presentation.grok)
             }

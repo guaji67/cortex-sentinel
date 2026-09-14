@@ -84,6 +84,7 @@ final class PanelPNGRendererTests: XCTestCase {
         XCTAssertEqual(session.store.channelStatus.codex.status, .alive)
         XCTAssertGreaterThan(session.store.channelStatus.grok.runningCount, 0)
         XCTAssertGreaterThan(session.store.channelStatus.codex.runningCount, 0)
+        XCTAssertGreaterThan(session.store.channelStatus.codebuddy.runningCount, 0)
     }
 
     func testUnclaimedFixtureExposesTerminalsWaitingToBeClaimed() async throws {
@@ -224,25 +225,25 @@ final class PanelPNGRendererTests: XCTestCase {
     }
 
     func testFourChannelUnknownFixturesMatchPrimaryRowCopy() async throws {
-        let cases: [(PanelPreviewFixture, String, ChannelUnknownKind)] = [
-            (.channelNoRecord, "还没有记录", .noRecord),
-            (.channelUnreadable, "状态读不出", .unreadable),
-            (.channelUnrecognized, "状态看不懂", .unrecognized),
-            (.channelUndetermined, "查不出", .undetermined),
+        let cases: [(PanelPreviewFixture, String, String, ChannelUnknownKind)] = [
+            (.channelNoRecord, "还没有记录", "还没有记录", .noRecord),
+            (.channelUnreadable, "状态读不出", "状态读不出", .unreadable),
+            // 这个样本的原始 JSON 没有 codebuddy 键，照旧解析成「还没有记录」。
+            (.channelUnrecognized, "状态看不懂", "还没有记录", .unrecognized),
+            (.channelUndetermined, "查不出", "查不出", .undetermined),
         ]
-        for (fixture, phrase, kind) in cases {
+        for (fixture, phrase, codeBuddyPhrase, kind) in cases {
             let session = try await PanelPreviewFactory.makeSession(fixture: fixture)
             defer { session.tearDown() }
             let presentation = ChannelSectionPresentation(
                 grok: session.store.channelStatus.grok,
                 codex: session.store.channelStatus.codex,
-                claudeOxAlpha: session.store.channelStatus.claudeOxAlpha,
+                codebuddy: session.store.channelStatus.codebuddy,
                 liveCounts: EngineCounts()
             )
-            let oxAlphaPhrase = session.store.channelStatus.claudeOxAlpha.statusText
             XCTAssertEqual(
                 presentation.render.primaryRow,
-                ["Codex \(phrase)", "Grok \(phrase)", "ox-alpha \(oxAlphaPhrase)"],
+                ["Codex \(phrase)", "CodeBuddy \(codeBuddyPhrase)", "Grok \(phrase)"],
                 fixture.rawValue
             )
             XCTAssertEqual(presentation.render.problemLines, [], fixture.rawValue)

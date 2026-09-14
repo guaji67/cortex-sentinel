@@ -170,18 +170,23 @@ struct ChannelStatusSnapshot: Equatable {
     let grok: ChannelVerdict
     let codex: ChannelVerdict
     /// ox-alpha 通道。摘要文件还没写这个键时保持 `.missing`，不画成不通。
+    /// 2026-09-14 Falcon 令：面板不再画 ox-alpha 卡，这个字段只为历史 JSON 保留。
     let claudeOxAlpha: ChannelVerdict
+    /// 本机 CodeBuddy 派工通道。Cortex 侧补写 `codebuddy` 键之前保持 `.missing`。
+    let codebuddy: ChannelVerdict
 
     init(
         generatedAt: Date?,
         grok: ChannelVerdict,
         codex: ChannelVerdict,
-        claudeOxAlpha: ChannelVerdict = .missing
+        claudeOxAlpha: ChannelVerdict = .missing,
+        codebuddy: ChannelVerdict = .missing
     ) {
         self.generatedAt = generatedAt
         self.grok = grok
         self.codex = codex
         self.claudeOxAlpha = claudeOxAlpha
+        self.codebuddy = codebuddy
     }
 
     static let missing = ChannelStatusSnapshot(
@@ -194,7 +199,8 @@ struct ChannelStatusSnapshot: Equatable {
         generatedAt: nil,
         grok: .unreadable,
         codex: .unreadable,
-        claudeOxAlpha: .unreadable
+        claudeOxAlpha: .unreadable,
+        codebuddy: .unreadable
     )
 }
 
@@ -238,61 +244,27 @@ struct ChannelSectionPresentation: Equatable {
 
     let grok: ChannelItemPresentation
     let codex: ChannelItemPresentation
-    let claudeOxAlpha: ChannelItemPresentation
-    private let includesClaudeOxAlpha: Bool
+    let codebuddy: ChannelItemPresentation
 
+    /// 通道三卡（Codex / CodeBuddy / Grok），三档始终显示。
+    /// 2026-09-14 Falcon 令：ox-alpha 卡下架，CodeBuddy 补进 Codex 与 Grok 之间的空位。
     init(
         grok: ChannelVerdict,
         codex: ChannelVerdict,
+        codebuddy: ChannelVerdict = .missing,
         liveCounts: EngineCounts
-    ) {
-        self.init(
-            grok: grok,
-            codex: codex,
-            claudeOxAlpha: nil,
-            liveCounts: liveCounts
-        )
-    }
-
-    /// 新版调用点显式传入 ox-alpha，才把第三张卡加入渲染；旧的两通道调用点
-    /// 保留原有两行契约，避免缺失摘要键时改变 host/未知状态等无关诊断的输出。
-    init(
-        grok: ChannelVerdict,
-        codex: ChannelVerdict,
-        claudeOxAlpha: ChannelVerdict,
-        liveCounts: EngineCounts
-    ) {
-        self.init(
-            grok: grok,
-            codex: codex,
-            claudeOxAlpha: claudeOxAlpha,
-            liveCounts: liveCounts,
-            includesClaudeOxAlpha: true
-        )
-    }
-
-    private init(
-        grok: ChannelVerdict,
-        codex: ChannelVerdict,
-        claudeOxAlpha: ChannelVerdict?,
-        liveCounts: EngineCounts,
-        includesClaudeOxAlpha: Bool = false
     ) {
         self.grok = ChannelItemPresentation(name: "Grok", verdict: grok, liveRunning: liveCounts.grok)
         self.codex = ChannelItemPresentation(name: "Codex", verdict: codex, liveRunning: liveCounts.codex)
-        self.claudeOxAlpha = ChannelItemPresentation(
-            name: "ox-alpha",
-            verdict: claudeOxAlpha ?? .missing,
-            liveRunning: liveCounts.claudeOxAlpha
+        self.codebuddy = ChannelItemPresentation(
+            name: "CodeBuddy",
+            verdict: codebuddy,
+            liveRunning: liveCounts.codebuddy
         )
-        self.includesClaudeOxAlpha = includesClaudeOxAlpha
     }
 
     var items: [ChannelItemPresentation] {
-        if includesClaudeOxAlpha {
-            return [codex, grok, claudeOxAlpha]
-        }
-        return [codex, grok]
+        [codex, codebuddy, grok]
     }
 
     var problemLines: [String] {

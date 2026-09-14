@@ -530,12 +530,15 @@ private enum PanelPreviewLayout {
 
     private enum PreviewEngine: Equatable {
         case codex
+        case codebuddy
         case grok
 
         var registryValue: String {
             switch self {
             case .codex:
                 return "codex"
+            case .codebuddy:
+                return "codebuddy"
             case .grok:
                 return "cursor-grok"
             }
@@ -545,6 +548,8 @@ private enum PanelPreviewLayout {
             switch self {
             case .codex:
                 return "codex-babysitter-\(slug).status.json"
+            case .codebuddy:
+                return "codebuddy-\(slug).status.json"
             case .grok:
                 return "grok-\(slug).status.json"
             }
@@ -560,7 +565,8 @@ private enum PanelPreviewLayout {
                 into: root,
                 generatedAt: now,
                 grok: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0),
-                codex: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0)
+                codex: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0),
+                codebuddy: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0)
             )
             try writeHealthyBackgroundJobs(into: root, generatedAt: now)
         case .busy:
@@ -569,11 +575,13 @@ private enum PanelPreviewLayout {
             try writeStatusFiles(lines, now: now, into: root)
             let grokCount = lines.filter { $0.engine == .grok }.count
             let codexCount = lines.filter { $0.engine == .codex }.count
+            let codebuddyCount = lines.filter { $0.engine == .codebuddy }.count
             try writeChannel(
                 into: root,
                 generatedAt: now,
                 grok: ChannelJSON(status: "alive", evidence: "\(grokCount) 条在跑", running: grokCount),
-                codex: ChannelJSON(status: "alive", evidence: "\(codexCount) 条在跑", running: codexCount)
+                codex: ChannelJSON(status: "alive", evidence: "\(codexCount) 条在跑", running: codexCount),
+                codebuddy: ChannelJSON(status: "alive", evidence: "\(codebuddyCount) 条在跑", running: codebuddyCount)
             )
             try writeHealthyBackgroundJobs(into: root, generatedAt: now)
         case .unclaimed:
@@ -584,7 +592,8 @@ private enum PanelPreviewLayout {
                 into: root,
                 generatedAt: now,
                 grok: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0),
-                codex: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0)
+                codex: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0),
+                codebuddy: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0)
             )
             try writeHealthyBackgroundJobs(into: root, generatedAt: now)
         case .channelDown:
@@ -592,7 +601,8 @@ private enum PanelPreviewLayout {
                 into: root,
                 generatedAt: now,
                 grok: ChannelJSON(status: "degraded", evidence: "账单未付，进程秒退", running: nil),
-                codex: ChannelJSON(status: "unknown", evidence: "无数据", running: nil)
+                codex: ChannelJSON(status: "unknown", evidence: "无数据", running: nil),
+                codebuddy: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0)
             )
             try writeHealthyBackgroundJobs(into: root, generatedAt: now)
         case .bgjobsProblems:
@@ -600,7 +610,8 @@ private enum PanelPreviewLayout {
                 into: root,
                 generatedAt: now,
                 grok: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0),
-                codex: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0)
+                codex: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0),
+                codebuddy: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0)
             )
             try writeProblemBackgroundJobs(into: root, generatedAt: now)
         case .fourOutcomes:
@@ -611,7 +622,8 @@ private enum PanelPreviewLayout {
                 into: root,
                 generatedAt: now,
                 grok: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0),
-                codex: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0)
+                codex: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0),
+                codebuddy: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0)
             )
             try writeHealthyBackgroundJobs(into: root, generatedAt: now)
         case .balanceUnread:
@@ -619,7 +631,8 @@ private enum PanelPreviewLayout {
                 into: root,
                 generatedAt: now,
                 grok: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0),
-                codex: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0)
+                codex: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0),
+                codebuddy: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0)
             )
             try writeHealthyBackgroundJobs(into: root, generatedAt: now)
             try writeUnreadableAIODatabase(into: root)
@@ -631,7 +644,8 @@ private enum PanelPreviewLayout {
                 into: root,
                 generatedAt: now,
                 grok: ChannelJSON(status: "alive", evidence: "1 条在跑", running: 1),
-                codex: ChannelJSON(status: "alive", evidence: "1 条在跑", running: 1)
+                codex: ChannelJSON(status: "alive", evidence: "1 条在跑", running: 1),
+                codebuddy: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0)
             )
             try writeHealthyBackgroundJobs(into: root, generatedAt: now)
         case .splitCounts:
@@ -664,7 +678,8 @@ private enum PanelPreviewLayout {
                 into: root,
                 generatedAt: now,
                 grok: ChannelJSON(status: "alive", evidence: "1 条在跑", running: 1),
-                codex: ChannelJSON(status: "alive", evidence: "1 条在跑", running: 1)
+                codex: ChannelJSON(status: "alive", evidence: "1 条在跑", running: 1),
+                codebuddy: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0)
             )
             try writeHealthyBackgroundJobs(into: root, generatedAt: now)
         case .channelNoRecord:
@@ -693,7 +708,8 @@ private enum PanelPreviewLayout {
                 into: root,
                 generatedAt: now,
                 grok: ChannelJSON(status: "unknown", evidence: "无数据", running: nil),
-                codex: ChannelJSON(status: "unknown", evidence: "无数据", running: nil)
+                codex: ChannelJSON(status: "unknown", evidence: "无数据", running: nil),
+                codebuddy: ChannelJSON(status: "unknown", evidence: "无数据", running: nil)
             )
             try writeHealthyBackgroundJobs(into: root, generatedAt: now)
         case .offHostActive:
@@ -726,7 +742,8 @@ private enum PanelPreviewLayout {
                 into: root,
                 generatedAt: now,
                 grok: ChannelJSON(status: "alive", evidence: "1 条在跑", running: 1),
-                codex: ChannelJSON(status: "alive", evidence: "1 条在跑", running: 1)
+                codex: ChannelJSON(status: "alive", evidence: "1 条在跑", running: 1),
+                codebuddy: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0)
             )
             try writeHealthyBackgroundJobs(into: root, generatedAt: now)
         case .packaging, .packagingDeadPID, .packagingPIDReuse, .packagingStale:
@@ -734,7 +751,8 @@ private enum PanelPreviewLayout {
                 into: root,
                 generatedAt: now,
                 grok: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0),
-                codex: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0)
+                codex: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0),
+                codebuddy: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0)
             )
             try writeHealthyBackgroundJobs(into: root, generatedAt: now)
         }
@@ -873,6 +891,15 @@ private enum PanelPreviewLayout {
                 engine: .codex,
                 state: "running",
                 model: "gpt-5.4",
+                exitCode: nil
+            ),
+            LineSpec(
+                slug: "prefix-sweep",
+                labelZH: "前缀认线巡检",
+                dispatcherZH: "主控窗口派工",
+                engine: .codebuddy,
+                state: "running",
+                model: "glm-4.7",
                 exitCode: nil
             ),
         ]
@@ -1079,14 +1106,16 @@ private enum PanelPreviewLayout {
         into root: URL,
         generatedAt: Date,
         grok: ChannelJSON,
-        codex: ChannelJSON
+        codex: ChannelJSON,
+        codebuddy: ChannelJSON
     ) throws {
         let json = """
         {
           "generated_at": "\(isoString(generatedAt))",
           "channels": {
-            "grok": \(channelObject(grok)),
-            "codex": \(channelObject(codex))
+            "codex": \(channelObject(codex)),
+            "codebuddy": \(channelObject(codebuddy)),
+            "grok": \(channelObject(grok))
           }
         }
         """

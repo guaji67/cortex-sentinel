@@ -187,10 +187,9 @@ final class SentinelBoardWindowTests: XCTestCase {
             ChannelSectionPresentation(
                 grok: ChannelVerdict(status: .alive, evidence: "1 条在跑", running: 1),
                 codex: ChannelVerdict(status: .alive, evidence: "闲", running: 0),
-                claudeOxAlpha: .missing,
                 liveCounts: groups.localActiveEngineCounts(localHost: localHost)
             ).render.primaryRow,
-            ["Codex 通 闲", "Grok 通 4 条", "ox-alpha 还没有记录"]
+            ["Codex 通 闲", "CodeBuddy 还没有记录", "Grok 通 4 条"]
         )
     }
 
@@ -233,14 +232,60 @@ final class SentinelBoardWindowTests: XCTestCase {
         XCTAssertEqual(groups.activeEngineCounts.unknown, 0)
         // 本机口径（通道行用的那个）同样把 ox-alpha 算进去。
         XCTAssertEqual(groups.localActiveEngineCounts(localHost: localHost).claudeOxAlpha, 2)
+        // ox-alpha 即使有摘要数据也不出卡；第三档是 CodeBuddy。
         XCTAssertEqual(
             ChannelSectionPresentation(
                 grok: .missing,
                 codex: ChannelVerdict(status: .alive, evidence: "1 条在跑", running: 1),
-                claudeOxAlpha: ChannelVerdict(status: .alive, evidence: "2 条在跑", running: 2),
+                codebuddy: .missing,
                 liveCounts: groups.localActiveEngineCounts(localHost: localHost)
             ).render.primaryRow,
-            ["Codex 通 1 条", "Grok 还没有记录", "ox-alpha 通 2 条"]
+            ["Codex 通 1 条", "CodeBuddy 还没有记录", "Grok 还没有记录"]
+        )
+    }
+
+    func testActiveEngineCountsSplitCodeBuddyOutOfOtherSlots() throws {
+        // engine 字段写 "codebuddy"（rawValue 口径），通道行数进 CodeBuddy，不数进别档。
+        XCTAssertEqual(LineEngine(rawValue: "codebuddy"), .codeBuddy)
+        let registry = try makeRegistry(
+            [
+                (
+                    slug: "prefix-sweep",
+                    engine: "codebuddy",
+                    label: "前缀认线巡检",
+                    registeredAt: now.timeIntervalSince1970
+                ),
+                (
+                    slug: "packbar",
+                    engine: "codex",
+                    label: "打包进度条",
+                    registeredAt: now.timeIntervalSince1970
+                ),
+            ],
+            host: "Test Mac"
+        )
+        let lines = [
+            makeLine(slug: "prefix-sweep", engine: .codeBuddy, state: .running, age: 5),
+            makeLine(slug: "packbar", engine: .codex, state: .running, age: 5),
+        ]
+        let groups = SentinelAggregation.lineGroups(lines: lines, registry: registry, now: now)
+        let localHost = LocalHostIdentity(identifiers: ["Test Mac"])
+
+        XCTAssertEqual(groups.activeRegistered.count, 2)
+        XCTAssertEqual(groups.activeEngineCounts.codebuddy, 1)
+        XCTAssertEqual(groups.activeEngineCounts.codex, 1)
+        XCTAssertEqual(groups.activeEngineCounts.grok, 0)
+        XCTAssertEqual(groups.activeEngineCounts.claudeOxAlpha, 0)
+        XCTAssertEqual(groups.activeEngineCounts.unknown, 0)
+        XCTAssertEqual(groups.localActiveEngineCounts(localHost: localHost).codebuddy, 1)
+        XCTAssertEqual(
+            ChannelSectionPresentation(
+                grok: .missing,
+                codex: .missing,
+                codebuddy: ChannelVerdict(status: .alive, evidence: "1 条在跑", running: 1),
+                liveCounts: groups.localActiveEngineCounts(localHost: localHost)
+            ).render.primaryRow,
+            ["Codex 还没有记录", "CodeBuddy 通 1 条", "Grok 还没有记录"]
         )
     }
 

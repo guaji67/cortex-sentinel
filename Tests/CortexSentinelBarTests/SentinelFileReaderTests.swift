@@ -77,6 +77,48 @@ final class SentinelFileReaderTests: XCTestCase {
         XCTAssertFalse(line.reportsCodexChannelTelemetry)
     }
 
+    func testDiscoversAndParsesCodeBuddyStatusContract() throws {
+        let fileManager = FileManager.default
+        let logsDirectory = fileManager.temporaryDirectory.appendingPathComponent(
+            "CortexSentinelCodeBuddy-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(at: logsDirectory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: logsDirectory) }
+
+        try Data(
+            #"{"engine":"codebuddy","slug":"x","state":"running","updated_at":"2026-09-14T12:00:00+08:00"}"#.utf8
+        ).write(to: logsDirectory.appendingPathComponent("codebuddy-x.status.json"))
+
+        let lines = SentinelFileReader.readLines(in: logsDirectory)
+        let line = try XCTUnwrap(lines.first)
+
+        XCTAssertEqual(lines.count, 1)
+        XCTAssertEqual(line.slug, "x")
+        XCTAssertEqual(line.engine, .codeBuddy)
+        XCTAssertEqual(line.engine.displayName, "CodeBuddy")
+        XCTAssertEqual(line.engine.ackChannel, "codebuddy")
+        XCTAssertEqual(line.state, .running)
+        XCTAssertNotNil(line.updatedAt)
+    }
+
+    func testUnrecognizedPrefixStatusFileIsStillNotListed() throws {
+        let fileManager = FileManager.default
+        let logsDirectory = fileManager.temporaryDirectory.appendingPathComponent(
+            "CortexSentinelUnknownPrefix-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(at: logsDirectory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: logsDirectory) }
+
+        // 前缀表是闭集：认不出的前缀照旧不列，不能因为加了 codebuddy 就放开。
+        try Data(#"{"engine":"codebuddy","slug":"foo-x","state":"running"}"#.utf8).write(
+            to: logsDirectory.appendingPathComponent("foo-x.status.json")
+        )
+
+        XCTAssertTrue(SentinelFileReader.readLines(in: logsDirectory).isEmpty)
+    }
+
     func testClaudeOxAlphaFallbackSlugAndEngineComeFromFileNamePrefix() throws {
         let fileManager = FileManager.default
         let logsDirectory = fileManager.temporaryDirectory.appendingPathComponent(
@@ -1147,13 +1189,14 @@ final class SentinelFileReaderTests: XCTestCase {
         XCTAssertEqual(snapshot.grok.status, .alive)
         XCTAssertEqual(snapshot.codex.unknownKind, .noRecord)
         XCTAssertEqual(snapshot.codex.statusText, "还没有记录")
+        XCTAssertEqual(snapshot.codebuddy.unknownKind, .noRecord)
         XCTAssertEqual(
             ChannelSectionPresentation(
                 grok: snapshot.grok,
                 codex: snapshot.codex,
                 liveCounts: EngineCounts()
             ).render.primaryRow,
-            ["Codex 还没有记录", "Grok 通 闲"]
+            ["Codex 还没有记录", "CodeBuddy 还没有记录", "Grok 通 闲"]
         )
     }
 
@@ -1172,7 +1215,7 @@ final class SentinelFileReaderTests: XCTestCase {
         XCTAssertEqual(
             ChannelSectionPresentation(grok: missing.grok, codex: missing.codex, liveCounts: EngineCounts())
                 .render.primaryRow,
-            ["Codex 还没有记录", "Grok 还没有记录"]
+            ["Codex 还没有记录", "CodeBuddy 还没有记录", "Grok 还没有记录"]
         )
 
         let unreadableURL = root.appendingPathComponent("unreadable.json")
@@ -1183,9 +1226,10 @@ final class SentinelFileReaderTests: XCTestCase {
             ChannelSectionPresentation(
                 grok: unreadable.grok,
                 codex: unreadable.codex,
+                codebuddy: unreadable.codebuddy,
                 liveCounts: EngineCounts()
             ).render.primaryRow,
-            ["Codex 状态读不出", "Grok 状态读不出"]
+            ["Codex 状态读不出", "CodeBuddy 状态读不出", "Grok 状态读不出"]
         )
 
         let unrecognizedURL = root.appendingPathComponent("unrecognized.json")
@@ -1208,7 +1252,7 @@ final class SentinelFileReaderTests: XCTestCase {
                 codex: unrecognized.codex,
                 liveCounts: EngineCounts()
             ).render.primaryRow,
-            ["Codex 状态看不懂", "Grok 状态看不懂"]
+            ["Codex 状态看不懂", "CodeBuddy 还没有记录", "Grok 状态看不懂"]
         )
 
         let undeterminedURL = root.appendingPathComponent("undetermined.json")
@@ -1231,7 +1275,7 @@ final class SentinelFileReaderTests: XCTestCase {
                 codex: undetermined.codex,
                 liveCounts: EngineCounts()
             ).render.primaryRow,
-            ["Codex 查不出", "Grok 查不出"]
+            ["Codex 查不出", "CodeBuddy 还没有记录", "Grok 查不出"]
         )
     }
 
@@ -1301,7 +1345,7 @@ final class SentinelFileReaderTests: XCTestCase {
                 codex: snapshot.codex,
                 liveCounts: EngineCounts()
             ).render.primaryRow,
-            ["Codex 状态看不懂", "Grok 状态看不懂"]
+            ["Codex 状态看不懂", "CodeBuddy 还没有记录", "Grok 状态看不懂"]
         )
     }
 

@@ -355,6 +355,7 @@ enum SentinelFileReader {
         ("codex-babysitter-", .codex),
         ("grok-", .cursorGrok),
         ("claude-oxalpha-", .claudeOxAlpha),
+        ("codebuddy-", .codeBuddy),
     ]
     private static let statusSuffix = ".status.json"
 
@@ -377,7 +378,8 @@ enum SentinelFileReader {
             generatedAt: SentinelDateParser.parse(payload.generatedAt),
             grok: ChannelVerdict(payload: payload.channels?.grok),
             codex: ChannelVerdict(payload: payload.channels?.codex),
-            claudeOxAlpha: ChannelVerdict(payload: payload.channels?.claudeOxAlpha)
+            claudeOxAlpha: ChannelVerdict(payload: payload.channels?.claudeOxAlpha),
+            codebuddy: ChannelVerdict(payload: payload.channels?.codebuddy)
         )
     }
 
@@ -594,12 +596,14 @@ private struct ChannelStatusChannelsPayload: Decodable {
     let grok: ChannelVerdictPayload?
     let codex: ChannelVerdictPayload?
     let claudeOxAlpha: ChannelVerdictPayload?
+    let codebuddy: ChannelVerdictPayload?
 
     /// `channel_status.py` 的通道键带连字符，写法是 `claude-oxalpha`。
     enum CodingKeys: String, CodingKey {
         case grok
         case codex
         case claudeOxAlpha = "claude-oxalpha"
+        case codebuddy
     }
 }
 

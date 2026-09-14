@@ -2,24 +2,24 @@ import XCTest
 @testable import CortexSentinelBar
 
 final class ChannelSectionPresentationTests: XCTestCase {
-    func testBothAliveWithRunningCountsRendersExactTexts() {
+    func testThreeAliveWithRunningCountsRendersExactTexts() {
         let presentation = ChannelSectionPresentation(
             grok: ChannelVerdict(status: .alive, evidence: "2 条在跑", running: 2),
             codex: ChannelVerdict(status: .alive, evidence: "1 条在跑", running: 1),
-            claudeOxAlpha: .missing,
-            liveCounts: EngineCounts(grok: 2, codex: 1)
+            codebuddy: ChannelVerdict(status: .alive, evidence: "3 条在跑", running: 3),
+            liveCounts: EngineCounts(grok: 2, codex: 1, codebuddy: 3)
         )
         XCTAssertEqual(
             presentation.render,
             ChannelSectionPresentation.Render(
-                primaryRow: ["Codex 通 1 条", "Grok 通 2 条", "ox-alpha 还没有记录"],
+                primaryRow: ["Codex 通 1 条", "CodeBuddy 通 3 条", "Grok 通 2 条"],
                 problemLines: []
             )
         )
         XCTAssertEqual(presentation.rowCount, 1)
     }
 
-    func testBothAliveIdleRendersExactTexts() {
+    func testBothAliveIdleWithCodeBuddyMissingRendersExactTexts() {
         let presentation = ChannelSectionPresentation(
             grok: ChannelVerdict(
                 status: .alive,
@@ -31,13 +31,12 @@ final class ChannelSectionPresentationTests: XCTestCase {
                 evidence: "最近一次派工正常终态 done",
                 running: 0
             ),
-            claudeOxAlpha: .missing,
             liveCounts: EngineCounts(grok: 0, codex: 0)
         )
         XCTAssertEqual(
             presentation.render,
             ChannelSectionPresentation.Render(
-                primaryRow: ["Codex 通 闲", "Grok 通 闲", "ox-alpha 还没有记录"],
+                primaryRow: ["Codex 通 闲", "CodeBuddy 还没有记录", "Grok 通 闲"],
                 problemLines: []
             )
         )
@@ -56,13 +55,12 @@ final class ChannelSectionPresentationTests: XCTestCase {
                 evidence: "最近一次派工正常终态 done",
                 running: 0
             ),
-            claudeOxAlpha: .missing,
             liveCounts: EngineCounts(grok: 0, codex: 0)
         )
         XCTAssertEqual(
             presentation.render,
             ChannelSectionPresentation.Render(
-                primaryRow: ["Codex 通 闲", "Grok 不通", "ox-alpha 还没有记录"],
+                primaryRow: ["Codex 通 闲", "CodeBuddy 还没有记录", "Grok 不通"],
                 problemLines: ["Grok 不通，账单未付，进程秒退"]
             )
         )
@@ -73,13 +71,12 @@ final class ChannelSectionPresentationTests: XCTestCase {
         let presentation = ChannelSectionPresentation(
             grok: .missing,
             codex: .missing,
-            claudeOxAlpha: .missing,
             liveCounts: EngineCounts()
         )
         XCTAssertEqual(
             presentation.render,
             ChannelSectionPresentation.Render(
-                primaryRow: ["Codex 还没有记录", "Grok 还没有记录", "ox-alpha 还没有记录"],
+                primaryRow: ["Codex 还没有记录", "CodeBuddy 还没有记录", "Grok 还没有记录"],
                 problemLines: []
             )
         )
@@ -90,28 +87,27 @@ final class ChannelSectionPresentationTests: XCTestCase {
         let presentation = ChannelSectionPresentation(
             grok: .missing,
             codex: .missing,
-            claudeOxAlpha: .missing,
             liveCounts: EngineCounts()
         )
         XCTAssertEqual(
             presentation.render.primaryRow,
-            ["Codex 还没有记录", "Grok 还没有记录", "ox-alpha 还没有记录"]
+            ["Codex 还没有记录", "CodeBuddy 还没有记录", "Grok 还没有记录"]
         )
         XCTAssertEqual(presentation.render.problemLines, [])
         XCTAssertEqual(presentation.codex.verdict.unknownKind, .noRecord)
         XCTAssertEqual(presentation.grok.verdict.unknownKind, .noRecord)
+        XCTAssertEqual(presentation.codebuddy.verdict.unknownKind, .noRecord)
     }
 
     func testUnreadableFileUsesUnreadableOnPrimaryRow() {
         let presentation = ChannelSectionPresentation(
             grok: .unreadable,
             codex: .unreadable,
-            claudeOxAlpha: .missing,
             liveCounts: EngineCounts()
         )
         XCTAssertEqual(
             presentation.render.primaryRow,
-            ["Codex 状态读不出", "Grok 状态读不出", "ox-alpha 还没有记录"]
+            ["Codex 状态读不出", "CodeBuddy 还没有记录", "Grok 状态读不出"]
         )
         XCTAssertEqual(presentation.render.problemLines, [])
         XCTAssertEqual(presentation.codex.verdict.statusText, ChannelUnknownKind.unreadable.statusText)
@@ -132,10 +128,12 @@ final class ChannelSectionPresentationTests: XCTestCase {
         let presentation = ChannelSectionPresentation(
             grok: snapshot.grok,
             codex: snapshot.codex,
-            claudeOxAlpha: .missing,
             liveCounts: EngineCounts()
         )
-        XCTAssertEqual(presentation.render.primaryRow, ["Codex 还没有记录", "Grok 通 闲", "ox-alpha 还没有记录"])
+        XCTAssertEqual(
+            presentation.render.primaryRow,
+            ["Codex 还没有记录", "CodeBuddy 还没有记录", "Grok 通 闲"]
+        )
         XCTAssertEqual(presentation.render.problemLines, [])
         XCTAssertNil(snapshot.grok.unknownKind)
         XCTAssertEqual(snapshot.codex.unknownKind, .noRecord)
@@ -157,12 +155,11 @@ final class ChannelSectionPresentationTests: XCTestCase {
         let presentation = ChannelSectionPresentation(
             grok: snapshot.grok,
             codex: snapshot.codex,
-            claudeOxAlpha: .missing,
             liveCounts: EngineCounts()
         )
         XCTAssertEqual(
             presentation.render.primaryRow,
-            ["Codex 状态看不懂", "Grok 状态看不懂", "ox-alpha 还没有记录"]
+            ["Codex 状态看不懂", "CodeBuddy 还没有记录", "Grok 状态看不懂"]
         )
         XCTAssertEqual(presentation.render.problemLines, [])
         XCTAssertEqual(snapshot.grok.unknownKind, .unrecognized)
@@ -185,12 +182,11 @@ final class ChannelSectionPresentationTests: XCTestCase {
         let presentation = ChannelSectionPresentation(
             grok: snapshot.grok,
             codex: snapshot.codex,
-            claudeOxAlpha: .missing,
             liveCounts: EngineCounts()
         )
         XCTAssertEqual(
             presentation.render.primaryRow,
-            ["Codex 查不出", "Grok 查不出", "ox-alpha 还没有记录"]
+            ["Codex 查不出", "CodeBuddy 还没有记录", "Grok 查不出"]
         )
         XCTAssertEqual(presentation.render.problemLines, [])
         XCTAssertEqual(snapshot.grok.unknownKind, .undetermined)
@@ -201,7 +197,7 @@ final class ChannelSectionPresentationTests: XCTestCase {
         let presentation = ChannelSectionPresentation(
             grok: ChannelVerdict(status: .alive, evidence: "2 条在跑", running: 2),
             codex: ChannelVerdict(status: .alive, evidence: "闲", running: nil),
-            claudeOxAlpha: .missing,
+            codebuddy: ChannelVerdict(status: .alive, evidence: "闲", running: nil),
             liveCounts: EngineCounts(grok: 2, codex: 0)
         )
         XCTAssertEqual(presentation.problemLines, [])
@@ -210,7 +206,7 @@ final class ChannelSectionPresentationTests: XCTestCase {
         XCTAssertEqual(
             presentation.render,
             ChannelSectionPresentation.Render(
-                primaryRow: ["Codex 通 闲", "Grok 通 2 条", "ox-alpha 还没有记录"],
+                primaryRow: ["Codex 通 闲", "CodeBuddy 通 闲", "Grok 通 2 条"],
                 problemLines: []
             )
         )
@@ -220,13 +216,12 @@ final class ChannelSectionPresentationTests: XCTestCase {
         let presentation = ChannelSectionPresentation(
             grok: ChannelVerdict(status: .alive, evidence: "1 条在跑", running: 1),
             codex: ChannelVerdict(status: .alive, evidence: "闲", running: 0),
-            claudeOxAlpha: .missing,
             liveCounts: EngineCounts(grok: 4, codex: 0)
         )
         XCTAssertEqual(
             presentation.render,
             ChannelSectionPresentation.Render(
-                primaryRow: ["Codex 通 闲", "Grok 通 4 条", "ox-alpha 还没有记录"],
+                primaryRow: ["Codex 通 闲", "CodeBuddy 还没有记录", "Grok 通 4 条"],
                 problemLines: []
             )
         )
@@ -234,9 +229,87 @@ final class ChannelSectionPresentationTests: XCTestCase {
         XCTAssertEqual(presentation.codex.itemText, "Codex 通 闲")
     }
 
-    // MARK: ox-alpha 第三张卡
+    // MARK: 三卡顺序与 CodeBuddy 档
 
-    func testChannelStatusWithThirdKeyRendersThreeCards() {
+    func testPrimaryRowIsExactlyCodexCodeBuddyGrok() {
+        let presentation = ChannelSectionPresentation(
+            grok: ChannelVerdict(status: .alive, evidence: "1 条在跑", running: 1),
+            codex: ChannelVerdict(status: .alive, evidence: "1 条在跑", running: 1),
+            codebuddy: ChannelVerdict(status: .alive, evidence: "1 条在跑", running: 1),
+            liveCounts: EngineCounts(grok: 1, codex: 1, codebuddy: 1)
+        )
+        XCTAssertEqual(presentation.items.map(\.name), ["Codex", "CodeBuddy", "Grok"])
+        XCTAssertEqual(
+            presentation.render.primaryRow,
+            ["Codex 通 1 条", "CodeBuddy 通 1 条", "Grok 通 1 条"]
+        )
+        XCTAssertEqual(presentation.codebuddy.accessibilityIdentifier, "channel-row-codebuddy")
+    }
+
+    func testChannelStatusWithCodeBuddyKeyParsesAliveRunning() {
+        let json = """
+        {
+          "generated_at": "2026-09-14T12:00:00+08:00",
+          "channels": {
+            "grok": {"status": "alive", "evidence": "1 条在跑", "running": 1},
+            "codex": {"status": "alive", "evidence": "2 条在跑", "running": 2},
+            "codebuddy": {"status": "alive", "evidence": "2 条在跑", "running": 2}
+          }
+        }
+        """
+        let snapshot = SentinelFileReader.parseChannelStatus(data: Data(json.utf8))
+
+        XCTAssertEqual(snapshot.codebuddy.status, .alive)
+        XCTAssertEqual(snapshot.codebuddy.evidence, "2 条在跑")
+        XCTAssertEqual(snapshot.codebuddy.running, 2)
+
+        let presentation = ChannelSectionPresentation(
+            grok: snapshot.grok,
+            codex: snapshot.codex,
+            codebuddy: snapshot.codebuddy,
+            liveCounts: EngineCounts(grok: 1, codex: 2, codebuddy: 2)
+        )
+        XCTAssertEqual(presentation.codebuddy.itemText, "CodeBuddy 通 2 条")
+    }
+
+    func testChannelStatusWithoutCodeBuddyKeyParsesMissingNotDegraded() {
+        // Cortex 侧 codebuddy 键由另一条线补，两边上线有先后：旧 JSON 不能整份判 invalid。
+        let json = """
+        {
+          "generated_at": "2026-09-14T12:00:00+08:00",
+          "channels": {
+            "grok": {"status": "alive", "evidence": "1 条在跑", "running": 1},
+            "codex": {"status": "alive", "evidence": "2 条在跑", "running": 2}
+          }
+        }
+        """
+        let snapshot = SentinelFileReader.parseChannelStatus(data: Data(json.utf8))
+
+        XCTAssertEqual(snapshot.codebuddy, .missing)
+        XCTAssertEqual(snapshot.codebuddy.status, .unknown)
+        XCTAssertNotEqual(snapshot.codebuddy.status, .degraded)
+        XCTAssertEqual(snapshot.grok.status, .alive)
+        XCTAssertEqual(snapshot.codex.status, .alive)
+        XCTAssertNotNil(snapshot.generatedAt)
+
+        let presentation = ChannelSectionPresentation(
+            grok: snapshot.grok,
+            codex: snapshot.codex,
+            codebuddy: snapshot.codebuddy,
+            liveCounts: EngineCounts(grok: 1, codex: 2)
+        )
+        XCTAssertEqual(presentation.codebuddy.itemText, "CodeBuddy 还没有记录")
+        // 还没有记录不是「不通」，不进问题行。
+        XCTAssertEqual(presentation.problemLines, [])
+        // 摘要没这个键时不摆条数，避免看着像通道已确认。
+        XCTAssertNil(presentation.codebuddy.countText)
+    }
+
+    // MARK: ox-alpha 下架
+
+    func testOxAlphaDataStillParsesButNeverRendersACard() {
+        // 2026-09-14 Falcon 令：ox-alpha 卡下架。磁盘摘要里的 claude-oxalpha 键
+        // 继续解析（历史 JSON 不能判 invalid），只是不再画成通道卡。
         let json = """
         {
           "generated_at": "2026-08-23T02:57:33+08:00",
@@ -256,59 +329,39 @@ final class ChannelSectionPresentationTests: XCTestCase {
         let presentation = ChannelSectionPresentation(
             grok: snapshot.grok,
             codex: snapshot.codex,
-            claudeOxAlpha: snapshot.claudeOxAlpha,
+            codebuddy: .missing,
             liveCounts: EngineCounts(grok: 0, codex: 1, claudeOxAlpha: 6)
         )
-        XCTAssertEqual(presentation.items.count, 3)
+        XCTAssertEqual(presentation.items.map(\.name), ["Codex", "CodeBuddy", "Grok"])
+        XCTAssertFalse(presentation.items.contains { $0.name == "ox-alpha" })
         XCTAssertEqual(
             presentation.render,
             ChannelSectionPresentation.Render(
-                primaryRow: ["Codex 通 1 条", "Grok 查不出", "ox-alpha 通 6 条"],
+                primaryRow: ["Codex 通 1 条", "CodeBuddy 还没有记录", "Grok 查不出"],
                 problemLines: []
             )
         )
-        XCTAssertEqual(
-            presentation.claudeOxAlpha.accessibilityIdentifier,
-            "channel-row-ox-alpha"
-        )
     }
 
-    func testChannelStatusWithoutThirdKeyKeepsOxAlphaCardAsMissingNotDegraded() {
-        // 本机 channel-status.json 此刻就是这个形状：只有 grok / codex 两键。
-        let json = """
-        {
-          "generated_at": "2026-08-23T02:57:33+08:00",
-          "channels": {
-            "grok": {"status": "alive", "evidence": "最近一次派工正常终态 done", "running": 0},
-            "codex": {"status": "alive", "evidence": "1 条在跑，57 条终态", "running": 1}
-          }
-        }
-        """
-        let snapshot = SentinelFileReader.parseChannelStatus(data: Data(json.utf8))
-
-        XCTAssertEqual(snapshot.claudeOxAlpha, .missing)
-        XCTAssertEqual(snapshot.claudeOxAlpha.status, .unknown)
-        XCTAssertNotEqual(snapshot.claudeOxAlpha.status, .degraded)
-        XCTAssertNotNil(snapshot.generatedAt)
-
+    func testOxAlphaCountsDoNotLeakIntoAnyChannelSlot() {
         let presentation = ChannelSectionPresentation(
-            grok: snapshot.grok,
-            codex: snapshot.codex,
-            claudeOxAlpha: snapshot.claudeOxAlpha,
-            liveCounts: EngineCounts(grok: 0, codex: 1, claudeOxAlpha: 3)
+            grok: .missing,
+            codex: .missing,
+            liveCounts: EngineCounts(claudeOxAlpha: 6)
         )
+        // ox-alpha 历史线计数留在快照里，但一张通道卡都不冒充。
         XCTAssertEqual(presentation.items.count, 3)
-        XCTAssertEqual(presentation.claudeOxAlpha.itemText, "ox-alpha 还没有记录")
-        // 还没有记录不是「不通」，不进问题行。
-        XCTAssertEqual(presentation.problemLines, [])
-        // 摘要没这个键时也不摆条数，避免看着像通道已确认。
-        XCTAssertNil(presentation.claudeOxAlpha.countText)
+        XCTAssertEqual(
+            presentation.render.primaryRow,
+            ["Codex 还没有记录", "CodeBuddy 还没有记录", "Grok 还没有记录"]
+        )
     }
 
-    func testInvalidChannelStatusMarksAllThreeChannelsUnreadable() {
+    func testInvalidChannelStatusMarksAllFourChannelsUnreadable() {
         let snapshot = SentinelFileReader.parseChannelStatus(data: Data("not json".utf8))
 
         XCTAssertEqual(snapshot, .invalid)
         XCTAssertEqual(snapshot.claudeOxAlpha.evidence, "文件读不出")
+        XCTAssertEqual(snapshot.codebuddy.evidence, "文件读不出")
     }
 }

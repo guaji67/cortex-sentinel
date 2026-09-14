@@ -300,7 +300,7 @@ enum CortexSentinelBarMain {
             "  Codex \(channelStatus.codex.statusText) · 文件running=\(channelStatus.codex.running.map(String.init) ?? "无") · 面板条数(本机)=\(liveChannelCounts.codex) · \(channelStatus.codex.evidence)"
         )
         print(
-            "  ox-alpha \(channelStatus.claudeOxAlpha.statusText) · 文件running=\(channelStatus.claudeOxAlpha.running.map(String.init) ?? "无") · 面板条数(本机)=\(liveChannelCounts.claudeOxAlpha) · \(channelStatus.claudeOxAlpha.evidence)"
+            "  CodeBuddy \(channelStatus.codebuddy.statusText) · 文件running=\(channelStatus.codebuddy.running.map(String.init) ?? "无") · 面板条数(本机)=\(liveChannelCounts.codebuddy) · \(channelStatus.codebuddy.evidence)"
         )
         print(
             "  活跃口径：本机 \(originCounts.local) · 外机 \(originCounts.remote) · 机器未知 \(originCounts.unknown)（通道行和标题只数本机）"
@@ -331,7 +331,7 @@ enum CortexSentinelBarMain {
         print("状态文件：读到 \(lines.count) 条线")
         let localActiveCounts = groups.localActiveEngineCounts(localHost: localHost)
         print(
-            "  活跃按引擎（本机）：Codex=\(localActiveCounts.codex) Grok=\(localActiveCounts.grok) ox-alpha=\(localActiveCounts.claudeOxAlpha) 其它=\(localActiveCounts.unknown)"
+            "  活跃按引擎（本机）：Codex=\(localActiveCounts.codex) CodeBuddy=\(localActiveCounts.codebuddy) Grok=\(localActiveCounts.grok) ox-alpha=\(localActiveCounts.claudeOxAlpha) 其它=\(localActiveCounts.unknown)"
         )
         if let packaging = PackagingProgressReader.read(at: paths.packagingProgressRoot) {
             print("打包进度：\(packaging.status.displayName) · \(packaging.stepTitle) · \(packaging.etaText)")
@@ -354,12 +354,12 @@ enum CortexSentinelBarMain {
         }
         print("  历史（分组全量）：\(groups.history.count)")
         print("看板窗口（使用者面板实际露出，不是分组全量）：")
-        print("  最近完成露出：\(board.recentShown.count)  Codex=\(board.recentCounts.codex) Grok=\(board.recentCounts.grok) ox-alpha=\(board.recentCounts.claudeOxAlpha)")
+        print("  最近完成露出：\(board.recentShown.count)  Codex=\(board.recentCounts.codex) CodeBuddy=\(board.recentCounts.codebuddy) Grok=\(board.recentCounts.grok) ox-alpha=\(board.recentCounts.claudeOxAlpha)")
         for item in board.recentShown {
             print("    - \(item.line.slug) → \(item.registration?.labelZH ?? "（无中文名）") [\(item.engine.displayName) · \(item.line.state.displayName) · \(item.hostOrigin(localHost: localHost).badgeText)]")
         }
-        print("  历史露出：\(board.historyShown.count)  Codex=\(board.historyCounts.codex) Grok=\(board.historyCounts.grok) ox-alpha=\(board.historyCounts.claudeOxAlpha)")
-        print("  历史隐藏：\(board.hiddenCount)  Codex=\(board.hiddenCounts.codex) Grok=\(board.hiddenCounts.grok) ox-alpha=\(board.hiddenCounts.claudeOxAlpha)")
+        print("  历史露出：\(board.historyShown.count)  Codex=\(board.historyCounts.codex) CodeBuddy=\(board.historyCounts.codebuddy) Grok=\(board.historyCounts.grok) ox-alpha=\(board.historyCounts.claudeOxAlpha)")
+        print("  历史隐藏：\(board.hiddenCount)  Codex=\(board.hiddenCounts.codex) CodeBuddy=\(board.hiddenCounts.codebuddy) Grok=\(board.hiddenCounts.grok) ox-alpha=\(board.hiddenCounts.claudeOxAlpha)")
         // 派工状态（套餐）：现场跑一轮。面板上认不出哪行是套餐的时候，排查看这行。
         print(await CortexPlanStatusDisplay.dumpStateLine(
             environment: ProcessInfo.processInfo.environment,

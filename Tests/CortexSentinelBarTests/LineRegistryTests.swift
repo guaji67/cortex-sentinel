@@ -74,6 +74,26 @@ final class LineRegistryTests: XCTestCase {
         )
     }
 
+    func testRegistryReadsCodeBuddyEngine() throws {
+        let data = Data(
+            """
+            [
+              {
+                "engine": "codebuddy",
+                "slug": "cb-line",
+                "label_zh": "CodeBuddy 派工",
+                "dispatcher_zh": "来源对话三",
+                "registered_at": 1784823993
+              }
+            ]
+            """.utf8
+        )
+
+        let registry = try XCTUnwrap(CodexLineRegistryReader.decode(data))
+
+        XCTAssertEqual(registry.registration(for: "cb-line")?.engine, .codeBuddy)
+    }
+
     /// COR-1504：本机线 / 外机线 / 无 host 的历史线。缺字段不许猜成本机，
     /// 通道行「N 条」只数本机；三条都还在列表里。
     func testHostFieldSplitsLocalRemoteAndUnknownWithoutGuessing() throws {
@@ -163,7 +183,7 @@ final class LineRegistryTests: XCTestCase {
                 codex: ChannelVerdict(status: .alive, evidence: "闲", running: 0),
                 liveCounts: groups.localActiveEngineCounts(localHost: localHost)
             ).render.primaryRow,
-            ["Codex 通 闲", "Grok 通 1 条"]
+            ["Codex 通 闲", "CodeBuddy 还没有记录", "Grok 通 1 条"]
         )
     }
 

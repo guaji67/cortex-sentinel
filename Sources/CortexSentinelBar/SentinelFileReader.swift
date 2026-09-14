@@ -355,6 +355,7 @@ enum SentinelFileReader {
         ("codex-babysitter-", .codex),
         ("grok-", .cursorGrok),
         ("claude-oxalpha-", .claudeOxAlpha),
+        ("codebuddy-", .codeBuddy),
     ]
     private static let statusSuffix = ".status.json"
 

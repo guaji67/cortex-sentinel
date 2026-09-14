@@ -77,6 +77,48 @@ final class SentinelFileReaderTests: XCTestCase {
         XCTAssertFalse(line.reportsCodexChannelTelemetry)
     }
 
+    func testDiscoversAndParsesCodeBuddyStatusContract() throws {
+        let fileManager = FileManager.default
+        let logsDirectory = fileManager.temporaryDirectory.appendingPathComponent(
+            "CortexSentinelCodeBuddy-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(at: logsDirectory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: logsDirectory) }
+
+        try Data(
+            #"{"engine":"codebuddy","slug":"x","state":"running","updated_at":"2026-09-14T12:00:00+08:00"}"#.utf8
+        ).write(to: logsDirectory.appendingPathComponent("codebuddy-x.status.json"))
+
+        let lines = SentinelFileReader.readLines(in: logsDirectory)
+        let line = try XCTUnwrap(lines.first)
+
+        XCTAssertEqual(lines.count, 1)
+        XCTAssertEqual(line.slug, "x")
+        XCTAssertEqual(line.engine, .codeBuddy)
+        XCTAssertEqual(line.engine.displayName, "CodeBuddy")
+        XCTAssertEqual(line.engine.ackChannel, "codebuddy")
+        XCTAssertEqual(line.state, .running)
+        XCTAssertNotNil(line.updatedAt)
+    }
+
+    func testUnrecognizedPrefixStatusFileIsStillNotListed() throws {
+        let fileManager = FileManager.default
+        let logsDirectory = fileManager.temporaryDirectory.appendingPathComponent(
+            "CortexSentinelUnknownPrefix-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(at: logsDirectory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: logsDirectory) }
+
+        // 前缀表是闭集：认不出的前缀照旧不列，不能因为加了 codebuddy 就放开。
+        try Data(#"{"engine":"codebuddy","slug":"foo-x","state":"running"}"#.utf8).write(
+            to: logsDirectory.appendingPathComponent("foo-x.status.json")
+        )
+
+        XCTAssertTrue(SentinelFileReader.readLines(in: logsDirectory).isEmpty)
+    }
+
     func testClaudeOxAlphaFallbackSlugAndEngineComeFromFileNamePrefix() throws {
         let fileManager = FileManager.default
         let logsDirectory = fileManager.temporaryDirectory.appendingPathComponent(

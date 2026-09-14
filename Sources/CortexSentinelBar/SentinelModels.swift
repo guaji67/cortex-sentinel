@@ -348,6 +348,8 @@ enum LineEngine: Equatable, Sendable {
     /// ox-alpha 派工线（`scripts/oxalpha_dispatch.py`）。状态文件里 engine 字段写的是
     /// `claude`，通道/认领口径用的是 `claude-oxalpha`，两个 rawValue 都要认。
     case claudeOxAlpha
+    /// 本机派工线（`scripts/codebuddy_dispatch.py`）。状态文件里 engine 字段写的是 `codebuddy`。
+    case codeBuddy
     case unknown(String)
 
     init(rawValue: String?) {
@@ -367,6 +369,8 @@ enum LineEngine: Equatable, Sendable {
             self = .cursorGrok
         case "claude", "claude-oxalpha":
             self = .claudeOxAlpha
+        case "codebuddy":
+            self = .codeBuddy
         default:
             self = .unknown(normalized)
         }
@@ -380,6 +384,8 @@ enum LineEngine: Equatable, Sendable {
             return "Grok"
         case .claudeOxAlpha:
             return "ox-alpha"
+        case .codeBuddy:
+            return "CodeBuddy"
         case let .unknown(rawValue):
             return rawValue
         }
@@ -397,6 +403,8 @@ enum LineEngine: Equatable, Sendable {
             return "grok"
         case .claudeOxAlpha:
             return "claude-oxalpha"
+        case .codeBuddy:
+            return "codebuddy"
         case let .unknown(rawValue):
             return rawValue
         }

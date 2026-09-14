@@ -150,6 +150,9 @@ struct EngineCounts: Equatable {
                 codex += 1
             case .claudeOxAlpha:
                 claudeOxAlpha += 1
+            case .codeBuddy:
+                // 没有专属通道行，计入「其它」，不冒充 Grok 通道条数。
+                unknown += 1
             case .unknown:
                 unknown += 1
             }

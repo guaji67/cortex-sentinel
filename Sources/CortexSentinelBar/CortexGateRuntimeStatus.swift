@@ -222,9 +222,13 @@ enum CortexGateRuntimeStatusDisplay {
         }
         // 读到了：text_zh 直接用脚本给的那句，哨兵不自己拼判断。
         let conclusion = Self.conclusionText(of: payload)
+        // behind 是热仓库的常态：刷新机制健康、只是 main 又前进了，按提醒色画
+        // 这行就常黄（Falcon 2026-09-15 令：不当提醒）。真失败（没装 / 刷新
+        // 失败 / 仓或环境缺失 / 读不到）仍亮提醒色。
+        let isCalmState = payload.state == "ok" || payload.state == "behind"
         return RowLine(
             text: "派工路由：\(conclusion)（\(clockText(fetchedAt))）",
-            isWarning: !payload.stateIsOK
+            isWarning: !isCalmState
         )
     }
 

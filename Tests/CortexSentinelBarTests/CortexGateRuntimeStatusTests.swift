@@ -364,7 +364,7 @@ final class CortexGateRuntimeStatusTests: XCTestCase {
         )
     }
 
-    /// 面板行：读到了 → text_zh 原样上屏 + 读取时刻；ok 普通色，其余态提醒色。
+    /// 面板行：读到了 → text_zh 原样上屏 + 读取时刻；ok 与 behind 普通色，其余态提醒色。
     func testRowLineShowsScriptSentenceVerbatim() throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let fetchedAt = now.addingTimeInterval(-5 * 60)
@@ -387,7 +387,14 @@ final class CortexGateRuntimeStatusTests: XCTestCase {
             now: now
         )
         XCTAssertEqual(behindRow?.text, "派工路由：落后 3 个提交，已自动补（\(CortexGateRuntimeStatusDisplay.clockText(fetchedAt))）")
-        XCTAssertEqual(behindRow?.isWarning, true, "非 ok 用提醒色")
+        XCTAssertEqual(behindRow?.isWarning, false, "behind 是热仓库常态，不当提醒")
+
+        let refreshFailedPayload = try Self.decode(state: "refresh_failed", textZH: "更新失败：fetch 挂了")
+        let refreshFailedRow = CortexGateRuntimeStatusDisplay.rowLine(
+            state(payload: refreshFailedPayload, fetchedAt: fetchedAt, failureText: nil),
+            now: now
+        )
+        XCTAssertEqual(refreshFailedRow?.isWarning, true, "真失败仍亮提醒色")
     }
 
     /// 面板行：最近一轮失败 → HH:MM 这次没读到（原因）；从没成功过也一样。

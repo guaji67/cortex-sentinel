@@ -1,6 +1,113 @@
 import AppKit
 import SwiftUI
 
+/// 机器分级候选流（Falcon 09-18 令）：机器胶囊 tab 动态生成（含「全部」）；
+/// 全部态每台只亮一个首选执行者；点某台展开该台全部执行者胶囊。
+struct RouteMachinePickerView: View {
+    let card: CortexRoutePreviewDisplay.RouteCard
+
+    @State private var selection: String?
+
+    private var groups: [CortexRoutePreviewDisplay.RouteCard.MachineGroup] {
+        card.machineGroups
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            if groups.count <= 1 {
+                chipsFlow(card.chips)
+            } else {
+                machineTabs
+                if let selected = selection, let group = groups.first(where: { $0.machine == selected }) {
+                    chipsFlow(group.chips)
+                } else {
+                    overviewRows
+                }
+            }
+        }
+    }
+
+    /// 机器 tab：全部 + 各机器（动态）。
+    private var machineTabs: some View {
+        HStack(spacing: 4) {
+            tabChip("全部", selected: selection == nil) {
+                selection = nil
+            }
+            ForEach(groups, id: \.machine) { group in
+                tabChip("\(group.machine) · \(group.chips.count)", selected: selection == group.machine) {
+                    selection = selection == group.machine ? nil : group.machine
+                }
+            }
+        }
+    }
+
+    private func tabChip(_ text: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(text)
+                .font(SentinelTheme.Fonts.metadata)
+                .lineLimit(1)
+                .foregroundStyle(selected ? SentinelTheme.Colors.primary : SentinelTheme.Colors.secondaryForeground)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(selected ? SentinelTheme.Colors.primary.opacity(0.16) : SentinelTheme.Colors.inset))
+                .overlay(Capsule().stroke(selected ? SentinelTheme.Colors.primary.opacity(0.5) : SentinelTheme.Colors.borderSoft, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// 全部态：每台机器一行，只亮首选（第一个非暂停的，否则第一个）。
+    private var overviewRows: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(groups, id: \.machine) { group in
+                HStack(spacing: 5) {
+                    Text(group.machine)
+                        .font(SentinelTheme.Fonts.metadata)
+                        .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                        .frame(width: 44, alignment: .leading)
+                    let primary = group.chips.first(where: { !$0.paused }) ?? group.chips.first
+                    if let chip = primary {
+                        // 概览行机器名已在本行行首，chip 文本里重复的机器括号剥掉。
+                        let suffix = " (\(group.machine))"
+                        let shown = chip.paused
+                            ? "\(chip.text)（暂停）"
+                            : (chip.text.hasSuffix(suffix) ? String(chip.text.dropLast(suffix.count)) : chip.text)
+                        Text(shown)
+                            .font(SentinelTheme.Fonts.metadata)
+                            .lineLimit(1)
+                            .foregroundStyle(chip.paused ? SentinelTheme.Colors.secondaryForeground : SentinelTheme.Colors.foreground)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Capsule().fill(SentinelTheme.Colors.inset))
+                            .overlay(Capsule().stroke(SentinelTheme.Colors.borderSoft, lineWidth: 1))
+                    }
+                    if group.chips.count > 1 {
+                        Text("+\(group.chips.count - 1)")
+                            .font(SentinelTheme.Fonts.metadata)
+                            .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+    }
+
+    private func chipsFlow(_ chips: [CortexRoutePreviewDisplay.RouteChip]) -> some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 118), spacing: 4)], alignment: .leading, spacing: 4) {
+            ForEach(Array(chips.enumerated()), id: \.offset) { _, chip in
+                Text(chip.paused ? "\(chip.text)（暂停）" : chip.text)
+                    .font(SentinelTheme.Fonts.metadata)
+                    .lineLimit(1)
+                    .foregroundStyle(chip.paused ? SentinelTheme.Colors.secondaryForeground : SentinelTheme.Colors.foreground)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Capsule().fill(SentinelTheme.Colors.inset))
+                    .overlay(Capsule().stroke(SentinelTheme.Colors.borderSoft, lineWidth: 1))
+            }
+        }
+    }
+}
+
 /// 面板的分区视图。2026-08-24 从单个 1798 行的 SentinelMenuView body 拆出来：
 /// 每个分区是独立 View struct，只读自己需要的 store 属性。@Observable 按
 /// 「谁读了什么」决定失效范围——余额回来只重算余额分区，线列表分区在
@@ -1290,7 +1397,7 @@ struct SentinelBalancesSection: View {
                         .foregroundStyle(SentinelTheme.Colors.foreground)
                     Spacer(minLength: 0)
                     windowBadge(active: payload?.freeWindow?.active ?? false,
-                                clock: payload?.freeWindow?.beijingTime ?? "")
+                                clock: "")
                 }
                 ForEach(Array(cards.enumerated()), id: \.offset) { _, card in
                     routeCardView(card)
@@ -1301,7 +1408,7 @@ struct SentinelBalancesSection: View {
 
     /// 窗态胶囊徽标：免费窗中（绿） / 窗外（灰）。
     private func windowBadge(active: Bool, clock: String) -> some View {
-        Text(active ? "免费窗中 \(clock)" : "窗外 \(clock)")
+        Text(active ? "ZCode 免费窗" : "窗外")
             .font(SentinelTheme.Fonts.metadata)
             .foregroundStyle(active ? SentinelTheme.Colors.success : SentinelTheme.Colors.secondaryForeground)
             .padding(.horizontal, 7)
@@ -1329,8 +1436,8 @@ struct SentinelBalancesSection: View {
                         .foregroundStyle(SentinelTheme.Colors.foreground)
                         .lineLimit(1)
                 }
-            } else {
-                chipsFlow(card.chips)
+            } else if !card.chips.isEmpty {
+                machineGroupFlow(card)
             }
         }
         .padding(.horizontal, 9)
@@ -1344,21 +1451,10 @@ struct SentinelBalancesSection: View {
         )
     }
 
-    /// 胶囊流：一行排不下自动折行。
-    private func chipsFlow(_ chips: [CortexRoutePreviewDisplay.RouteChip]) -> some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 118), spacing: 4)], alignment: .leading, spacing: 4) {
-            ForEach(Array(chips.enumerated()), id: \.offset) { _, chip in
-                Text(chip.paused ? "\(chip.text)（暂停）" : chip.text)
-                    .font(SentinelTheme.Fonts.metadata)
-                    .lineLimit(1)
-                    .foregroundStyle(chip.paused ? SentinelTheme.Colors.secondaryForeground : SentinelTheme.Colors.foreground)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Capsule().fill(SentinelTheme.Colors.inset))
-                    .overlay(Capsule().stroke(SentinelTheme.Colors.borderSoft, lineWidth: 1))
-            }
-        }
+    /// 机器分级候选：机器胶囊 tab（动态，含「全部」），选中哪台就展开哪台的执行者；
+    /// 「全部」态每台只亮一个首选（第一个可用的）执行者，不铺满。
+    private func machineGroupFlow(_ card: CortexRoutePreviewDisplay.RouteCard) -> some View {
+        RouteMachinePickerView(card: card)
     }
 
     /// 三机总览：图形卡（CPU / 内存 / swap 迷你条，槽位点阵，压力色点）。
@@ -1367,7 +1463,7 @@ struct SentinelBalancesSection: View {
         if let payload, !payload.machines.isEmpty {
             VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xs) {
                 HStack(alignment: .center, spacing: SentinelTheme.Spacing.xs) {
-                    Text("三机总览")
+                    Text("机器总览")
                         .font(SentinelTheme.Fonts.balanceMeta)
                         .foregroundStyle(SentinelTheme.Colors.foreground)
                     Spacer(minLength: 0)
@@ -2933,3 +3029,4 @@ struct SentinelCommandCodeKeyPanel: View {
         onClose()
     }
 }
+

@@ -3,7 +3,7 @@ import Foundation
 /// 智谱 GLM Coding Plan 订阅额度。
 /// 端点是智谱没写进文档、社区通用的账务接口（ClaudePanel 用的同一条）：
 /// GET https://open.bigmodel.cn/api/monitor/usage/quota/limit，Bearer key。
-/// 返回 data.limits[] 两个 CREDIT_LIMIT 窗：5 小时滚动（unit=3, number=5）和
+/// 返回 data.limits[] 两个订阅窗：5 小时滚动（unit=3, number=5）和
 /// 周（unit=6, number=1），percentage 是已用百分比，usage 总积分，
 /// currentValue 已用积分，nextResetTime 毫秒时间戳。只查账务不烧对话额度。
 struct GLMUsageWindow: Equatable, Sendable {
@@ -334,7 +334,12 @@ struct GLMUsageClient: Sendable {
         else {
             throw GLMUsageClientError.invalidResponse
         }
-        let credits = limits.filter { $0.type == nil || $0.type == "CREDIT_LIMIT" }
+        // 订阅窗有两种 type：老形状 CREDIT_LIMIT（2026-09-04 抓的），TOKENS_LIMIT
+        // （2026-09-16 睿动 pro 号实抓，unit 编号与字段同形状）。TIME_LIMIT 是
+        // MCP 工具包额度，不是套餐窗，继续排除。
+        let credits = limits.filter {
+            $0.type == nil || $0.type == "CREDIT_LIMIT" || $0.type == "TOKENS_LIMIT"
+        }
         guard !credits.isEmpty else {
             // key 有效但账号没有积分窗（Coding Plan 体验卡到期就是这样，
             // 只剩 MCP 包的 TIME_LIMIT）：不算格式变化，如实返回无积分窗。

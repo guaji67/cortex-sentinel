@@ -44,13 +44,13 @@ struct RouteMachinePickerView: View {
     private func tabChip(_ text: String, selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(text)
-                .font(SentinelTheme.Fonts.metadata)
+                .font(SentinelTheme.Fonts.balanceName)
                 .lineLimit(1)
                 .foregroundStyle(selected ? SentinelTheme.Colors.primary : SentinelTheme.Colors.secondaryForeground)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(Capsule().fill(selected ? SentinelTheme.Colors.primary.opacity(0.16) : SentinelTheme.Colors.inset))
-                .overlay(Capsule().stroke(selected ? SentinelTheme.Colors.primary.opacity(0.5) : SentinelTheme.Colors.borderSoft, lineWidth: 1))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(Capsule().fill(selected ? SentinelTheme.Colors.primary.opacity(0.2) : SentinelTheme.Colors.inset))
+                .overlay(Capsule().stroke(selected ? SentinelTheme.Colors.primary.opacity(0.6) : SentinelTheme.Colors.border, lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
@@ -72,13 +72,13 @@ struct RouteMachinePickerView: View {
                             ? "\(chip.text)（暂停）"
                             : (chip.text.hasSuffix(suffix) ? String(chip.text.dropLast(suffix.count)) : chip.text)
                         Text(shown)
-                            .font(SentinelTheme.Fonts.metadata)
+                            .font(SentinelTheme.Fonts.balanceName)
                             .lineLimit(1)
                             .foregroundStyle(chip.paused ? SentinelTheme.Colors.secondaryForeground : SentinelTheme.Colors.foreground)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
-                            .background(Capsule().fill(SentinelTheme.Colors.inset))
-                            .overlay(Capsule().stroke(SentinelTheme.Colors.borderSoft, lineWidth: 1))
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 4)
+                            .background(Capsule().fill(chip.paused ? SentinelTheme.Colors.inset : SentinelTheme.Colors.success.opacity(0.12)))
+                            .overlay(Capsule().stroke(chip.paused ? SentinelTheme.Colors.borderSoft : SentinelTheme.Colors.success.opacity(0.3), lineWidth: 1))
                     }
                     if group.chips.count > 1 {
                         Text("+\(group.chips.count - 1)")
@@ -95,14 +95,14 @@ struct RouteMachinePickerView: View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 118), spacing: 4)], alignment: .leading, spacing: 4) {
             ForEach(Array(chips.enumerated()), id: \.offset) { _, chip in
                 Text(chip.paused ? "\(chip.text)（暂停）" : chip.text)
-                    .font(SentinelTheme.Fonts.metadata)
+                    .font(SentinelTheme.Fonts.balanceName)
                     .lineLimit(1)
                     .foregroundStyle(chip.paused ? SentinelTheme.Colors.secondaryForeground : SentinelTheme.Colors.foreground)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Capsule().fill(SentinelTheme.Colors.inset))
-                    .overlay(Capsule().stroke(SentinelTheme.Colors.borderSoft, lineWidth: 1))
+                    .background(Capsule().fill(chip.paused ? SentinelTheme.Colors.inset : SentinelTheme.Colors.success.opacity(0.12)))
+                    .overlay(Capsule().stroke(chip.paused ? SentinelTheme.Colors.borderSoft : SentinelTheme.Colors.success.opacity(0.3), lineWidth: 1))
             }
         }
     }
@@ -887,15 +887,15 @@ struct SentinelBalancesSection: View {
             glmUsageRows
                 .zIndex(branchesWithHoverCard.contains("glm") ? 1 : 0)
 
+            cursorUsageRow
+
+            officialUsageRow
+
             gateRuntimeStatusRow
 
             routePreviewSection
 
             telemetrySummarySection
-
-            cursorUsageRow
-
-            officialUsageRow
 
             switch store.aio.sourceState {
             case .unconfigured, .invalid:
@@ -1390,10 +1390,10 @@ struct SentinelBalancesSection: View {
                     .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
             }
         } else {
-            VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xs) {
-                HStack(alignment: .center, spacing: SentinelTheme.Spacing.xs) {
+            VStack(alignment: .leading, spacing: SentinelTheme.Spacing.sm) {
+                HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
                     Text("派工预案")
-                        .font(SentinelTheme.Fonts.balanceMeta)
+                        .font(SentinelTheme.Fonts.rowTitle)
                         .foregroundStyle(SentinelTheme.Colors.foreground)
                     Spacer(minLength: 0)
                     windowBadge(active: payload?.freeWindow?.active ?? false,
@@ -1409,30 +1409,30 @@ struct SentinelBalancesSection: View {
     /// 窗态胶囊徽标：免费窗中（绿） / 窗外（灰）。
     private func windowBadge(active: Bool, clock: String) -> some View {
         Text(active ? "ZCode 免费窗" : "窗外")
-            .font(SentinelTheme.Fonts.metadata)
+            .font(SentinelTheme.Fonts.balanceName)
             .foregroundStyle(active ? SentinelTheme.Colors.success : SentinelTheme.Colors.secondaryForeground)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 2)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 3)
             .background(
                 Capsule().fill(
-                    (active ? SentinelTheme.Colors.success : SentinelTheme.Colors.secondaryForeground).opacity(0.14)
+                    (active ? SentinelTheme.Colors.success : SentinelTheme.Colors.secondaryForeground).opacity(0.16)
                 )
             )
     }
 
     /// 预案小卡：单出口画绿点 + 目标；候选卡画胶囊 chips（paused 灰）。
     private func routeCardView(_ card: CortexRoutePreviewDisplay.RouteCard) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             Text(card.title)
-                .font(SentinelTheme.Fonts.metadata)
+                .font(SentinelTheme.Fonts.balanceName)
                 .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
             if card.chips.isEmpty {
-                HStack(spacing: 5) {
+                HStack(spacing: 6) {
                     Circle()
                         .fill(SentinelTheme.Colors.success)
-                        .frame(width: 6, height: 6)
+                        .frame(width: 7, height: 7)
                     Text(card.target)
-                        .font(SentinelTheme.Fonts.balanceMeta)
+                        .font(SentinelTheme.Fonts.balanceName)
                         .foregroundStyle(SentinelTheme.Colors.foreground)
                         .lineLimit(1)
                 }
@@ -1440,8 +1440,8 @@ struct SentinelBalancesSection: View {
                 machineGroupFlow(card)
             }
         }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 7)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(SentinelTheme.Colors.raised)
         .clipShape(RoundedRectangle(cornerRadius: SentinelTheme.Radius.field))
@@ -1461,19 +1461,19 @@ struct SentinelBalancesSection: View {
     @ViewBuilder private var telemetrySummarySection: some View {
         let payload = store.telemetrySummary?.payload
         if let payload, !payload.machines.isEmpty {
-            VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xs) {
-                HStack(alignment: .center, spacing: SentinelTheme.Spacing.xs) {
+            VStack(alignment: .leading, spacing: SentinelTheme.Spacing.sm) {
+                HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
                     Text("机器总览")
-                        .font(SentinelTheme.Fonts.balanceMeta)
+                        .font(SentinelTheme.Fonts.rowTitle)
                         .foregroundStyle(SentinelTheme.Colors.foreground)
                     Spacer(minLength: 0)
                     if let working = payload.multica?.working {
                         Text("Multica 在跑 \(working)")
-                            .font(SentinelTheme.Fonts.metadata)
+                            .font(SentinelTheme.Fonts.balanceName)
                             .foregroundStyle(SentinelTheme.Colors.info)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 2)
-                            .background(Capsule().fill(SentinelTheme.Colors.info.opacity(0.14)))
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 3)
+                            .background(Capsule().fill(SentinelTheme.Colors.info.opacity(0.16)))
                     }
                 }
                 ForEach(Array(payload.machines.enumerated()), id: \.offset) { _, machine in
@@ -1492,33 +1492,34 @@ struct SentinelBalancesSection: View {
 
     /// 单台机器图形卡。
     private func machineCard(_ machine: CortexTelemetrySummaryPayload.Machine) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
                 Text(machineName(machine))
-                    .font(SentinelTheme.Fonts.balanceMeta)
+                    .font(SentinelTheme.Fonts.balanceName)
                     .foregroundStyle(SentinelTheme.Colors.foreground)
                 miniGauge(value: machine.cpuPct, label: "CPU")
                 miniGauge(value: machine.memUsedPct ?? machine.memFreePct.map { 100 - $0 },
                           label: machine.memUsedPct != nil ? "内存" : "内存余")
+            }
+            HStack(spacing: 12) {
+                if let swap = machine.swap {
+                    Text(swapText(swap))
+                        .font(SentinelTheme.Fonts.balanceName)
+                        .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                }
+                slotDots(machine.devSlots)
                 Spacer(minLength: 0)
+                lineBadge(machine.linesByModel)
                 pressureDot(machine.pressureLevel)
             }
-            HStack(spacing: 8) {
-                if let swap = machine.swap {
-                    swapGauge(swap)
-                }
-                Spacer(minLength: 0)
-                slotDots(machine.devSlots)
-                lineBadge(machine.linesByModel)
-            }
         }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 7)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
         .background(SentinelTheme.Colors.raised)
         .clipShape(RoundedRectangle(cornerRadius: SentinelTheme.Radius.field))
         .overlay(
             RoundedRectangle(cornerRadius: SentinelTheme.Radius.field)
-                .stroke(SentinelTheme.Colors.borderSoft, lineWidth: 1)
+                .stroke(SentinelTheme.Colors.border, lineWidth: 1)
         )
     }
 
@@ -1536,7 +1537,7 @@ struct SentinelBalancesSection: View {
             ?? SentinelTheme.Colors.inset
         return HStack(spacing: 4) {
             Text(label)
-                .font(SentinelTheme.Fonts.metadata)
+                .font(SentinelTheme.Fonts.balanceName)
                 .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
@@ -1544,11 +1545,19 @@ struct SentinelBalancesSection: View {
                     Capsule().fill(color).frame(width: geo.size.width * fraction)
                 }
             }
-            .frame(width: 40, height: 5)
+            .frame(width: 46, height: 6)
             Text(value.map { "\(Int($0.rounded()))%" } ?? "–")
-                .font(SentinelTheme.Fonts.metadata)
+                .font(SentinelTheme.Fonts.balanceName)
+                .fixedSize()
                 .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
         }
+    }
+
+    /// swap 短文本「1000M/2G」：慢变量不画条（Falcon 09-18 令视觉精简）。
+    private func swapText(_ swap: CortexTelemetrySummaryPayload.Swap) -> String {
+        let used = swap.used ?? "–"
+        let total = swap.total.map { "/" + $0 } ?? ""
+        return "swap \(used)\(total)"
     }
 
     private func swapGauge(_ swap: CortexTelemetrySummaryPayload.Swap) -> some View {
@@ -1558,7 +1567,7 @@ struct SentinelBalancesSection: View {
         let color = fraction < 0.6 ? SentinelTheme.Colors.success : (fraction < 0.85 ? SentinelTheme.Colors.warning : SentinelTheme.Colors.danger)
         return HStack(spacing: 4) {
             Text("swap")
-                .font(SentinelTheme.Fonts.metadata)
+                .font(SentinelTheme.Fonts.balanceName)
                 .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
@@ -1566,10 +1575,11 @@ struct SentinelBalancesSection: View {
                     Capsule().fill(color).frame(width: geo.size.width * fraction)
                 }
             }
-            .frame(width: 40, height: 5)
+            .frame(width: 46, height: 6)
             if let used = swap.used {
                 Text(used)
-                    .font(SentinelTheme.Fonts.metadata)
+                    .font(SentinelTheme.Fonts.balanceName)
+                    .fixedSize()
                     .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
             }
         }
@@ -1591,7 +1601,7 @@ struct SentinelBalancesSection: View {
     private func slotDots(_ slots: CortexTelemetrySummaryPayload.DevSlots?) -> some View {
         HStack(spacing: 3) {
             Text("槽")
-                .font(SentinelTheme.Fonts.metadata)
+                .font(SentinelTheme.Fonts.balanceName)
                 .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
             if let cap = slots?.cap {
                 let used = slots?.used ?? 0
@@ -1602,7 +1612,7 @@ struct SentinelBalancesSection: View {
                         .frame(width: 7, height: 7)
                 }
                 Text("\(slots?.used ?? 0)/\(cap)")
-                    .font(SentinelTheme.Fonts.metadata)
+                    .font(SentinelTheme.Fonts.balanceName)
                     .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
             }
         }
@@ -1611,7 +1621,7 @@ struct SentinelBalancesSection: View {
     private func lineBadge(_ lines: [String: Int]?) -> some View {
         let total = (lines ?? [:]).values.reduce(0, +)
         return Text("本机线 \(total)")
-            .font(SentinelTheme.Fonts.metadata)
+            .font(SentinelTheme.Fonts.balanceName)
             .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
     }
 
@@ -1620,9 +1630,9 @@ struct SentinelBalancesSection: View {
             Circle()
                 .fill(level.map { $0 == 1 ? SentinelTheme.Colors.success : ($0 == 2 ? SentinelTheme.Colors.warning : SentinelTheme.Colors.danger) }
                     ?? SentinelTheme.Colors.inset)
-                .frame(width: 6, height: 6)
+                .frame(width: 7, height: 7)
             Text(level == 2 ? "压力警告" : (level == 4 ? "压力危急" : "压力正常"))
-                .font(SentinelTheme.Fonts.metadata)
+                .font(SentinelTheme.Fonts.balanceName)
                 .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
         }
     }

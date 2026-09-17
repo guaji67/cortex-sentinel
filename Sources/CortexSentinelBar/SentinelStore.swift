@@ -34,6 +34,9 @@ final class SentinelStore {
     /// 派工路由状态（哨兵每轮确保路由最新），cortex 仓脚本算好这边只显示；
     /// 跟套餐状态同一轮触发，失败时按新鲜度保留上一份。
     private(set) var gateRuntimeStatus: CortexGateRuntimeStatusDisplayState?
+    /// 派工路由预案（此刻生效的派工顺序，纯展示不调节），cortex 仓路由表算好；
+    /// 与派工路由状态同一轮触发，失败时保留上一份。
+    private(set) var routePreview: CortexRoutePreviewDisplayState?
     /// Command Code 订阅额度（5h / 周 / 月）；每把 key 一行，跟随官方额度同一套刷新时机。
     private(set) var commandCodeUsage: CommandCodeUsageSnapshot = .empty
     /// 生效的 Command Code key 数。余额区引导行的显隐读它（tracked），
@@ -85,6 +88,8 @@ final class SentinelStore {
     @ObservationIgnored private var glmPlanStatusFetchInFlight = false
     /// 派工路由取数并发闸：同一时间最多一个在跑。
     @ObservationIgnored private var gateRuntimeStatusFetchInFlight = false
+    /// 派工预案取数并发闸：同一时间最多一个在跑。
+    @ObservationIgnored private var routePreviewFetchInFlight = false
     /// 当前生效的 GLM key（自动识别 ∪ 用户添加 − 用户删除）。
     @ObservationIgnored private var glmKeyEntries: [GLMKeyEntry] = []
     @ObservationIgnored private var commandCodeFetchInFlight = false
@@ -821,6 +826,7 @@ final class SentinelStore {
             self.publishGLMUsage(merged)
             self.refreshGLMPlanStatus(entries: entries, snapshot: merged)
             self.refreshGateRuntimeStatus()
+            self.refreshRoutePreview()
         }
     }
 
@@ -902,6 +908,49 @@ final class SentinelStore {
             }
             self.gateRuntimeStatusFetchInFlight = false
             self.applyGateRuntimeStatus(outcome, at: self.now())
+        }
+    }
+
+    /// 派工预案：与派工路由状态同一套形状（并发闸 + 失败留旧）。
+    private func refreshRoutePreview() {
+        guard !routePreviewFetchInFlight else {
+            return
+        }
+        routePreviewFetchInFlight = true
+        let environment = self.environment
+        let watchDirectory = self.paths.logsDirectory
+        let fallbackRepositoryRoot = self.paths.repositoryRoot
+        let homeDirectory = FileManager.default.homeDirectoryForCurrentUser.path
+        Task { @MainActor [weak self] in
+            let outcome = await Task.detached(priority: .utility) {
+                await CortexRoutePreviewFetcher.fetch(
+                    environment: environment,
+                    watchDirectory: watchDirectory,
+                    fallbackRepositoryRoot: fallbackRepositoryRoot,
+                    homeDirectory: homeDirectory,
+                    runner: CortexProcessSubprocessRunner()
+                )
+            }.value
+            guard let self else {
+                return
+            }
+            self.routePreviewFetchInFlight = false
+            switch outcome {
+            case let .success(payload):
+                self.routePreview = CortexRoutePreviewDisplayState(
+                    payload: payload,
+                    fetchedAt: self.now(),
+                    failureText: nil,
+                    failureAt: nil
+                )
+            case let .failure(reason):
+                self.routePreview = CortexRoutePreviewDisplayState(
+                    payload: self.routePreview?.payload,
+                    fetchedAt: self.routePreview?.fetchedAt,
+                    failureText: reason,
+                    failureAt: self.now()
+                )
+            }
         }
     }
 

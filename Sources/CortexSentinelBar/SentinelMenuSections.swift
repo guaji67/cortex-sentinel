@@ -1486,7 +1486,11 @@ struct SentinelBalancesSection: View {
                             .padding(.horizontal, 9)
                             .padding(.vertical, 3)
                             .background(Capsule().fill(SentinelTheme.Colors.info.opacity(0.16)))
-                            .help(multicaWorkingNames(payload))
+                            .contentShape(Rectangle())
+                            .modifier(HoverDetailCard(
+                                makeContent: { self.multicaHoverContent(payload) },
+                                branchID: "multica"
+                            ))
                     }
                 }
                 ForEach(Array(machines.enumerated()), id: \.offset) { _, machine in
@@ -1509,12 +1513,23 @@ struct SentinelBalancesSection: View {
     }
 
     /// Multica 徽标悬停：在跑的是哪几个执行者（Falcon 09-18 令：7 条要能看出是哪 7 条）。
-    private func multicaWorkingNames(_ payload: CortexTelemetrySummaryPayload?) -> String {
+    /// 弹层里系统 tooltip 不可靠，走自绘 HoverDetailCard（仓规同余额区）。
+    private func multicaHoverContent(_ payload: CortexTelemetrySummaryPayload?) -> BalanceHoverContent {
         let names = payload?.multica?.workingNames ?? []
+        let working = payload?.multica?.working ?? 0
         guard !names.isEmpty else {
-            return "Multica 没返回在跑名单"
+            return BalanceHoverContent(
+                title: "Multica 在跑 \(working)",
+                subtitle: "Multica 工作区",
+                lines: [],
+                footer: "Multica 没返回在跑名单"
+            )
         }
-        return "在跑：\(names.joined(separator: "、"))"
+        return BalanceHoverContent(
+            title: "Multica 在跑 \(working)",
+            subtitle: "Multica 工作区",
+            lines: names.map { BalanceHoverLine(label: $0, value: "在跑", note: nil, noteColor: nil) }
+        )
     }
 
     /// 认不到 cortex 仓时的安静指引（新装机器常见）：一句话 + 去设置，不弹窗不闪红。
@@ -1674,7 +1689,6 @@ struct SentinelBalancesSection: View {
                     .foregroundStyle(level == 4 ? SentinelTheme.Colors.danger : SentinelTheme.Colors.warning)
             }
         }
-        .help(level.map { "内存压力等级 \($0)（1 正常 / 2 警告 / 4 危急）" } ?? "内存压力未知")
     }
 
     /// 智谱 GLM Coding Plan 额度：每把 key 一行（5 小时窗 + 周窗两组剩余百分比），

@@ -784,6 +784,8 @@ struct SentinelBalancesSection: View {
 
             routePreviewSection
 
+            telemetrySummarySection
+
             cursorUsageRow
 
             officialUsageRow
@@ -1280,6 +1282,23 @@ struct SentinelBalancesSection: View {
                         .font(SentinelTheme.Fonts.balanceMeta)
                         .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
                         .lineLimit(3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityLabel(line)
+                }
+            }
+        }
+    }
+
+    /// 三机总览：跨机遥测 KV 汇总（各机哨兵 10 分钟一轮上报，纯展示）。
+    @ViewBuilder private var telemetrySummarySection: some View {
+        let rows = CortexTelemetrySummaryDisplay.rows(store.telemetrySummary, now: Date())
+        if !rows.isEmpty {
+            VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xs) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, line in
+                    Text(line)
+                        .font(SentinelTheme.Fonts.balanceMeta)
+                        .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                        .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .accessibilityLabel(line)
                 }

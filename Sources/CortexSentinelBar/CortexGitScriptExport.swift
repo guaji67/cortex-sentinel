@@ -269,7 +269,10 @@ enum CortexGitScriptExport {
             if line.isEmpty || line.hasPrefix("#") {
                 continue
             }
-            guard line.hasPrefix("scripts/"), !line.contains(".."), !line.hasPrefix("/") else {
+            // scripts/ 之外放行 src/（遥测 v2 槽位采样传递依赖 src/core/config，
+            // Falcon 2026-09-18 令三机总览）：仍是仓内相对路径，.. 与绝对路径照旧拒。
+            guard line.hasPrefix("scripts/") || line.hasPrefix("src/"),
+                  !line.contains(".."), !line.hasPrefix("/") else {
                 return nil
             }
             paths.append(line)

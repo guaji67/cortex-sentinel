@@ -83,7 +83,7 @@ enum SentinelTheme {
     }
 
     enum Metrics {
-        static let compactMenuWidth: CGFloat = 400
+        static let compactMenuWidth: CGFloat = 460
         static let menuWidth: CGFloat = compactMenuWidth
         static let menuHeight: CGFloat = 620
         static let historyBarHeight: CGFloat = 12

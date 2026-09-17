@@ -329,6 +329,64 @@ enum CortexRoutePreviewDisplay {
         /// 一般票候选胶囊；单出口卡片为空。
         let chips: [RouteChip]
         let windowActive: Bool
+        /// 按机器分组的候选（机器 token 从花名册名剥出，动态不写死）。
+        let machineGroups: [MachineGroup]
+
+        init(
+            title: String,
+            target: String,
+            note: String? = nil,
+            chips: [RouteChip] = [],
+            windowActive: Bool,
+            machineGroups: [MachineGroup] = []
+        ) {
+            self.title = title
+            self.target = target
+            self.note = note
+            self.chips = chips
+            self.windowActive = windowActive
+            self.machineGroups = machineGroups
+        }
+
+        struct MachineGroup: Equatable, Sendable {
+            let machine: String
+            let chips: [RouteChip]
+        }
+    }
+
+    /// 候选按机器分组：机器 token 从花名册名前缀动态剥出（Pro/M1Max/mini/ryan 机…），
+    /// 名单里加新机器自动多一组，不写死（Falcon 09-18 令）。
+    static func machineGroups(of candidates: [CortexRoutePreviewPayload.Lane.Branch.Candidate]) -> [RouteCard.MachineGroup] {
+        var order: [String] = []
+        var byMachine: [String: [RouteChip]] = [:]
+        for candidate in candidates {
+            let machine = machineTokenOfName(candidate.name)
+            if byMachine[machine] == nil {
+                order.append(machine)
+            }
+            byMachine[machine, default: []].append(
+                RouteChip(
+                    text: shortName(candidate.name),
+                    paused: candidate.state == "paused"
+                )
+            )
+        }
+        return order.map { RouteCard.MachineGroup(machine: $0, chips: byMachine[$0] ?? []) }
+    }
+
+    /// 花名册名 → 机器 token（与显示短名同一剥法，保留机器词）。
+    static func machineTokenOfName(_ raw: String?) -> String {
+        guard let name = raw?.trimmingCharacters(in: .whitespaces), !name.isEmpty else {
+            return "其他"
+        }
+        // 归一到机器 token（Pro / M1Max / mini / ryan），与模型车道无关——
+        // 「Pro Grok xhigh」「mini Grok」这类角色短语都归到各自机器。
+        for (prefix, token) in [("Pro", "Pro"), ("M1Max", "M1Max"), ("mini", "mini"), ("ryan 机", "ryan")] {
+            if name.hasPrefix(prefix) {
+                return token
+            }
+        }
+        return "其他"
     }
 
     /// 两张固定小卡（前端 / 高难）+ 一张候选胶囊卡（一般票）。解析失败给 nil。
@@ -364,7 +422,8 @@ enum CortexRoutePreviewDisplay {
                         target: "",
                         note: branch.note,
                         chips: chips,
-                        windowActive: freeActive
+                        windowActive: freeActive,
+                        machineGroups: machineGroups(of: candidates)
                     ))
                 }
             }

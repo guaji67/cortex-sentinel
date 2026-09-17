@@ -297,3 +297,81 @@ enum CortexTelemetrySummaryDisplay {
         CortexPlanStatusDisplay.clockText(date)
     }
 }
+
+// MARK: - 局域网直连（Falcon 09-18 令：同网直连优先，Multica KV 兜底）
+
+/// 给本机局域网 server 的 payload：跑 cortex collect 纯采样。
+enum CortexLanCollect {
+    static func data(
+        environment: [String: String],
+        watchDirectory: URL?,
+        fallbackRepositoryRoot: URL?,
+        homeDirectory: String,
+        runner: any CortexSubprocessRunning,
+        fileManager: FileManager = .default
+    ) async -> Data? {
+        let configuration = CortexTelemetrySummaryFetcher.Configuration()
+        let exported: CortexGitScriptExport.Exported
+        switch await CortexGitScriptExport.run(
+            manifestPath: configuration.manifestPath,
+            configuration: configuration.export,
+            environment: environment,
+            watchDirectory: watchDirectory,
+            fallbackRepositoryRoot: fallbackRepositoryRoot,
+            homeDirectory: homeDirectory,
+            runner: runner,
+            fileManager: fileManager
+        ) {
+        case let .exported(value):
+            exported = value
+        case .failed:
+            return nil
+        }
+        let run = await runner.run(
+            executablePath: exported.interpreterPath,
+            arguments: ["scripts/sentry_telemetry.py", "collect"],
+            workingDirectory: exported.cacheDirectory,
+            environment: CortexGitScriptExport.scriptEnvironment(homeDirectory: homeDirectory, repoRoot: exported.repoRoot),
+            stdin: nil,
+            timeout: 15
+        )
+        guard run.exitCode == 0, !run.standardOutput.isEmpty else {
+            return nil
+        }
+        return run.standardOutput
+    }
+}
+
+extension CortexTelemetrySummaryDisplay {
+    /// LAN 直连数据优先覆盖同机器的 KV 条目；LAN-only 机器追加在尾部。
+    static func mergedMachines(
+        kvPayload: CortexTelemetrySummaryPayload?,
+        lanMachines: [CortexTelemetrySummaryPayload.Machine]
+    ) -> [CortexTelemetrySummaryPayload.Machine] {
+        guard !lanMachines.isEmpty else {
+            return kvPayload?.machines ?? []
+        }
+        func token(_ raw: String?) -> String {
+            (raw ?? "").lowercased()
+        }
+        var lanByToken: [String: CortexTelemetrySummaryPayload.Machine] = [:]
+        for machine in lanMachines {
+            lanByToken[token(machine.machine)] = machine
+        }
+        var merged: [CortexTelemetrySummaryPayload.Machine] = []
+        var consumed = Set<String>()
+        for machine in kvPayload?.machines ?? [] {
+            let key = token(machine.machine)
+            if let fresh = lanByToken[key] {
+                merged.append(fresh)
+                consumed.insert(key)
+            } else {
+                merged.append(machine)
+            }
+        }
+        for machine in lanMachines where !consumed.contains(token(machine.machine)) {
+            merged.append(machine)
+        }
+        return merged
+    }
+}

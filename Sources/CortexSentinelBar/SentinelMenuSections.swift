@@ -1555,35 +1555,21 @@ struct SentinelBalancesSection: View {
 
     /// swap 短文本「1000M/2G」：慢变量不画条（Falcon 09-18 令视觉精简）。
     private func swapText(_ swap: CortexTelemetrySummaryPayload.Swap) -> String {
-        let used = swap.used ?? "–"
-        let total = swap.total.map { "/" + $0 } ?? ""
+        func compact(_ raw: String?) -> String? {
+            guard var text = raw else { return nil }
+            if text.hasSuffix("M") {
+                guard let mega = Double(text.dropLast()) else { return text }
+                text = mega >= 1024 ? String(format: "%.0fG", mega / 1024) : String(format: "%.0fM", mega)
+            } else if text.hasSuffix("G") {
+                text = String(format: "%.0fG", Double(text.dropLast()) ?? 0)
+            }
+            return text
+        }
+        guard let used = compact(swap.used) else { return "swap –" }
+        let total = compact(swap.total).map { "/\($0)" } ?? ""
         return "swap \(used)\(total)"
     }
 
-    private func swapGauge(_ swap: CortexTelemetrySummaryPayload.Swap) -> some View {
-        let usedGB = parseGigabytes(swap.used)
-        let totalGB = parseGigabytes(swap.total)
-        let fraction = (usedGB != nil && totalGB != nil && totalGB! > 0) ? min(usedGB! / totalGB!, 1) : 0
-        let color = fraction < 0.6 ? SentinelTheme.Colors.success : (fraction < 0.85 ? SentinelTheme.Colors.warning : SentinelTheme.Colors.danger)
-        return HStack(spacing: 4) {
-            Text("swap")
-                .font(SentinelTheme.Fonts.balanceName)
-                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(SentinelTheme.Colors.inset)
-                    Capsule().fill(color).frame(width: geo.size.width * fraction)
-                }
-            }
-            .frame(width: 46, height: 6)
-            if let used = swap.used {
-                Text(used)
-                    .font(SentinelTheme.Fonts.balanceName)
-                    .fixedSize()
-                    .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
-            }
-        }
-    }
 
     private func parseGigabytes(_ text: String?) -> Double? {
         guard let text else { return nil }
@@ -1613,6 +1599,7 @@ struct SentinelBalancesSection: View {
                 }
                 Text("\(slots?.used ?? 0)/\(cap)")
                     .font(SentinelTheme.Fonts.balanceName)
+                    .fixedSize()
                     .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
             }
         }

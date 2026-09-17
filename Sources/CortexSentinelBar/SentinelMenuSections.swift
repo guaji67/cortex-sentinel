@@ -41,14 +41,17 @@ struct RouteMachinePickerView: View {
         }
     }
 
+    /// 机器 tab 用小一号的 badge 字体：层级压过执行者胶囊（balanceName 13），
+    /// 机器分组是筛选器不是同级候选（Falcon 09-18 令：主次要分明）。
     private func tabChip(_ text: String, selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(text)
-                .font(SentinelTheme.Fonts.balanceName)
+                .font(SentinelTheme.Fonts.badge)
                 .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
                 .foregroundStyle(selected ? SentinelTheme.Colors.primary : SentinelTheme.Colors.secondaryForeground)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
                 .background(Capsule().fill(selected ? SentinelTheme.Colors.primary.opacity(0.2) : SentinelTheme.Colors.inset))
                 .overlay(Capsule().stroke(selected ? SentinelTheme.Colors.primary.opacity(0.6) : SentinelTheme.Colors.border, lineWidth: 1))
         }
@@ -1385,9 +1388,14 @@ struct SentinelBalancesSection: View {
         let cards = CortexRoutePreviewDisplay.cards(payload)
         if cards.isEmpty {
             if let failure = store.routePreview?.failureText, !failure.isEmpty {
-                Text("派工预案：这次没读到（\(failure)）")
-                    .font(SentinelTheme.Fonts.balanceMeta)
-                    .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xs) {
+                    Text("派工预案：这次没读到（\(failure)）")
+                        .font(SentinelTheme.Fonts.balanceMeta)
+                        .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                    if failure.contains("找不到 cortex 仓") {
+                        repoMissingHintRow
+                    }
+                }
             }
         } else {
             VStack(alignment: .leading, spacing: SentinelTheme.Spacing.sm) {
@@ -1478,6 +1486,11 @@ struct SentinelBalancesSection: View {
                             .padding(.horizontal, 9)
                             .padding(.vertical, 3)
                             .background(Capsule().fill(SentinelTheme.Colors.info.opacity(0.16)))
+                            .contentShape(Rectangle())
+                            .modifier(HoverDetailCard(
+                                makeContent: { self.multicaHoverContent(payload) },
+                                branchID: "multica"
+                            ))
                     }
                 }
                 ForEach(Array(machines.enumerated()), id: \.offset) { _, machine in
@@ -1486,35 +1499,79 @@ struct SentinelBalancesSection: View {
             }
         } else if let state = store.telemetrySummary {
             let rows = CortexTelemetrySummaryDisplay.rows(state, now: Date())
-            ForEach(Array(rows.enumerated()), id: \.offset) { _, line in
-                Text(line)
-                    .font(SentinelTheme.Fonts.balanceMeta)
-                    .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+            VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xs) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, line in
+                    Text(line)
+                        .font(SentinelTheme.Fonts.balanceMeta)
+                        .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                }
+                if let failure = state.failureText, failure.contains("找不到 cortex 仓") {
+                    repoMissingHintRow
+                }
             }
         }
     }
 
-    /// 单台机器图形卡。
+    /// Multica 徽标悬停：在跑的是哪几个执行者（Falcon 09-18 令：7 条要能看出是哪 7 条）。
+    /// 弹层里系统 tooltip 不可靠，走自绘 HoverDetailCard（仓规同余额区）。
+    private func multicaHoverContent(_ payload: CortexTelemetrySummaryPayload?) -> BalanceHoverContent {
+        let names = payload?.multica?.workingNames ?? []
+        let working = payload?.multica?.working ?? 0
+        guard !names.isEmpty else {
+            return BalanceHoverContent(
+                title: "Multica 在跑 \(working)",
+                subtitle: "Multica 工作区",
+                lines: [],
+                footer: "Multica 没返回在跑名单"
+            )
+        }
+        return BalanceHoverContent(
+            title: "Multica 在跑 \(working)",
+            subtitle: "Multica 工作区",
+            lines: names.map { BalanceHoverLine(label: $0, value: "在跑", note: nil, noteColor: nil) }
+        )
+    }
+
+    /// 认不到 cortex 仓时的安静指引（新装机器常见）：一句话 + 去设置，不弹窗不闪红。
+    private var repoMissingHintRow: some View {
+        HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
+            Text("本机没认到 Cortex 仓库——去设置里把「盯这个文件夹」指到仓库的 logs 目录。")
+                .font(SentinelTheme.Fonts.balanceMeta)
+                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("去设置") {
+                store.openSettings()
+            }
+            .buttonStyle(SentinelButtonStyle(kind: .secondary, compact: true))
+            .accessibilityIdentifier("repo-missing-open-settings")
+        }
+    }
+
+    /// 单台机器图形卡。行1 认机器（名/CPU/内存/swap，压力灯收行尾），
+    /// 行2 派工（槽位点阵 + 本机线）——Falcon 09-18 令的两行分工。
     private func machineCard(_ machine: CortexTelemetrySummaryPayload.Machine) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
                 Text(machineName(machine))
                     .font(SentinelTheme.Fonts.balanceName)
                     .foregroundStyle(SentinelTheme.Colors.foreground)
                 miniGauge(value: machine.cpuPct, label: "CPU")
                 miniGauge(value: machine.memUsedPct ?? machine.memFreePct.map { 100 - $0 },
                           label: machine.memUsedPct != nil ? "内存" : "内存余")
-            }
-            HStack(spacing: 12) {
                 if let swap = machine.swap {
                     Text(swapText(swap))
                         .font(SentinelTheme.Fonts.balanceName)
                         .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                        .lineLimit(1)
+                        .fixedSize()
                 }
-                slotDots(machine.devSlots)
-                Spacer(minLength: 0)
-                lineBadge(machine.linesByModel)
+                Spacer(minLength: 8)
                 pressureDot(machine.pressureLevel)
+            }
+            HStack(spacing: 10) {
+                slotDots(machine.devSlots)
+                lineBadge(machine.linesByModel)
+                Spacer(minLength: 0)
             }
         }
         .padding(.horizontal, 12)
@@ -1542,6 +1599,7 @@ struct SentinelBalancesSection: View {
         return HStack(spacing: 4) {
             Text(label)
                 .font(SentinelTheme.Fonts.balanceName)
+                .fixedSize()
                 .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
@@ -1613,18 +1671,23 @@ struct SentinelBalancesSection: View {
         let total = (lines ?? [:]).values.reduce(0, +)
         return Text("本机线 \(total)")
             .font(SentinelTheme.Fonts.balanceName)
-            .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+            .foregroundStyle(total > 0 ? SentinelTheme.Colors.primary : SentinelTheme.Colors.secondaryForeground)
     }
 
+    /// 压力灯：正常只留一个绿点（Falcon 09-18 令），异常才出字；缺数据灰点。
     private func pressureDot(_ level: Int?) -> some View {
-        HStack(spacing: 3) {
+        let color = level.map { $0 == 1 ? SentinelTheme.Colors.success : ($0 == 2 ? SentinelTheme.Colors.warning : SentinelTheme.Colors.danger) }
+            ?? SentinelTheme.Colors.inset
+        return HStack(spacing: 3) {
             Circle()
-                .fill(level.map { $0 == 1 ? SentinelTheme.Colors.success : ($0 == 2 ? SentinelTheme.Colors.warning : SentinelTheme.Colors.danger) }
-                    ?? SentinelTheme.Colors.inset)
+                .fill(color)
                 .frame(width: 7, height: 7)
-            Text(level == 2 ? "压力警告" : (level == 4 ? "压力危急" : "压力正常"))
-                .font(SentinelTheme.Fonts.balanceName)
-                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+            if level == 2 || level == 4 {
+                Text(level == 4 ? "压力危急" : "压力警告")
+                    .font(SentinelTheme.Fonts.balanceName)
+                    .fixedSize()
+                    .foregroundStyle(level == 4 ? SentinelTheme.Colors.danger : SentinelTheme.Colors.warning)
+            }
         }
     }
 
@@ -2578,6 +2641,11 @@ struct SentinelDispatchSection: View {
                 .font(SentinelTheme.Fonts.subtitle)
                 .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
                 .fixedSize(horizontal: false, vertical: true)
+            Button(SentinelPaths.missingWatchDirectoryButton) {
+                store.chooseWatchDirectory()
+            }
+            .buttonStyle(SentinelButtonStyle(kind: .primary, compact: true))
+            .accessibilityIdentifier("watch-missing-choose-button")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .sentinelRow()

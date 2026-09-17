@@ -95,7 +95,8 @@ struct SentinelPaths {
     static let missingWatchDirectoryBody =
         "哨兵盯一个目录，里面是派工工具写的状态文件。这个目录现在还不存在。"
     static let missingWatchDirectoryHint =
-        "默认位置 ~/.cortex-sentinel/logs，把状态文件放进去就能看到。要换地方，设 CORTEX_SENTINEL_WATCH_DIR。"
+        "点下面选个目录，指到派工状态文件所在的文件夹（一般是 Cortex 仓库的 logs）。以后想换，去设置 → 启动与文件夹。"
+    static let missingWatchDirectoryButton = "选择目录…"
 
     /// 监视目录不存在时给 --dump-state 看的诊断句。界面不共用这一句。
     var missingWatchDirectoryMessage: String {

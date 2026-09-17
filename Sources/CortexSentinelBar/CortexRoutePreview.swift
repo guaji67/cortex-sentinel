@@ -314,4 +314,61 @@ enum CortexRoutePreviewDisplay {
     static func clockText(_ date: Date) -> String {
         CortexPlanStatusDisplay.clockText(date)
     }
+
+    // MARK: 图形化卡片模型（视图直接画卡与胶囊，不再拼长句）
+
+    struct RouteChip: Equatable, Sendable {
+        let text: String
+        let paused: Bool
+    }
+
+    struct RouteCard: Equatable, Sendable {
+        let title: String
+        let target: String
+        let note: String?
+        /// 一般票候选胶囊；单出口卡片为空。
+        let chips: [RouteChip]
+        let windowActive: Bool
+    }
+
+    /// 两张固定小卡（前端 / 高难）+ 一张候选胶囊卡（一般票）。解析失败给 nil。
+    static func cards(_ payload: CortexRoutePreviewPayload?) -> [RouteCard] {
+        guard let payload else {
+            return []
+        }
+        let freeActive = payload.freeWindow?.active ?? false
+        var cards: [RouteCard] = []
+        for lane in payload.lanes {
+            if let line = lane.line {
+                cards.append(RouteCard(title: lane.label ?? "车道", target: line, note: nil, chips: [], windowActive: freeActive))
+                continue
+            }
+            for branch in lane.branches ?? [] {
+                if let line = branch.line {
+                    cards.append(RouteCard(
+                        title: "\(lane.label ?? "") · \(branch.condition ?? "")",
+                        target: line,
+                        note: nil,
+                        chips: [],
+                        windowActive: freeActive
+                    ))
+                } else if let candidates = branch.candidates, !candidates.isEmpty {
+                    let chips = candidates.map { candidate in
+                        RouteChip(
+                            text: shortName(candidate.name),
+                            paused: candidate.state == "paused"
+                        )
+                    }
+                    cards.append(RouteCard(
+                        title: "\(lane.label ?? "") · \(branch.condition ?? "")",
+                        target: "",
+                        note: branch.note,
+                        chips: chips,
+                        windowActive: freeActive
+                    ))
+                }
+            }
+        }
+        return cards
+    }
 }

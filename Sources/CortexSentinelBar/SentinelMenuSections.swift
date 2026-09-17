@@ -1271,38 +1271,263 @@ struct SentinelBalancesSection: View {
         }
     }
 
-    /// 派工路由预案：此刻生效的派工顺序（cortex 路由表算好，纯展示不调节）。
-    /// 标题行带北京时刻与窗态，正文每行一条出口；没跑过任何一轮不占位。
+    /// 派工路由预案：图形卡片版（Falcon 09-18 令可视化）。
+    /// 两张小卡（前端 / 高难）+ 一张候选胶囊卡（一般票），窗态做成胶囊徽标。
     @ViewBuilder private var routePreviewSection: some View {
-        let rows = CortexRoutePreviewDisplay.rows(store.routePreview, now: Date())
-        if !rows.isEmpty {
+        let payload = store.routePreview?.payload
+        let cards = CortexRoutePreviewDisplay.cards(payload)
+        if cards.isEmpty {
+            if let failure = store.routePreview?.failureText, !failure.isEmpty {
+                Text("派工预案：这次没读到（\(failure)）")
+                    .font(SentinelTheme.Fonts.balanceMeta)
+                    .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+            }
+        } else {
             VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xs) {
-                ForEach(Array(rows.enumerated()), id: \.offset) { _, line in
-                    Text(line)
+                HStack(alignment: .center, spacing: SentinelTheme.Spacing.xs) {
+                    Text("派工预案")
                         .font(SentinelTheme.Fonts.balanceMeta)
-                        .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
-                        .lineLimit(3)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .accessibilityLabel(line)
+                        .foregroundStyle(SentinelTheme.Colors.foreground)
+                    Spacer(minLength: 0)
+                    windowBadge(active: payload?.freeWindow?.active ?? false,
+                                clock: payload?.freeWindow?.beijingTime ?? "")
+                }
+                ForEach(Array(cards.enumerated()), id: \.offset) { _, card in
+                    routeCardView(card)
                 }
             }
         }
     }
 
-    /// 三机总览：跨机遥测 KV 汇总（各机哨兵 10 分钟一轮上报，纯展示）。
-    @ViewBuilder private var telemetrySummarySection: some View {
-        let rows = CortexTelemetrySummaryDisplay.rows(store.telemetrySummary, now: Date())
-        if !rows.isEmpty {
-            VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xs) {
-                ForEach(Array(rows.enumerated()), id: \.offset) { _, line in
-                    Text(line)
+    /// 窗态胶囊徽标：免费窗中（绿） / 窗外（灰）。
+    private func windowBadge(active: Bool, clock: String) -> some View {
+        Text(active ? "免费窗中 \(clock)" : "窗外 \(clock)")
+            .font(SentinelTheme.Fonts.metadata)
+            .foregroundStyle(active ? SentinelTheme.Colors.success : SentinelTheme.Colors.secondaryForeground)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(
+                Capsule().fill(
+                    (active ? SentinelTheme.Colors.success : SentinelTheme.Colors.secondaryForeground).opacity(0.14)
+                )
+            )
+    }
+
+    /// 预案小卡：单出口画绿点 + 目标；候选卡画胶囊 chips（paused 灰）。
+    private func routeCardView(_ card: CortexRoutePreviewDisplay.RouteCard) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(card.title)
+                .font(SentinelTheme.Fonts.metadata)
+                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+            if card.chips.isEmpty {
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(SentinelTheme.Colors.success)
+                        .frame(width: 6, height: 6)
+                    Text(card.target)
                         .font(SentinelTheme.Fonts.balanceMeta)
-                        .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                        .foregroundStyle(SentinelTheme.Colors.foreground)
                         .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .accessibilityLabel(line)
+                }
+            } else {
+                chipsFlow(card.chips)
+            }
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(SentinelTheme.Colors.raised)
+        .clipShape(RoundedRectangle(cornerRadius: SentinelTheme.Radius.field))
+        .overlay(
+            RoundedRectangle(cornerRadius: SentinelTheme.Radius.field)
+                .stroke(SentinelTheme.Colors.borderSoft, lineWidth: 1)
+        )
+    }
+
+    /// 胶囊流：一行排不下自动折行。
+    private func chipsFlow(_ chips: [CortexRoutePreviewDisplay.RouteChip]) -> some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 118), spacing: 4)], alignment: .leading, spacing: 4) {
+            ForEach(Array(chips.enumerated()), id: \.offset) { _, chip in
+                Text(chip.paused ? "\(chip.text)（暂停）" : chip.text)
+                    .font(SentinelTheme.Fonts.metadata)
+                    .lineLimit(1)
+                    .foregroundStyle(chip.paused ? SentinelTheme.Colors.secondaryForeground : SentinelTheme.Colors.foreground)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Capsule().fill(SentinelTheme.Colors.inset))
+                    .overlay(Capsule().stroke(SentinelTheme.Colors.borderSoft, lineWidth: 1))
+            }
+        }
+    }
+
+    /// 三机总览：图形卡（CPU / 内存 / swap 迷你条，槽位点阵，压力色点）。
+    @ViewBuilder private var telemetrySummarySection: some View {
+        let payload = store.telemetrySummary?.payload
+        if let payload, !payload.machines.isEmpty {
+            VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xs) {
+                HStack(alignment: .center, spacing: SentinelTheme.Spacing.xs) {
+                    Text("三机总览")
+                        .font(SentinelTheme.Fonts.balanceMeta)
+                        .foregroundStyle(SentinelTheme.Colors.foreground)
+                    Spacer(minLength: 0)
+                    if let working = payload.multica?.working {
+                        Text("Multica 在跑 \(working)")
+                            .font(SentinelTheme.Fonts.metadata)
+                            .foregroundStyle(SentinelTheme.Colors.info)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(SentinelTheme.Colors.info.opacity(0.14)))
+                    }
+                }
+                ForEach(Array(payload.machines.enumerated()), id: \.offset) { _, machine in
+                    machineCard(machine)
                 }
             }
+        } else if let state = store.telemetrySummary {
+            let rows = CortexTelemetrySummaryDisplay.rows(state, now: Date())
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, line in
+                Text(line)
+                    .font(SentinelTheme.Fonts.balanceMeta)
+                    .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+            }
+        }
+    }
+
+    /// 单台机器图形卡。
+    private func machineCard(_ machine: CortexTelemetrySummaryPayload.Machine) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                Text(machineName(machine))
+                    .font(SentinelTheme.Fonts.balanceMeta)
+                    .foregroundStyle(SentinelTheme.Colors.foreground)
+                miniGauge(value: machine.cpuPct, label: "CPU")
+                miniGauge(value: machine.memUsedPct ?? machine.memFreePct.map { 100 - $0 },
+                          label: machine.memUsedPct != nil ? "内存" : "内存余")
+                Spacer(minLength: 0)
+                pressureDot(machine.pressureLevel)
+            }
+            HStack(spacing: 8) {
+                if let swap = machine.swap {
+                    swapGauge(swap)
+                }
+                Spacer(minLength: 0)
+                slotDots(machine.devSlots)
+                lineBadge(machine.linesByModel)
+            }
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .background(SentinelTheme.Colors.raised)
+        .clipShape(RoundedRectangle(cornerRadius: SentinelTheme.Radius.field))
+        .overlay(
+            RoundedRectangle(cornerRadius: SentinelTheme.Radius.field)
+                .stroke(SentinelTheme.Colors.borderSoft, lineWidth: 1)
+        )
+    }
+
+    private func machineName(_ machine: CortexTelemetrySummaryPayload.Machine) -> String {
+        guard let raw = machine.machine?.lowercased() else { return "?" }
+        if raw.contains("mini") { return "mini2" }
+        if raw.contains("m1max") || raw.contains("book-pro") { return "M1Max" }
+        return "Pro"
+    }
+
+    /// 迷你胶囊进度条 + 标签。值缺画灰空条。
+    private func miniGauge(value: Double?, label: String) -> some View {
+        let fraction = value.map { min(max($0 / 100, 0), 1) } ?? 0
+        let color = value.map { $0 < 60 ? SentinelTheme.Colors.success : ($0 < 85 ? SentinelTheme.Colors.warning : SentinelTheme.Colors.danger) }
+            ?? SentinelTheme.Colors.inset
+        return HStack(spacing: 4) {
+            Text(label)
+                .font(SentinelTheme.Fonts.metadata)
+                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(SentinelTheme.Colors.inset)
+                    Capsule().fill(color).frame(width: geo.size.width * fraction)
+                }
+            }
+            .frame(width: 40, height: 5)
+            Text(value.map { "\(Int($0.rounded()))%" } ?? "–")
+                .font(SentinelTheme.Fonts.metadata)
+                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+        }
+    }
+
+    private func swapGauge(_ swap: CortexTelemetrySummaryPayload.Swap) -> some View {
+        let usedGB = parseGigabytes(swap.used)
+        let totalGB = parseGigabytes(swap.total)
+        let fraction = (usedGB != nil && totalGB != nil && totalGB! > 0) ? min(usedGB! / totalGB!, 1) : 0
+        let color = fraction < 0.6 ? SentinelTheme.Colors.success : (fraction < 0.85 ? SentinelTheme.Colors.warning : SentinelTheme.Colors.danger)
+        return HStack(spacing: 4) {
+            Text("swap")
+                .font(SentinelTheme.Fonts.metadata)
+                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(SentinelTheme.Colors.inset)
+                    Capsule().fill(color).frame(width: geo.size.width * fraction)
+                }
+            }
+            .frame(width: 40, height: 5)
+            if let used = swap.used {
+                Text(used)
+                    .font(SentinelTheme.Fonts.metadata)
+                    .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+            }
+        }
+    }
+
+    private func parseGigabytes(_ text: String?) -> Double? {
+        guard let text else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasSuffix("G") {
+            return Double(trimmed.dropLast())
+        }
+        if trimmed.hasSuffix("M") {
+            return Double(trimmed.dropLast()).map { $0 / 1024 }
+        }
+        return nil
+    }
+
+    /// 槽位点阵：实心 = 占用，空心 = 空闲。
+    private func slotDots(_ slots: CortexTelemetrySummaryPayload.DevSlots?) -> some View {
+        HStack(spacing: 3) {
+            Text("槽")
+                .font(SentinelTheme.Fonts.metadata)
+                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+            if let cap = slots?.cap {
+                let used = slots?.used ?? 0
+                ForEach(0..<max(cap, 1), id: \.self) { index in
+                    Circle()
+                        .fill(index < used ? SentinelTheme.Colors.primary : SentinelTheme.Colors.inset)
+                        .overlay(Circle().stroke(SentinelTheme.Colors.borderSoft, lineWidth: 1))
+                        .frame(width: 7, height: 7)
+                }
+                Text("\(slots?.used ?? 0)/\(cap)")
+                    .font(SentinelTheme.Fonts.metadata)
+                    .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+            }
+        }
+    }
+
+    private func lineBadge(_ lines: [String: Int]?) -> some View {
+        let total = (lines ?? [:]).values.reduce(0, +)
+        return Text("本机线 \(total)")
+            .font(SentinelTheme.Fonts.metadata)
+            .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+    }
+
+    private func pressureDot(_ level: Int?) -> some View {
+        HStack(spacing: 3) {
+            Circle()
+                .fill(level.map { $0 == 1 ? SentinelTheme.Colors.success : ($0 == 2 ? SentinelTheme.Colors.warning : SentinelTheme.Colors.danger) }
+                    ?? SentinelTheme.Colors.inset)
+                .frame(width: 6, height: 6)
+            Text(level == 2 ? "压力警告" : (level == 4 ? "压力危急" : "压力正常"))
+                .font(SentinelTheme.Fonts.metadata)
+                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
         }
     }
 

@@ -23,6 +23,9 @@ final class SentinelSettingsModel: ObservableObject {
     @Published var balanceRecheckInterval: SentinelBalanceRecheckInterval
     @Published var watchPath: String
     @Published var isWatchLocked: Bool
+    /// 解析出的监视目录在磁盘上是否存在。由 store 在打开设置窗和换目录后同步进来；
+    /// 不存在时路径行标警示色并给一句指引（Falcon 09-18 令：新装不再静默指错）。
+    @Published var isWatchMissing: Bool = false
     /// GLM 额度监控的生效 key 列表（自动识别 ∪ 手动添加 − 已删除），
     /// 由 store 在打开设置窗和增删后同步进来。
     @Published var glmEntries: [GLMKeyEntry] = []
@@ -700,15 +703,21 @@ struct SentinelSettingsView: View {
                 Text(model.watchPathDisplay)
                     .font(SentinelTheme.Fonts.metadata)
                     .foregroundStyle(
-                        model.isWatchLocked
-                            ? SentinelTheme.Colors.secondaryForeground
-                            : SentinelTheme.Colors.foreground
+                        model.isWatchMissing
+                            ? SentinelTheme.Colors.warning
+                            : (model.isWatchLocked
+                                ? SentinelTheme.Colors.secondaryForeground
+                                : SentinelTheme.Colors.foreground)
                     )
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .opacity(model.isWatchLocked ? SentinelTheme.Metrics.disabledOpacity : 1)
                     .accessibilityIdentifier("settings-watch-directory")
+                if model.isWatchMissing {
+                    hintText(SentinelSettingsCopy.watchMissingHint)
+                        .accessibilityIdentifier("settings-watch-missing-hint")
+                }
                 hintText(SentinelSettingsCopy.watchHint)
                 if model.isWatchLocked {
                     hintText(SentinelSettingsCopy.watchLockedHint)

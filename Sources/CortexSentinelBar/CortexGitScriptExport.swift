@@ -222,13 +222,24 @@ enum CortexGitScriptExport {
     /// 脚本进程只给 HOME、一条固定 PATH 和认到的 cortex 仓根，不吃哨兵进程
     /// 的整个环境。仓根来自本轮认仓通过 rev-parse 校验的那个根，判据脚本拿
     /// CORTEX_REPO_ROOT 直接认仓，没装过闸运行时的机器上不用再猜；套餐脚本
-    /// 不读这个变量，多个键无害。
-    static func scriptEnvironment(homeDirectory: String, repoRoot: URL) -> [String: String] {
-        [
+    /// 不读这个变量，多个键无害。logsDirectory 存在时一并给 CORTEX_LOG_ROOT
+    /// （合法根词表成员），遥测脚本据此数本机线，不再依赖仓根下恰好有 logs。
+    static func scriptEnvironment(
+        homeDirectory: String,
+        repoRoot: URL,
+        logsDirectory: URL? = nil,
+        fileManager: FileManager = .default
+    ) -> [String: String] {
+        var environment = [
             "HOME": homeDirectory,
             "PATH": "/usr/bin:/bin:/usr/sbin:/sbin:\(homeDirectory)/.local/bin:/opt/homebrew/bin",
             "CORTEX_REPO_ROOT": repoRoot.path,
         ]
+        if let logsDirectory,
+           fileManager.fileExists(atPath: logsDirectory.path) {
+            environment["CORTEX_LOG_ROOT"] = logsDirectory.path
+        }
+        return environment
     }
 
     /// 认仓候选（按顺序）：环境变量 CORTEX_REPO_ROOT、监视目录解析软链后的上一级、

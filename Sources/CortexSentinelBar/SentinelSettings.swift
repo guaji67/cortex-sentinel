@@ -47,6 +47,7 @@ enum SentinelSettingsCopy {
     static let watchChoose = "选择"
     static let watchHint = "派工工具把任务状态写在这里，一般不用改。"
     static let watchLockedHint = "装的时候定好的，要换得重装。"
+    static let watchMissingHint = "这个目录现在还不存在——指一个真的目录，不然盯不到线、派工信息也认不到。"
     static let versionPrefix = "版本"
     static let versionDevLabel = "开发版"
 

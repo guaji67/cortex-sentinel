@@ -100,16 +100,20 @@ struct CortexTelemetrySummaryPayload: Decodable, Equatable, Sendable {
     struct Multica: Decodable, Equatable, Sendable {
         let working: Int?
         let idle: Int?
+        /// 在跑执行者名单（cortex 侧 agent list 取 name）；旧脚本没这键，给空。
+        let workingNames: [String]
 
         enum CodingKeys: String, CodingKey {
             case working
             case idle
+            case workingNames = "working_names"
         }
 
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             working = try container.decodeIfPresent(Int.self, forKey: .working)
             idle = try container.decodeIfPresent(Int.self, forKey: .idle)
+            workingNames = try container.decodeIfPresent([String].self, forKey: .workingNames) ?? []
         }
     }
 }
@@ -181,7 +185,11 @@ enum CortexTelemetrySummaryFetcher {
             executablePath: exported.interpreterPath,
             arguments: configuration.scriptArguments,
             workingDirectory: exported.cacheDirectory,
-            environment: CortexGitScriptExport.scriptEnvironment(homeDirectory: homeDirectory, repoRoot: exported.repoRoot),
+            environment: CortexGitScriptExport.scriptEnvironment(
+                homeDirectory: homeDirectory,
+                repoRoot: exported.repoRoot,
+                logsDirectory: watchDirectory
+            ),
             stdin: nil,
             timeout: configuration.scriptTimeout
         )
@@ -331,7 +339,11 @@ enum CortexLanCollect {
             executablePath: exported.interpreterPath,
             arguments: ["scripts/sentry_telemetry.py", "collect"],
             workingDirectory: exported.cacheDirectory,
-            environment: CortexGitScriptExport.scriptEnvironment(homeDirectory: homeDirectory, repoRoot: exported.repoRoot),
+            environment: CortexGitScriptExport.scriptEnvironment(
+                homeDirectory: homeDirectory,
+                repoRoot: exported.repoRoot,
+                logsDirectory: watchDirectory
+            ),
             stdin: nil,
             timeout: 15
         )

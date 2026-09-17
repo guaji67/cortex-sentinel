@@ -406,6 +406,7 @@ final class SentinelStore {
         applyResolvedPaths()
         settingsModel.watchPath = paths.logsDirectory.path
         settingsModel.isWatchLocked = isWatchDirectoryLocked
+        settingsModel.isWatchMissing = !paths.logsDirectoryExists
         Task { await self.refreshAll() }
         runLogCleanup()
     }
@@ -431,6 +432,7 @@ final class SentinelStore {
         settingsModel.loginItem = loginItemSettingsPresentation
         settingsModel.watchPath = paths.logsDirectory.path
         settingsModel.isWatchLocked = isWatchDirectoryLocked
+        settingsModel.isWatchMissing = !paths.logsDirectoryExists
         reloadGLMKeys()
         reloadCommandCodeKeys()
         SentinelSettingsWindowController.shared.show(model: settingsModel)

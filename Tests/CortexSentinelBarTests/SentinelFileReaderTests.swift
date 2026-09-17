@@ -875,8 +875,9 @@ final class SentinelFileReaderTests: XCTestCase {
         )
         XCTAssertEqual(
             SentinelPaths.missingWatchDirectoryHint,
-            "默认位置 ~/.cortex-sentinel/logs，把状态文件放进去就能看到。要换地方，设 CORTEX_SENTINEL_WATCH_DIR。"
+            "点下面选个目录，指到派工状态文件所在的文件夹（一般是 Cortex 仓库的 logs）。以后想换，去设置 → 启动与文件夹。"
         )
+        XCTAssertEqual(SentinelPaths.missingWatchDirectoryButton, "选择目录…")
         XCTAssertFalse(SentinelPaths.missingWatchDirectoryTitle.contains("CORTEX_REPO_ROOT"))
         XCTAssertFalse(SentinelPaths.missingWatchDirectoryBody.contains("CORTEX_REPO_ROOT"))
         XCTAssertFalse(SentinelPaths.missingWatchDirectoryHint.contains("CORTEX_REPO_ROOT"))

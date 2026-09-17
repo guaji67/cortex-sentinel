@@ -1,0 +1,195 @@
+# 公开镜像（勿直接改本文件）：正本在私有仓 guaji67/cortex 的 docs/reference/executor-availability.yaml。
+# 本镜像给没有 GitHub 凭据的机器匿名拉（refresh_gate_runtime.sh 的 dispatch-override 兜底链）。
+# 镜像源 commit: 2beff0772ce59a946c9afa80122e6fa4a09afbdc  镜像时间: 2026-09-17 19:19:59
+# 执行者可用性清单（COR-5809，2026-09-13）：派工选人读它自动躲开 paused / never 的执行者。
+# 改口径跑 `python3 scripts/executor_availability.py set <id前缀或看板名> <available|paused|never> --quote "<Falcon 原话>" [--since "YYYY-MM-DD HH:MM"]`，
+# 看现状跑 `python3 scripts/executor_availability.py show`。set 只改文件不提交不推，主控拿去走 PR，
+# 经验账第 2 节对应行的暂停标记同一个 PR 一起改（tests/test_executor_availability.py 核两边一致）。
+# 状态与恢复只认 Falcon 亲口，原话逐字记；初始内容照 COR-5809 票面「现行口径」表填，一条不许自己推。
+# model 列照看板 `multica agent list` 记，供 dispatch_channel_limits.cheap_first_order() 判断
+# 某个 model 的执行者是否全部 paused / never（默认表里这种 model 不再被推成首选）。
+# capabilities（COR-6064，可选）：已核实的能力字符串列表，只写核实过的；没写 = 不确定，按没有算。
+# 读法（scripts/executor_availability.py，形状照 multica_notify_bridge.load_agent_host_map）：
+# 文件读不到或结构坏时当全部 available 并打一行 EXECUTOR_AVAILABILITY_WARN，不炸（fail-open）。
+version: 1
+executors:
+  # capabilities 带 gh 的依据：09-14 COR-5986 / COR-6040 执行线用 gh 开过 PR。
+  - id: 06ff0149-b857-48c1-bb06-82c2290ab129
+    name: Pro 执行者(CodeBuddy BCGLM5.3 Flash Max)
+    model: custom-local:BC-GLM-5.3-Flash
+    status: available
+    since: "2026-09-13 11:3x"
+    quote: "这个是免费的，所以说并发够的话，可以先往这上面放；2026-09-14 01:2x「相对来说是免费的，但是它也不是完全100%免费，它有一点点消耗」（夜间免费窗先填 ZCode，塞到软帽再落 CodeBuddy，COR-5908）"
+    restore: ""
+    capabilities: [gh]
+  - id: 4b9f0050-6997-41a5-977c-d5db477a1237
+    name: M1Max 执行者(CodeBuddy BCGLM5.3 Flash Max)
+    model: custom-local:BC-GLM-5.3-Flash
+    status: available
+    since: "2026-09-16 00:34"
+    quote: "Falcon 2026-09-16「这个肯定是要进花名册登记的」；从 Pro CodeBuddy 整套迁移，计费同口径免费（09-13 免费原话与依据见经验账第 2 节 CodeBuddy 行）"
+    restore: ""
+    capabilities: [gh]  # 09-17 COR-6559 在这台用 gh 开了 PR #3205 / #3206，#3205 已 land_pr.sh 合入
+  - id: 14481807-c1bf-4bbb-95f0-710683f02575
+    name: mini 执行者(CodeBuddy BCGLM5.3 Flash Max)
+    model: custom-local:BC-GLM-5.3-Flash
+    status: available
+    since: "2026-09-16 03:56"
+    quote: "Falcon 2026-09-16「我现在还要让你帮我把同样的东西弄到我的Mac mini上面」；随 Pro / M1 Max CodeBuddy 同口径免费，通道正本 codebuddy-channel-runbook.md"
+    restore: ""
+  - id: 667db101-0ac4-45a9-b1e3-a69e2d373e1d
+    name: ryan 机 执行者(CodeBuddy BCGLM5.3 Flash Max)
+    model: custom-local:BC-GLM-5.3-Flash
+    status: available
+    since: "2026-09-17 03:1x"
+    quote: "到那个我朋友电脑，就是那个 Ryan 电脑上的 CodeBuddy 的执行者也可以用了，也可以让他执行任务了"
+    restore: "恢复只认 Falcon 亲口说"
+  - id: 5d9868d0-0156-4105-bb32-d9059ddc009e
+    name: Pro 执行者(ZCode GLM Flash·Falcon 套餐)
+    model: glm-5.3-flash
+    status: available
+    since: ""
+    quote: "经验账 2.0 表"
+    restore: ""
+  - id: f2e199e0-fb4f-462b-b0fd-dc8e2defa783
+    name: M1Max 执行者(ZCode GLM Flash)
+    model: glm-5.3-flash
+    status: available
+    since: ""
+    quote: "经验账 2.0 表"
+    restore: ""
+  - id: d3a73f28-89dc-42ce-8863-23c1cf62bf2d
+    name: Pro 执行者(claudex GLM Flash)
+    model: ""
+    status: available
+    since: ""
+    quote: "经验账 2.0 表"
+    restore: ""
+  - id: d77b68ce-4d0c-40c5-a3e8-aa9803bcae1f
+    name: Pro 执行者(ZCode GLM Flash·开佬套餐)
+    model: glm-5.3-flash
+    status: available
+    since: ""
+    quote: "经验账 2.0 表"
+    restore: ""
+  - id: ea319a39-1682-4559-bdef-4eda2316f40f
+    name: Pro Grok xhigh 执行者(Cursor)
+    model: cursor-grok-4.6-xhigh
+    status: available
+    since: "2026-09-17 04:14"
+    quote: "Falcon 2026-09-17 04:2x：来了啊来了啊，给了你新的执行者了，就是M1 Max上面的Grok。这个呢就是也用，反正分流一下，平均分配一下。聪明程度我觉得 Z code 等于这个 Grok 4.6 Xhigh，Grok 的优势是速度更快一点，所以可以优先用这个。在我的 Pro 电脑上也有，也可以，反正你负载看一下。不要一个机器放太多，也不要一个执行者放太多。这个 Grok 好用的话你喜欢用就多用，我买了，这一天之内也是免费的"
+    restore: "恢复只认 Falcon 亲口说（覆盖 2026-09-11 的恢复；经验账 7.8）"
+    capabilities: [gh]  # 09-17 COR-6564 在这台用 gh 开了 PR #3210 并 land_pr.sh 合入
+  - id: 0056b021-8601-4c94-9c30-76b905b614fa
+    name: M1Max Grok 执行者(Cursor)
+    model: cursor-grok-4.6-xhigh
+    status: available
+    since: "2026-09-17 04:14"
+    quote: "Falcon 2026-09-17 04:2x：来了啊来了啊，给了你新的执行者了，就是M1 Max上面的Grok。这个呢就是也用，反正分流一下，平均分配一下。聪明程度我觉得 Z code 等于这个 Grok 4.6 Xhigh，Grok 的优势是速度更快一点，所以可以优先用这个。在我的 Pro 电脑上也有，也可以，反正你负载看一下。不要一个机器放太多，也不要一个执行者放太多。这个 Grok 好用的话你喜欢用就多用，我买了，这一天之内也是免费的"
+    restore: "恢复只认 Falcon 亲口说（覆盖 2026-09-11 的恢复；经验账 7.8）"
+  - id: 6bea1d7b-18e9-46fc-b784-02693149a547
+    name: mini Grok 执行者(Cursor)
+    model: cursor-grok-4.6-xhigh
+    status: available
+    since: "2026-09-17 04:15"
+    quote: "Falcon 2026-09-17 04:3x：同样啊，这个也是没有并发限制的，包括我的 Mac mini 上也可以。我的 Mac mini 上也有这个，我的 Mac mini 现在是空着的，如果你还有多的票要放的话也可以。暂停名单可以踢出去了，因为现在有一天的时间。我说的 Mac mini 不是你这台啊，是另外一台 Mac mini 执行者"
+    restore: "恢复只认 Falcon 亲口说（覆盖 2026-09-11 的恢复；经验账 7.8）"
+    capabilities: [gh]  # 09-17 COR-6566 在这台用 land_pr.sh 合入 PR #3211 / #3212
+  - id: 011287ed-c569-4fd0-a3dd-73268206ea94
+    name: Pro Grok xhigh Fast 执行者(Cursor)
+    model: cursor-grok-4.6-xhigh-fast
+    status: available
+    since: "2026-09-17 18:41"
+    quote: "Falcon 2026-09-17 原话「你可以通过派工去找Gork去打工，因为你可以用那个Grok Fast，相当于你作为主控规划，然后他去帮你执行，直接通过CLI调用就行」"
+    restore: "改回只认 Falcon 亲口说"
+  - id: bb425f7d-22f4-4bad-ae41-cfddc4b10ed2
+    name: mini DeepSeek 执行者(DSH)
+    model: deepseek-official/deepseek%2Fdeepseek-v4.1-flash
+    status: paused
+    since: "2026-09-11 10:5x"
+    quote: "Deepseek先别用了 先用zcode"
+    restore: "恢复只认 Falcon 亲口说（经验账 7.8）"
+  - id: d1b5755f-0d83-4baf-9956-4489935cd921
+    name: Pro DeepSeek 执行者(DSH)
+    model: deepseek-official/deepseek%2Fdeepseek-v4.1-flash
+    status: paused
+    since: "2026-09-11 10:5x"
+    quote: "Deepseek先别用了 先用zcode"
+    restore: "恢复只认 Falcon 亲口说（经验账 7.8）"
+  - id: 2173cf2c-425a-4958-a673-0a71df38f58f
+    name: Pro 执行者(Kimi K3 Max)
+    model: kimi-code/k3
+    status: paused
+    since: "2026-09-11"
+    quote: "会员到期不续费"
+    restore: "恢复只认 Falcon 亲口说（经验账 2.0 表 Kimi 段）"
+  - id: 358c839d-8e04-4d9b-b818-6b59e0efc591
+    name: M1Max 执行者(Codex Sol High)
+    model: gpt-5.6-sol
+    status: paused
+    since: "2026-09-11 11:4x"
+    quote: "Codex没额度了 别派了"
+    restore: "恢复只认 Falcon 亲口说，恢复当天先派冒烟票（经验账 7.8；只管 Multica 上这三个，本机 codex 命令行不在本清单）"
+  - id: f28c7938-58e0-473d-893c-6e1497113529
+    name: Mac mini 执行者
+    model: gpt-5.6-sol
+    status: paused
+    since: "2026-09-11 11:4x"
+    quote: "Codex没额度了 别派了"
+    restore: "恢复只认 Falcon 亲口说，恢复当天先派冒烟票（经验账 7.8；只管 Multica 上这三个，本机 codex 命令行不在本清单）"
+  - id: e8bd8b54-3d67-40e8-a226-a7b4e7c4c36f
+    name: 续航巡检哨兵(Codex)
+    model: gpt-5.6-sol
+    status: paused
+    since: "2026-09-11 11:4x"
+    quote: "Codex没额度了 别派了"
+    restore: "恢复只认 Falcon 亲口说，恢复当天先派冒烟票（经验账 7.8；只管 Multica 上这三个，本机 codex 命令行不在本清单）"
+  - id: 28d1683b-ddd4-4e58-b417-b5c6bdcaaf32
+    name: M1Max 执行者(Claude ox-alpha)
+    model: gpt-5.6-sol
+    status: never
+    since: "2026-09-14 20:1x"
+    quote: "那个 OX Alpha 可以下架了，那个可以不要了"
+    restore: "恢复等 Falcon 说"
+  - id: e75bc307-55f3-4f70-a723-c62ffd919f32
+    name: mini 执行者(Claude ox-alpha)
+    model: ""
+    status: never
+    since: "2026-09-14 20:1x"
+    quote: "那个 OX Alpha 可以下架了，那个可以不要了"
+    restore: "恢复等 Falcon 说"
+  - id: 18eb4a3e-b7f2-4554-85a5-a317c6a40705
+    name: ryan 机 Grok 执行者(Cursor)
+    model: cursor-grok-4.6-xhigh
+    status: never
+    since: ""
+    quote: "朋友机，只做取证"
+    restore: ""
+  - id: 9a35c7f8-5b4d-468d-b4eb-1e0b0821d1a9
+    name: ryan 机 Auto 执行者(Cursor)
+    model: auto
+    status: never
+    since: ""
+    quote: "朋友机，只做取证"
+    restore: ""
+  - id: 297b6eef-2501-4301-98e0-6498db749d57
+    name: Cortex Dev Setup
+    model: gpt-5.6-sol
+    status: never
+    since: ""
+    quote: "不归这套派工"
+    restore: ""
+  - id: bc433bd6-f85e-417b-905f-4c5c11d181cf
+    name: Mac Issue Dispatcher
+    model: gpt-5.6-sol
+    status: never
+    since: ""
+    quote: "不归这套派工"
+    restore: ""
+  - id: 58daf415-83fe-4484-8c19-b9f666035f65
+    name: Multica Helper
+    model: gemini-3.8-flash-high
+    status: never
+    since: ""
+    quote: "不归这套派工"
+    restore: ""

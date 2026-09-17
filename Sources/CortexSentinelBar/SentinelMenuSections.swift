@@ -1460,14 +1460,18 @@ struct SentinelBalancesSection: View {
     /// 三机总览：图形卡（CPU / 内存 / swap 迷你条，槽位点阵，压力色点）。
     @ViewBuilder private var telemetrySummarySection: some View {
         let payload = store.telemetrySummary?.payload
-        if let payload, !payload.machines.isEmpty {
+        let machines = CortexTelemetrySummaryDisplay.mergedMachines(
+            kvPayload: payload,
+            lanMachines: store.lanMachines
+        )
+        if !machines.isEmpty {
             VStack(alignment: .leading, spacing: SentinelTheme.Spacing.sm) {
                 HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
                     Text("机器总览")
                         .font(SentinelTheme.Fonts.rowTitle)
                         .foregroundStyle(SentinelTheme.Colors.foreground)
                     Spacer(minLength: 0)
-                    if let working = payload.multica?.working {
+                    if let working = payload?.multica?.working {
                         Text("Multica 在跑 \(working)")
                             .font(SentinelTheme.Fonts.balanceName)
                             .foregroundStyle(SentinelTheme.Colors.info)
@@ -1476,7 +1480,7 @@ struct SentinelBalancesSection: View {
                             .background(Capsule().fill(SentinelTheme.Colors.info.opacity(0.16)))
                     }
                 }
-                ForEach(Array(payload.machines.enumerated()), id: \.offset) { _, machine in
+                ForEach(Array(machines.enumerated()), id: \.offset) { _, machine in
                     machineCard(machine)
                 }
             }

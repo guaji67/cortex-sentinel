@@ -94,6 +94,13 @@ final class SentinelStore {
     @ObservationIgnored private var routePreviewFetchInFlight = false
     /// 三机总览取数并发闸：同一时间最多一个在跑。
     @ObservationIgnored private var telemetrySummaryFetchInFlight = false
+    /// 局域网直连：本机 server（暴露 collect 遥测）与同网端点发现/拉取结果。
+    @ObservationIgnored private var lanTelemetryServer: LanTelemetryServer?
+    @ObservationIgnored private var lanTelemetryServerStarted = false
+    private let lanPeerBrowser = LanPeerBrowser()
+    private(set) var lanPeers: [LanPeer] = []
+    private(set) var lanMachines: [CortexTelemetrySummaryPayload.Machine] = []
+    @ObservationIgnored private var lanFetchInFlight = false
     /// 当前生效的 GLM key（自动识别 ∪ 用户添加 − 用户删除）。
     @ObservationIgnored private var glmKeyEntries: [GLMKeyEntry] = []
     @ObservationIgnored private var commandCodeFetchInFlight = false
@@ -323,6 +330,7 @@ final class SentinelStore {
             return
         }
         hasStarted = true
+        startLanTelemetry()
         LaunchAgentManager.migrateKeepAliveIfNeeded()
         LaunchAgentManager.installOnFirstLaunch()
         reconcileLoginItem()
@@ -832,6 +840,7 @@ final class SentinelStore {
             self.refreshGateRuntimeStatus()
             self.refreshRoutePreview()
             self.refreshTelemetrySummary()
+            self.refreshLanTelemetry()
         }
     }
 
@@ -955,6 +964,67 @@ final class SentinelStore {
                     failureText: reason,
                     failureAt: self.now()
                 )
+            }
+        }
+    }
+
+    /// 局域网直连：拉全部发现的同网端点（2 秒超时），解码成机器遥测。
+    /// 面板开着 5 秒一轮、关着 2 分钟一轮（跟 statusPollInterval 同节奏）。
+    private func refreshLanTelemetry() {
+        guard !lanFetchInFlight, !lanPeers.isEmpty else {
+            return
+        }
+        lanFetchInFlight = true
+        let peers = lanPeers
+        Task { @MainActor [weak self] in
+            let machines = await Task.detached(priority: .utility) { () -> [CortexTelemetrySummaryPayload.Machine] in
+                await withTaskGroup(of: CortexTelemetrySummaryPayload.Machine?.self) { group in
+                    for peer in peers {
+                        group.addTask {
+                            guard let data = await LanTelemetryFetcher.fetch(host: peer.host, port: peer.port) else {
+                                return nil
+                            }
+                            return try? JSONDecoder().decode(CortexTelemetrySummaryPayload.Machine.self, from: data)
+                        }
+                    }
+                    var result: [CortexTelemetrySummaryPayload.Machine] = []
+                    for await machine in group {
+                        if let machine {
+                            result.append(machine)
+                        }
+                    }
+                    return result
+                }
+            }.value
+            guard let self else {
+                return
+            }
+            self.lanFetchInFlight = false
+            self.lanMachines = machines
+        }
+    }
+
+    func startLanTelemetry() {
+        if lanTelemetryServerStarted {
+            return
+        }
+        lanTelemetryServerStarted = true
+        let server = LanTelemetryServer { [weak self] in
+            guard let self else { return nil }
+            return await CortexLanCollect.data(
+                environment: self.environment,
+                watchDirectory: self.paths.logsDirectory,
+                fallbackRepositoryRoot: self.paths.repositoryRoot,
+                homeDirectory: FileManager.default.homeDirectoryForCurrentUser.path,
+                runner: CortexProcessSubprocessRunner()
+            )
+        }
+        lanTelemetryServer = server
+        server.start()
+        lanPeerBrowser.start { [weak self] peers in
+            Task { @MainActor [weak self] in
+                self?.lanPeers = peers
+                self?.refreshLanTelemetry()
             }
         }
     }

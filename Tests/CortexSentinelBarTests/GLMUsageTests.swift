@@ -75,6 +75,27 @@ final class GLMUsageTests: XCTestCase {
         XCTAssertNil(part.windows.weekly)
     }
 
+    func testParseMapsTokensLimitWindowsLikeCreditLimit() throws {
+        // 2026-09-16 睿动 pro 号实抓：部分订阅号的窗是 TOKENS_LIMIT 类型，
+        // unit 编号与字段同 CREDIT_LIMIT 形状；同回包还带一个 MCP 包的
+        // TIME_LIMIT，必须继续排除不进窗。
+        let part = try GLMUsageClient.parseQuotaPayload(
+            data: Data(
+                """
+                {"code":200,"msg":"操作成功","data":{"limits":[
+                  {"type":"TOKENS_LIMIT","unit":3,"number":5,"percentage":2,"nextResetTime":1789655421326},
+                  {"type":"TOKENS_LIMIT","unit":6,"number":1,"percentage":1,"nextResetTime":1790241671989},
+                  {"type":"TIME_LIMIT","unit":5,"number":1,"usage":1000,"currentValue":0,"remaining":1000,"percentage":0,"nextResetTime":1792228871999}
+                ],"level":"pro"},"success":true}
+                """.utf8
+            )
+        )
+        XCTAssertEqual(part.level, "pro")
+        XCTAssertEqual(part.windows.fiveHour?.percentUsed, 2)
+        XCTAssertEqual(part.windows.weekly?.percentUsed, 1)
+        XCTAssertNil(part.windows.fiveHour?.totalPoints, "TOKENS_LIMIT 回包没有 usage 字段，总量如实留空")
+    }
+
     /// fetch 把订阅窗和现金余额两个接口的结果拼进同一行；
     /// 一边挂另一边照常显示，两边全挂才抛错。
     func testFetchMergesQuotaAndBalanceIndependently() async throws {

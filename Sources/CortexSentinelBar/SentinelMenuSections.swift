@@ -782,6 +782,8 @@ struct SentinelBalancesSection: View {
 
             gateRuntimeStatusRow
 
+            routePreviewSection
+
             cursorUsageRow
 
             officialUsageRow
@@ -1264,6 +1266,24 @@ struct SentinelBalancesSection: View {
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityLabel(row.text)
+        }
+    }
+
+    /// 派工路由预案：此刻生效的派工顺序（cortex 路由表算好，纯展示不调节）。
+    /// 标题行带北京时刻与窗态，正文每行一条出口；没跑过任何一轮不占位。
+    @ViewBuilder private var routePreviewSection: some View {
+        let rows = CortexRoutePreviewDisplay.rows(store.routePreview, now: Date())
+        if !rows.isEmpty {
+            VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xs) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, line in
+                    Text(line)
+                        .font(SentinelTheme.Fonts.balanceMeta)
+                        .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                        .lineLimit(3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityLabel(line)
+                }
+            }
         }
     }
 

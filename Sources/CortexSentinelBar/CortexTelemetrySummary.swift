@@ -27,6 +27,10 @@ struct CortexTelemetrySummaryPayload: Decodable, Equatable, Sendable {
         let machine: String?
         let cpuPct: Double?
         let memFreePct: Double?
+        /// 活动监视器同源占用口径（active+wired+压缩占用），cortex 侧算好。
+        let memUsedPct: Double?
+        /// 内核内存压力等级：1 正常 / 2 警告 / 4 危急。
+        let pressureLevel: Int?
         let load: Double?
         let swap: Swap?
         let devSlots: DevSlots?
@@ -37,6 +41,8 @@ struct CortexTelemetrySummaryPayload: Decodable, Equatable, Sendable {
             case machine
             case cpuPct = "cpu_pct"
             case memFreePct = "mem_free_pct"
+            case memUsedPct = "mem_used_pct"
+            case pressureLevel = "pressure_level"
             case load
             case swap
             case devSlots = "dev_slots"
@@ -49,6 +55,8 @@ struct CortexTelemetrySummaryPayload: Decodable, Equatable, Sendable {
             machine = try container.decodeIfPresent(String.self, forKey: .machine)
             cpuPct = try container.decodeIfPresent(Double.self, forKey: .cpuPct)
             memFreePct = try container.decodeIfPresent(Double.self, forKey: .memFreePct)
+            memUsedPct = try container.decodeIfPresent(Double.self, forKey: .memUsedPct)
+            pressureLevel = try container.decodeIfPresent(Int.self, forKey: .pressureLevel)
             load = try container.decodeIfPresent(Double.self, forKey: .load)
             swap = try container.decodeIfPresent(Swap.self, forKey: .swap)
             devSlots = try container.decodeIfPresent(DevSlots.self, forKey: .devSlots)
@@ -229,7 +237,14 @@ enum CortexTelemetrySummaryDisplay {
         } else if let load = machine.load {
             parts.append("load \(String(format: "%.1f", load))")
         }
-        if let free = machine.memFreePct {
+        if let used = machine.memUsedPct {
+            // 新口径：占用百分比 + 内核压力等级（Falcon 09-18 令看得准）。
+            parts.append("内存占 \(Int(used.rounded()))%")
+            if let level = machine.pressureLevel {
+                parts.append(level == 2 ? "压力警告" : (level >= 4 ? "压力危急" : "压力正常"))
+            }
+        } else if let free = machine.memFreePct {
+            // 旧数据（升级前的 KV）只有空闲口径，先兜底显示。
             parts.append("内存余 \(Int(free))%")
         }
         if let swap = machine.swap, let used = swap.used {

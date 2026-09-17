@@ -8,7 +8,7 @@ final class CortexTelemetrySummaryTests: XCTestCase {
         Data(
             """
             {"schema":2,"machines":[
-              {"machine":"pro","cpu_pct":34.2,"mem_free_pct":73.0,"load":7.7,
+              {"machine":"pro","cpu_pct":34.2,"mem_free_pct":73.0,"mem_used_pct":65.7,"pressure_level":1,"load":7.7,
                "swap":{"used":"12.30G","total":"48.00G"},
                "dev_slots":{"used":2,"cap":5},
                "lines_by_model":{"custom-local:BC-GLM-5.3-Flash":2,"glm-5.3-flash":1},
@@ -37,8 +37,9 @@ final class CortexTelemetrySummaryTests: XCTestCase {
         let rows = CortexTelemetrySummaryDisplay.rows(Self.state(payload: payload, failure: nil), now: Date())
         XCTAssertEqual(rows.count, 5)
         XCTAssertEqual(rows[0], "三机总览（Multica 在跑 3）")
-        XCTAssertEqual(rows[1], "Pro CPU 34% · 内存余 73% · swap 12.30G/48.00G")
-        XCTAssert(rows[1].contains("内存余 73%"))
+        XCTAssertEqual(rows[1], "Pro CPU 34% · 内存占 66% · 压力正常 · swap 12.30G/48.00G")
+        XCTAssert(rows[1].contains("内存占 66%"))
+        XCTAssert(rows[1].contains("压力正常"))
         XCTAssert(rows[1].contains("swap 12.30G/48.00G"))
         XCTAssert(rows[2].contains("槽 2/5"))
         XCTAssertEqual(rows[2], "Pro 槽 2/5 · 本机线 3（CodeBuddy×2·ZCode）")

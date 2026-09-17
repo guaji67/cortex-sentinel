@@ -417,6 +417,30 @@ if [ -z "$watch_dir" ]; then
   fi
 fi
 
+# 没显式给目录、默认位置也不存在时，按常用位置认一遍仓（Falcon 2026-09-18 令：
+# 装机别再「没找到」——标准位置有仓就自动把日志软链挂上，跟 Pro 机的成熟装法
+# 一致；探针认到的仓不写进 LaunchAgent env，设置里的「选择」保持可用）。
+cortex_repo_root_probed=0
+if [ "$used_fallback_watch" -eq 1 ] && [ ! -e "$default_watch_dir" ]; then
+  for repo_candidate in "$HOME/Documents/Code/cortex" "$HOME/Code/cortex" "$HOME/cortex"; do
+    if [ -d "$repo_candidate/logs" ] && [ -e "$repo_candidate/.git" ]; then
+      if ln -sfn "$repo_candidate/logs" "$default_watch_dir" 2>/dev/null; then
+        cortex_repo_root="$repo_candidate"
+        cortex_repo_root_probed=1
+        used_fallback_watch=0
+        echo "认到 Cortex 仓库 $repo_candidate，已把 $default_watch_dir 软链到它的 logs。"
+      fi
+      break
+    fi
+  done
+fi
+
+# 默认位置已在（典型是软链到某仓 logs 的成熟装法）：不算「没找到」，
+# 别再对配置正常的机器喊那句误导话。
+if [ "$used_fallback_watch" -eq 1 ] && [ -d "$default_watch_dir" ]; then
+  used_fallback_watch=0
+fi
+
 if [ -n "$cortex_repo_root" ] && [ ! -d "$cortex_repo_root" ]; then
   cortex_repo_root=""
 fi
@@ -577,7 +601,7 @@ write_launch_agent() {
   plutil -insert EnvironmentVariables -dictionary "$temporary_plist"
   if [ "$watch_dir_explicit" -eq 1 ]; then
     plutil -insert EnvironmentVariables.CORTEX_SENTINEL_WATCH_DIR -string "$watch_dir" "$temporary_plist"
-  elif [ -n "$cortex_repo_root" ] && [ -d "$cortex_repo_root" ]; then
+  elif [ "$cortex_repo_root_probed" -eq 0 ] && [ -n "$cortex_repo_root" ] && [ -d "$cortex_repo_root" ]; then
     plutil -insert EnvironmentVariables.CORTEX_REPO_ROOT -string "$cortex_repo_root" "$temporary_plist"
   fi
   chmod 0644 "$temporary_plist"

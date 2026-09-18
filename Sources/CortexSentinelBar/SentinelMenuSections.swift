@@ -896,9 +896,10 @@ struct SentinelBalancesSection: View {
 
             gateRuntimeStatusRow
 
-            routePreviewSection
-
+            // 机器总览在派工预案上面（Falcon 09-18 令整体对调）。
             telemetrySummarySection
+
+            routePreviewSection
 
             switch store.aio.sourceState {
             case .unconfigured, .invalid:
@@ -1682,13 +1683,24 @@ struct SentinelBalancesSection: View {
         }
     }
 
-    /// 「在跑 N」＝本地 CLI 线 + Multica 派到本机的执行者（Falcon 09-18 令：
-    /// 「本机线」只数本地线，跟 Multica 在跑对不上账，谁看不懂）。拆账卡锚整行。
+    /// 「在跑 N」只数 Multica 派到本机的执行者——三张卡加起来必须等于顶部
+    /// 「Multica 在跑」徽标（Falcon 09-18 令：要能对上账）。本机 CLI 直派线
+    /// 是另一套口径（界面上的「N 次运行」是累计历史，跟在跑无关），有活另给
+    /// 灰字「+N 本地」，不掺进这个数。
     private func runningBadge(_ localLines: [String: Int]?, multicaNames: [String]) -> some View {
-        let total = (localLines ?? [:]).values.reduce(0, +) + multicaNames.count
-        return Text("在跑 \(total)")
-            .font(SentinelTheme.Fonts.balanceName)
-            .foregroundStyle(total > 0 ? SentinelTheme.Colors.primary : SentinelTheme.Colors.secondaryForeground)
+        let localTotal = (localLines ?? [:]).values.reduce(0, +)
+        return HStack(spacing: 5) {
+            Text("在跑 \(multicaNames.count)")
+                .font(SentinelTheme.Fonts.balanceName)
+                .fixedSize()
+                .foregroundStyle(multicaNames.isEmpty ? SentinelTheme.Colors.secondaryForeground : SentinelTheme.Colors.primary)
+            if localTotal > 0 {
+                Text("+\(localTotal) 本地")
+                    .font(SentinelTheme.Fonts.balanceMeta)
+                    .fixedSize()
+                    .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+            }
+        }
     }
 
     private func runningHoverContent(
@@ -1718,8 +1730,8 @@ struct SentinelBalancesSection: View {
             noteColor: nil
         ))
         return BalanceHoverContent(
-            title: "在跑 \(localTotal + multicaNames.count)",
-            subtitle: "本地 CLI 线 + Multica 派到本机的执行者",
+            title: "Multica 派本机 \(multicaNames.count)",
+            subtitle: "本地 CLI 线另计，不含在上面这个数里",
             lines: lines
         )
     }

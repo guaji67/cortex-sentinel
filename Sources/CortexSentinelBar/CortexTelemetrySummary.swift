@@ -102,11 +102,15 @@ struct CortexTelemetrySummaryPayload: Decodable, Equatable, Sendable {
         let idle: Int?
         /// 在跑执行者名单（cortex 侧 agent list 取 name）；旧脚本没这键，给空。
         let workingNames: [String]
+        /// 在跑执行者按机器归属拆账（键 pro/m1max/mini2/unknown），cortex 侧按
+        /// 执行者名里的机器词分好；旧脚本没这键，给空。机器卡「在跑」用它对账。
+        let workingByMachine: [String: [String]]
 
         enum CodingKeys: String, CodingKey {
             case working
             case idle
             case workingNames = "working_names"
+            case workingByMachine = "working_by_machine"
         }
 
         init(from decoder: Decoder) throws {
@@ -114,6 +118,9 @@ struct CortexTelemetrySummaryPayload: Decodable, Equatable, Sendable {
             working = try container.decodeIfPresent(Int.self, forKey: .working)
             idle = try container.decodeIfPresent(Int.self, forKey: .idle)
             workingNames = try container.decodeIfPresent([String].self, forKey: .workingNames) ?? []
+            workingByMachine = try container.decodeIfPresent(
+                [String: [String]].self, forKey: .workingByMachine
+            ) ?? [:]
         }
     }
 }

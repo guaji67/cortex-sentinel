@@ -1494,7 +1494,7 @@ struct SentinelBalancesSection: View {
                     }
                 }
                 ForEach(Array(machines.enumerated()), id: \.offset) { _, machine in
-                    machineCard(machine)
+                    machineCard(machine, multicaByMachine: payload?.multica?.workingByMachine ?? [:])
                 }
             }
         } else if let state = store.telemetrySummary {
@@ -1547,10 +1547,15 @@ struct SentinelBalancesSection: View {
         }
     }
 
-    /// 单台机器图形卡。行1 认机器（名/CPU/内存/swap，压力灯收行尾），
-    /// 行2 派工（槽位点阵 + 本机线）——Falcon 09-18 令的两行分工。
-    private func machineCard(_ machine: CortexTelemetrySummaryPayload.Machine) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+    /// 单台机器图形卡。行1 认机器（名/CPU/内存/swap），行2 派工（槽位 + 在跑 +
+    /// 压力灯收行尾）——压力灯放行2 是 Falcon 09-18 令的「右下角」，行1 满宽时
+    /// 点会被裁半边（生产实锤），行2 尾永远有地方站。
+    private func machineCard(
+        _ machine: CortexTelemetrySummaryPayload.Machine,
+        multicaByMachine: [String: [String]]
+    ) -> some View {
+        let multicaNames = multicaByMachine[machineName(machine).lowercased()] ?? []
+        return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
                 Text(machineName(machine))
                     .font(SentinelTheme.Fonts.balanceName)
@@ -1568,14 +1573,21 @@ struct SentinelBalancesSection: View {
                         .lineLimit(1)
                         .fixedSize()
                 }
-                Spacer(minLength: 8)
-                pressureDot(machine.pressureLevel)
+                Spacer(minLength: 0)
             }
             HStack(spacing: 10) {
                 slotDots(machine.devSlots)
-                lineBadge(machine.linesByModel)
+                runningBadge(machine.linesByModel, multicaNames: multicaNames)
                 Spacer(minLength: 0)
+                pressureDot(machine.pressureLevel)
             }
+            // 悬停目标锚整行（余额区同模式）：锚在「在跑」小徽标上时，312pt 宽的
+            // 拆账卡向左展出去会越过面板左缘整列被裁（0148 出图实锤）。
+            .contentShape(Rectangle())
+            .modifier(HoverDetailCard(
+                makeContent: { self.runningHoverContent(machine.linesByModel, multicaNames: multicaNames) },
+                branchID: "running"
+            ))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -1670,11 +1682,46 @@ struct SentinelBalancesSection: View {
         }
     }
 
-    private func lineBadge(_ lines: [String: Int]?) -> some View {
-        let total = (lines ?? [:]).values.reduce(0, +)
-        return Text("本机线 \(total)")
+    /// 「在跑 N」＝本地 CLI 线 + Multica 派到本机的执行者（Falcon 09-18 令：
+    /// 「本机线」只数本地线，跟 Multica 在跑对不上账，谁看不懂）。拆账卡锚整行。
+    private func runningBadge(_ localLines: [String: Int]?, multicaNames: [String]) -> some View {
+        let total = (localLines ?? [:]).values.reduce(0, +) + multicaNames.count
+        return Text("在跑 \(total)")
             .font(SentinelTheme.Fonts.balanceName)
             .foregroundStyle(total > 0 ? SentinelTheme.Colors.primary : SentinelTheme.Colors.secondaryForeground)
+    }
+
+    private func runningHoverContent(
+        _ localLines: [String: Int]?,
+        multicaNames: [String]
+    ) -> BalanceHoverContent {
+        let localTotal = (localLines ?? [:]).values.reduce(0, +)
+        var lines: [BalanceHoverLine] = []
+        if let localLines, !localLines.isEmpty {
+            let breakdown = localLines
+                .sorted { $0.value > $1.value }
+                .map { key, count in count > 1 ? "\(CortexTelemetrySummaryDisplay.shortModel(key))×\(count)" : CortexTelemetrySummaryDisplay.shortModel(key) }
+                .joined(separator: "、")
+            lines.append(BalanceHoverLine(
+                label: "本地 CLI 线",
+                value: "\(localTotal)",
+                note: breakdown,
+                noteColor: nil
+            ))
+        } else {
+            lines.append(BalanceHoverLine(label: "本地 CLI 线", value: "0", note: nil, noteColor: nil))
+        }
+        lines.append(BalanceHoverLine(
+            label: "Multica 派本机",
+            value: "\(multicaNames.count)",
+            note: multicaNames.joined(separator: "、"),
+            noteColor: nil
+        ))
+        return BalanceHoverContent(
+            title: "在跑 \(localTotal + multicaNames.count)",
+            subtitle: "本地 CLI 线 + Multica 派到本机的执行者",
+            lines: lines
+        )
     }
 
     /// 压力灯：正常只留一个绿点（Falcon 09-18 令），异常才出字；缺数据灰点。

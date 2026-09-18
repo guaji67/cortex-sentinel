@@ -1554,7 +1554,10 @@ struct SentinelBalancesSection: View {
             HStack(spacing: 10) {
                 Text(machineName(machine))
                     .font(SentinelTheme.Fonts.balanceName)
-                    .foregroundStyle(SentinelTheme.Colors.foreground)
+                // 名字是行里唯一没定宽的文本：不给 fixedSize，空间一紧就被
+                // 压成一字一行竖排（0.1.46 生产实锤）。
+                .fixedSize()
+                .foregroundStyle(SentinelTheme.Colors.foreground)
                 miniGauge(value: machine.cpuPct, label: "CPU")
                 miniGauge(value: machine.memUsedPct ?? machine.memFreePct.map { 100 - $0 },
                           label: machine.memUsedPct != nil ? "内存" : "内存余")

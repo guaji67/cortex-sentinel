@@ -105,3 +105,27 @@ $ git worktree list | grep -i cor7600
 /Users/falcon/Documents/Code/cortex-sentinel   067a340 [codex/cor7600-pack-stable-mirror]
 （唯一命中是本线所在的主检出，未建任何 worktree）
 ```
+
+## 换基重开（2026-09-20，主控返工）
+
+**返工原因（主控原话：问题在我不在你）**：本线第一轮所基的本地 `main` 是 09-02 的旧树——实测 `git rev-list --count` 落后 origin/main **136** 笔、本地多 **79** 笔旧提交，导致 PR #44 变成 118 files / CONFLICTING。本线已关 PR #44（评论注明基错原因），换基重开。
+
+| 项 | 值 |
+|---|---|
+| 新 PR | **#45**（changed_files=16，commits=3，OPEN，base main） |
+| 新分支 | `codex/cor7600-pack-stable-mirror-v2`（基于 `origin/main`，tip `cd47865`） |
+| `git rev-list --count origin/main..HEAD` | **3**（= 本线自己的三笔：cf77f38 功能、77a9f1d 回执证据、7ea795c 新基渲染证据） |
+| `git rev-list --count HEAD..origin/main` | **0** |
+
+**冲突按上游重写了哪几处：没有需要重写的——cherry-pick 两笔均零文本冲突**（git 三方自动并入）。上游 136 笔对本线触点的大改（`SentinelMenuSections.swift` +2060 行、`SentinelStore.swift` +725、`PanelPNGRenderer.swift` +432、`CortexSentinelBarApp.swift` ±124）与我的编辑区不重叠，逐点核过：
+
+- 主控给的新基坐标核过：`SentinelFileReader.swift:55-63` 仍是 `defaultPackagingProgressRoot` 拼 `$TMPDIR/cortex-pack-progress`（我的 `packProgressHealthURL` 解析器落在同文件 :157 起）；「退到数据根 health/」先例注释在新基 `:121`（旧基 :113，行号漂移，语义同位）。
+- `PackagingProgressTests` / `PackagingDisplayRegressionTests` / `PanelSectionIsolationTests` / `PackagingProgress.swift` 上游没动，原样落位。
+- `PanelPreviewFixture` 名单测试（`PanelPNGRendererTests.testFixtureRawValuesMatchCLINames`）在新基上含本线三个新 fixture 仍精确匹配——上游没往这个枚举加东西。
+- 没把任何旧结构搬回去：面板通道区已是上游新的 Codex / CodeBuddy / Grok 三卡与新版余额区，本线打包分区原样坐在其上（新基渲染 PNG 为证）。
+
+**新基重跑测试**（隔离 `TMPDIR`，`out=$(swift test 2>&1); rc=$?`）：**rc=0，499 tests，0 failures**（旧基 369 → 新基 499，上游新增 130 条一并通过）。
+
+**新基重出三态渲染证据**：`reports/cor7600-assets/` 三张 PNG 已替换为新基版本（面板 760→828 宽，running/idle/error 内容同前：版本·步次·起算·ETA / reason+上一炉 / error 单独成态），running 态亲眼复核，打包分区与上游新版布局共存正常。`--dump-state` 行为与旧基一致（同一段代码，未受上游影响）。
+
+**旧分支清理**：新 PR 开好后已删——`git branch -D codex/cor7600-pack-stable-mirror`（was 76c656e）+ `git push origin --delete codex/cor7600-pack-stable-mirror`，本地与远端均已不存在；PR #44 已补评论注明新 PR 号（#45）。

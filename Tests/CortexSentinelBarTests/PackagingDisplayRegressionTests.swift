@@ -57,7 +57,8 @@ final class PackagingDisplayRegressionTests: XCTestCase {
         await store.refreshStatuses()
 
         let packaging = StoreChangeCounter { [weak store] in
-            _ = store?.packagingProgress
+            // COR-7600：分区读三态面 packagingReading。
+            _ = store?.packagingReading
         }
         let header = StoreChangeCounter { [weak store] in
             guard let store else { return }
@@ -214,6 +215,138 @@ final class PackagingDisplayRegressionTests: XCTestCase {
         )
     }
 
+    // MARK: - COR-7600 三态分区
+
+    /// 稳定落点在但没炉在跑（completed 残留）：面板必须显示 idle 和读侧 reason，
+    /// 顺带显示上一炉时间；状态栏「打包」段保持安静。
+    func testPanelShowsIdleReasonWithLastRunFromStableMirror() async throws {
+        let store = makeStore()
+        try writeStablePackProgress(status: "completed")
+        await store.refreshStatuses()
+
+        guard case let .idle(reason, lastRun) = store.packagingReading else {
+            return XCTFail("completed 残留必须投影成 idle，实际 \(String(describing: store.packagingReading))")
+        }
+        XCTAssertEqual(reason, "当前没有在跑的炉")
+        XCTAssertEqual(lastRun?.status, .completed)
+        XCTAssertNotNil(lastRun?.updatedAt)
+        XCTAssertNil(store.packagingProgress, "状态栏面不收 idle")
+        XCTAssertFalse(store.packagingActive)
+    }
+
+    /// 登记文件读不了：必须落 error，和 idle 分开，不许被兜底洗成「没在打包」。
+    func testPanelShowsErrorDistinctFromIdleWhenMirrorUnreadable() async throws {
+        let store = makeStore()
+        let healthDirectory = root.appendingPathComponent("health", isDirectory: true)
+        try fileManager.createDirectory(at: healthDirectory, withIntermediateDirectories: true)
+        try Data("this-is-not-pack-progress".utf8)
+            .write(to: healthDirectory.appendingPathComponent("pack-progress.json"))
+        await store.refreshStatuses()
+
+        guard case let .error(reason) = store.packagingReading else {
+            return XCTFail("读不了的登记文件必须投影成 error，实际 \(String(describing: store.packagingReading))")
+        }
+        XCTAssertEqual(reason, "登记文件读不了或不是 JSON")
+        XCTAssertFalse(store.packagingActive)
+    }
+
+    /// 稳定落点的活线：面板读侧翻成 running，状态栏「打包」段点亮。
+    func testPanelReadingFlipsToRunningFromStableMirror() async throws {
+        let store = makeStore()
+        try writeStablePackProgress(status: "running")
+        await store.refreshStatuses()
+
+        guard case let .running(snapshot) = store.packagingReading else {
+            return XCTFail("稳定落点活线必须投影成 running，实际 \(String(describing: store.packagingReading))")
+        }
+        XCTAssertEqual(snapshot.furnaceText, "9.9.9")
+        XCTAssertEqual(snapshot.stepProgressText, "第 2/2 步")
+        XCTAssertTrue(snapshot.isActive)
+        XCTAssertTrue(store.packagingActive)
+        XCTAssertTrue(statusBarContainsPackaging(store))
+    }
+
+    /// 稳定落点还没有登记文件：idle 用「还没有登记文件」那句 reason，与
+    /// 「炉刚跑完」的 idle 区分得开。
+    func testPanelShowsIdleWhenStableMirrorFileIsMissing() async throws {
+        let store = makeStore()
+        await store.refreshStatuses()
+
+        guard case let .idle(reason, lastRun) = store.packagingReading else {
+            return XCTFail("无文件必须投影成 idle，实际 \(String(describing: store.packagingReading))")
+        }
+        XCTAssertEqual(reason, "当前没有在跑的炉（稳定落点还没有登记文件）")
+        XCTAssertNil(lastRun)
+    }
+
+    // MARK: - COR-7600 返工：error 人话上屏、与 running 视觉分档
+
+    /// running 与 error 必须一眼可分：图标、颜色、行档位三样都得不一样。
+    /// 曾经两者同为橙框橙图标，「在打包」和「出错了」扫一眼混掉。
+    func testErrorMoodDiffersFromRunningInIconColorAndTone() {
+        let running = SentinelPackagingSectionMood.running
+        let error = SentinelPackagingSectionMood.error
+        XCTAssertNotEqual(running.iconName, error.iconName, "running 与 error 图标必须不同")
+        XCTAssertNotEqual(running.accent, error.accent, "running 与 error 前景色必须不同")
+        XCTAssertNotEqual(running.tone, error.tone, "running 与 error 行档位必须不同")
+        // idle 保持安静档，也不许跟 error 撞。
+        XCTAssertNotEqual(SentinelPackagingSectionMood.idle.accent, error.accent)
+    }
+
+    /// 上屏文案一律人话：没看过我们代码的人要能读懂发生了什么、要不要做事。
+    /// JSON / 数据根 / 稳定落点 / 登记文件这些内部词只许进 --dump-state 诊断口。
+    func testOnScreenPackagingCopySpeaksHumanWithoutInternalJargon() {
+        let onScreenTexts = [
+            SentinelPackagingCopy.sectionTitle,
+            SentinelPackagingCopy.idleLine,
+            SentinelPackagingCopy.errorLine,
+            SentinelPackagingCopy.errorHint,
+        ]
+        let forbiddenJargon = ["JSON", "json", "数据根", "稳定落点", "登记", "解析", "镜像", "schema", "文件"]
+        for word in forbiddenJargon {
+            for text in onScreenTexts {
+                XCTAssertFalse(
+                    text.contains(word),
+                    "上屏文案不许出现内部词「\(word)」：\(text)"
+                )
+            }
+        }
+        // error 那句要同时说清「什么状态」和「要不要管」。
+        XCTAssertEqual(SentinelPackagingCopy.errorLine, "读不到打包状态")
+        XCTAssertEqual(SentinelPackagingCopy.errorHint, "下一炉起来会自己恢复")
+    }
+
+    private func writeStablePackProgress(status: String) throws {
+        let healthDirectory = root.appendingPathComponent("health", isDirectory: true)
+        try fileManager.createDirectory(at: healthDirectory, withIntermediateDirectories: true)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let pid = Int(ProcessInfo.processInfo.processIdentifier)
+        let processStartedAt = PackagingProgressActivity.processStartedAt(pid)
+        let isRunning = status == "running"
+        let steps = isRunning
+            ? #"{"id":"build","title":"构建 App 与 zip","status":"done"},{"id":"dmg","title":"打 DMG","status":"running"}"#
+            : #"{"id":"build","title":"构建 App 与 zip","status":"done"}"#
+        let currentStep = isRunning ? "dmg" : "build"
+        let liveFields = isRunning
+            ? "\"pid\":\(pid),\"process_started_at\":\"\(processStartedAt)\","
+            : ""
+        let payload = """
+        {"schema":"cortex.packaging-progress.v1","run_id":"run-stable","entry":"release_app",
+         "version":"9.9.9","status":"\(status)",
+         \(liveFields)
+         "current_step_id":"\(currentStep)","current_detail":"打包中",
+         "started_at":"\(formatter.string(from: Date().addingTimeInterval(-20 * 60)))",
+         "updated_at":"\(formatter.string(from: Date()))",
+         "eta_label":"大约还要 9 分钟",
+         "progress_file":"\(progressRoot.appendingPathComponent("run-stable/progress.json").path)",
+         "steps":[\(steps)]}
+        """
+        try Data(payload.utf8).write(
+            to: healthDirectory.appendingPathComponent("pack-progress.json")
+        )
+    }
+
     private func writeRunningProgress() throws {
         let run = progressRoot.appendingPathComponent("run-1", isDirectory: true)
         try fileManager.createDirectory(at: run, withIntermediateDirectories: true)
@@ -259,17 +392,17 @@ final class PackagingDisplayRegressionTests: XCTestCase {
     }
 }
 
-/// 与生产面板同构：父层读 packagingActive，决定要不要把分区挂进 LazyVStack。
+/// 与生产面板同构：父层读 packagingReading 在不在，决定要不要把分区挂进 LazyVStack。
 private struct LazyStackPackagingHostProbe: View {
     var store: SentinelStore
     var counter: SentinelViewBodyCounter
 
     var body: some View {
         let _ = store.panelPresentationGeneration
-        let packagingActive = store.packagingActive
+        let packagingMounted = store.packagingReading != nil
         ScrollView {
             LazyVStack(alignment: .leading, spacing: SentinelTheme.Spacing.section) {
-                if packagingActive {
+                if packagingMounted {
                     SentinelPackagingSection(store: store, bodyCounter: counter)
                 }
                 Text("below")

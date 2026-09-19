@@ -10,7 +10,7 @@ enum SentinelMenuInitialSection {
 /// store，任何一路刷新（哪怕只是某个账号余额回来了）都让整个面板重算一遍。
 /// 现在它只搭 ScrollView 骨架和设置浮层；十个分区各自是独立 View（见
 /// SentinelMenuSections.swift），各读各的数据。生产路径父 body 只读两个低频开关
-/// （packagingActive / panelPresentationGeneration），不读线列表和余额。
+/// （packagingReading 在不在 / panelPresentationGeneration），不读线列表和余额。
 struct SentinelMenuView: View {
     var store: SentinelStore
     var initialSection: SentinelMenuInitialSection = .top
@@ -25,22 +25,23 @@ struct SentinelMenuView: View {
 
     var body: some View {
         // 生产路径仍不读线/余额等高频面。只读两个低频开关：
-        // packagingActive 决定要不要把打包分区挂进树；
+        // packagingReading 在不在决定要不要把打包分区挂进树（COR-7600：三态
+        // 分区首轮刷新落定后常驻，running/idle/error 都看得见）；
         // panelPresentationGeneration 在每次打开面板时强制父 body 按当前 store 重挂，
         // 避开「隐藏 NSPopover 的 NSHostingView 丢掉 Observation 更新」。
         let _ = store.panelPresentationGeneration
-        let packagingActive = store.packagingActive
+        let packagingMounted = store.packagingReading != nil
         ZStack {
             if rendersOffscreen {
                 VStack(alignment: .leading, spacing: SentinelTheme.Spacing.section) {
-                    sectionStack(packagingActive: packagingActive)
+                    sectionStack(packagingMounted: packagingMounted)
                 }
                 .padding(SentinelTheme.Spacing.panel)
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: SentinelTheme.Spacing.section) {
-                            sectionStack(packagingActive: packagingActive)
+                            sectionStack(packagingMounted: packagingMounted)
                         }
                         .padding(SentinelTheme.Spacing.panel)
                     }
@@ -73,9 +74,9 @@ struct SentinelMenuView: View {
     }
 
     @ViewBuilder
-    private func sectionStack(packagingActive: Bool) -> some View {
+    private func sectionStack(packagingMounted: Bool) -> some View {
         SentinelHeaderSection(store: store)
-        if packagingActive {
+        if packagingMounted {
             SentinelPackagingSection(store: store)
         }
         SentinelChannelSection(store: store)

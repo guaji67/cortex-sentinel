@@ -98,7 +98,8 @@ final class PanelSectionIsolationTests: XCTestCase {
             }),
             ("packaging", StoreChangeCounter { [weak store] in
                 guard let store else { return }
-                _ = store.packagingProgress
+                // COR-7600：分区读三态面 packagingReading（running/idle/error 都显示）。
+                _ = store.packagingReading
             }),
             ("channel", StoreChangeCounter { [weak store] in
                 guard let store else { return }
@@ -192,7 +193,8 @@ final class PanelSectionIsolationTests: XCTestCase {
         XCTAssertLessThanOrEqual(byName["service"]!, 1)
         XCTAssertEqual(byName["history"]!, 0, "历史分区在冷开时一次都不该动")
         XCTAssertEqual(byName["backgroundJobs"]!, 0)
-        XCTAssertEqual(byName["packaging"]!, 0)
+        // COR-7600：三态分区首轮刷新落定一次（nil→idle），之后恒定不再发。
+        XCTAssertEqual(byName["packaging"]!, 1)
         XCTAssertLessThanOrEqual(byName["footer"]!, providerCount + 1)
         // 与旧口径可比的总量：旧世界 = 整面板重算次数（Falcon 真机冷开 22）。
         // 新世界这个数字只是「所有面写入次数」，不再有任何 view 全量重算。
@@ -306,6 +308,8 @@ final class PanelSectionIsolationTests: XCTestCase {
             environment: [
                 "CORTEX_SENTINEL_WATCH_DIR": root.path,
                 "CORTEX_DATA_ROOT": root.path,
+                // 打包读侧钉进隔离目录：不许摸本机 $TMPDIR 残留（COR-7600）。
+                "CORTEX_PACK_PROGRESS_DIR": root.appendingPathComponent("pack-progress").path,
                 "CORTEX_AIO_DB_PATH": databaseURL.path,
                 "CORTEX_CODEX_CONFIG_PATH": configURL.path,
                 "CORTEX_CODEX_AUTH_PATH": root.appendingPathComponent("missing-auth.json").path,

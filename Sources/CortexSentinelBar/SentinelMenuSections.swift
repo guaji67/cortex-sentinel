@@ -570,7 +570,8 @@ struct SentinelHeaderSection: View {
     }
 }
 
-/// 面板打包分区的挂载判据。分区 View 和生产路径父 body 都不在这里之外另写一套。
+/// 面板打包分区的活跃快照判据：只有过了四道活线闸的 running 才算数。
+/// 状态栏「打包」段和测试对照都用它；三态分区本体读 packagingReading。
 @MainActor
 enum SentinelPackagingPresentation {
     static func activeSnapshot(from store: SentinelStore) -> PackagingProgressSnapshot? {
@@ -581,49 +582,174 @@ enum SentinelPackagingPresentation {
     }
 }
 
-/// Cortex 打包进度：只在 running 时出现，failed/completed 残留不占地方。读：packagingProgress。
+/// 打包三态分区的视觉档位（COR-7600 返工）。running 与 error 必须一眼可分：
+/// 曾同为橙框橙图标，「在打包」和「出错了」扫一眼混掉，病根从文案挪到了颜色。
+enum SentinelPackagingSectionMood: Equatable {
+    case running
+    case idle
+    case error
+
+    var iconName: String {
+        switch self {
+        case .running: return "shippingbox.fill"
+        case .idle: return "shippingbox"
+        case .error: return "exclamationmark.triangle.fill"
+        }
+    }
+
+    var tone: SentinelRowTone {
+        switch self {
+        case .running: return .warning
+        case .idle: return .normal
+        case .error: return .danger
+        }
+    }
+
+    var accent: Color {
+        switch self {
+        case .running: return SentinelTheme.Colors.warning
+        case .idle: return SentinelTheme.Colors.secondaryForeground
+        case .error: return SentinelTheme.Colors.danger
+        }
+    }
+}
+
+/// 打包三态的上屏文案。一律人话：读屏的人没看过我们代码，
+/// 不许出现 JSON / 数据根 / 稳定落点 / 登记文件这类内部词。
+/// 读侧 reason（与主仓遥测逐字一致的那套）只进 --dump-state 等诊断口，不上屏。
+enum SentinelPackagingCopy {
+    static let sectionTitle = "Cortex 打包"
+    static let runningBusy = "打包中"
+    static let idleLine = "当前没有在跑的炉"
+    static let errorLine = "读不到打包状态"
+    static let errorHint = "下一炉起来会自己恢复"
+}
+
+/// Cortex 打包进度：三态分区（COR-7600）。running 显示哪一炉/第几步/几点
+/// 起算/预计几点出包；idle 显示「当前没有在跑的炉」（可带上一炉时间）；
+/// error 用红色警示档单独显示「读不到打包状态」，与 running 橙框一眼可分。
+/// 读：packagingReading。
 struct SentinelPackagingSection: View {
     var store: SentinelStore
     var bodyCounter: SentinelViewBodyCounter? = nil
 
     var body: some View {
         let _ = bodyCounter?.increment()
-        if let packaging = SentinelPackagingPresentation.activeSnapshot(from: store) {
-            VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xs) {
-                HStack(alignment: .firstTextBaseline, spacing: SentinelTheme.Spacing.sm) {
-                    Image(systemName: "shippingbox.fill")
-                        .foregroundStyle(SentinelTheme.Colors.warning)
-                    Text("Cortex 打包")
-                        .font(SentinelTheme.Fonts.section)
-                        .foregroundStyle(SentinelTheme.Colors.warning)
-                    Spacer()
-                    Text(packaging.etaText)
-                        .font(SentinelTheme.Fonts.metadata)
-                        .foregroundStyle(SentinelTheme.Colors.warning)
-                }
-
-                Text(packaging.stepTitle)
-                    .font(SentinelTheme.Fonts.rowTitle)
-                    .foregroundStyle(SentinelTheme.Colors.foreground)
-
-                if let detail = packaging.detailText {
-                    Text(detail)
-                        .font(SentinelTheme.Fonts.subtitle)
-                        .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                if let updatedAt = packaging.updatedAt {
-                    Text("更新于 \(SentinelTimeFormat.clockTime(updatedAt))")
-                        .font(SentinelTheme.Fonts.rowTime)
-                        .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
-                }
-            }
-            .sentinelRow(tone: .warning)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(packaging.accessibilityText)
-            .accessibilityIdentifier("packaging-progress")
+        switch store.packagingReading {
+        case .running(let packaging):
+            runningBlock(packaging)
+        case .idle(_, let lastRun):
+            idleBlock(lastRun: lastRun)
+        case .error:
+            errorBlock()
+        case nil:
+            EmptyView()
         }
+    }
+
+    private func runningBlock(_ packaging: PackagingProgressSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xs) {
+            HStack(alignment: .firstTextBaseline, spacing: SentinelTheme.Spacing.sm) {
+                Image(systemName: SentinelPackagingSectionMood.running.iconName)
+                    .foregroundStyle(SentinelPackagingSectionMood.running.accent)
+                Text(SentinelPackagingCopy.sectionTitle)
+                    .font(SentinelTheme.Fonts.section)
+                    .foregroundStyle(SentinelPackagingSectionMood.running.accent)
+                Spacer()
+                Text(packaging.etaDisplayText)
+                    .font(SentinelTheme.Fonts.metadata)
+                    .foregroundStyle(SentinelPackagingSectionMood.running.accent)
+            }
+
+            Text(packaging.stepTitle)
+                .font(SentinelTheme.Fonts.rowTitle)
+                .foregroundStyle(SentinelTheme.Colors.foreground)
+
+            if let detail = packaging.detailText {
+                Text(detail)
+                    .font(SentinelTheme.Fonts.subtitle)
+                    .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            // 哪一炉（版本）· 第几步 · 几点起算。缺哪段就少哪段。
+            let metaParts = [
+                packaging.furnaceText,
+                packaging.stepProgressText,
+                packaging.startedAt.map { "\(SentinelTimeFormat.clockTime($0)) 起算" },
+            ].compactMap { $0 }
+            if !metaParts.isEmpty {
+                Text(metaParts.joined(separator: " · "))
+                    .font(SentinelTheme.Fonts.metadata)
+                    .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+            }
+
+            if let updatedAt = packaging.updatedAt {
+                Text("更新于 \(SentinelTimeFormat.clockTime(updatedAt))")
+                    .font(SentinelTheme.Fonts.rowTime)
+                    .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+            }
+        }
+        .sentinelRow(tone: SentinelPackagingSectionMood.running.tone)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(packaging.accessibilityText)
+        .accessibilityIdentifier("packaging-progress")
+    }
+
+    private func idleBlock(lastRun: PackagingProgressSnapshot?) -> some View {
+        VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xxs) {
+            HStack(alignment: .firstTextBaseline, spacing: SentinelTheme.Spacing.sm) {
+                Image(systemName: SentinelPackagingSectionMood.idle.iconName)
+                    .foregroundStyle(SentinelPackagingSectionMood.idle.accent)
+                Text(SentinelPackagingCopy.sectionTitle)
+                    .font(SentinelTheme.Fonts.section)
+                    .foregroundStyle(SentinelPackagingSectionMood.idle.accent)
+                Spacer()
+            }
+            Text(SentinelPackagingCopy.idleLine)
+                .font(SentinelTheme.Fonts.rowTitle)
+                .foregroundStyle(SentinelTheme.Colors.foreground)
+            if let lastRunAt = lastRun?.updatedAt {
+                Text("上一炉 \(SentinelTimeFormat.clockTime(lastRunAt))")
+                    .font(SentinelTheme.Fonts.rowTime)
+                    .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+            }
+        }
+        .sentinelRow(tone: SentinelPackagingSectionMood.idle.tone)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(idleAccessibilityText(lastRun: lastRun))
+        .accessibilityIdentifier("packaging-idle")
+    }
+
+    private func errorBlock() -> some View {
+        VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xxs) {
+            HStack(alignment: .firstTextBaseline, spacing: SentinelTheme.Spacing.sm) {
+                Image(systemName: SentinelPackagingSectionMood.error.iconName)
+                    .foregroundStyle(SentinelPackagingSectionMood.error.accent)
+                Text(SentinelPackagingCopy.sectionTitle)
+                    .font(SentinelTheme.Fonts.section)
+                    .foregroundStyle(SentinelPackagingSectionMood.error.accent)
+                Spacer()
+            }
+            Text(SentinelPackagingCopy.errorLine)
+                .font(SentinelTheme.Fonts.rowTitle)
+                .foregroundStyle(SentinelPackagingSectionMood.error.accent)
+            Text(SentinelPackagingCopy.errorHint)
+                .font(SentinelTheme.Fonts.subtitle)
+                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+        }
+        .sentinelRow(tone: SentinelPackagingSectionMood.error.tone)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(SentinelPackagingCopy.sectionTitle)，\(SentinelPackagingCopy.errorLine)，\(SentinelPackagingCopy.errorHint)")
+        .accessibilityIdentifier("packaging-error")
+    }
+
+    private func idleAccessibilityText(lastRun: PackagingProgressSnapshot?) -> String {
+        var parts = [SentinelPackagingCopy.sectionTitle, SentinelPackagingCopy.idleLine]
+        if let lastRunAt = lastRun?.updatedAt {
+            parts.append("上一炉 \(SentinelTimeFormat.clockTime(lastRunAt))")
+        }
+        return parts.joined(separator: "，")
     }
 }
 

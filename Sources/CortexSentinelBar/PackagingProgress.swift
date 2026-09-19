@@ -200,6 +200,24 @@ struct PackagingProgressSnapshot: Decodable, Equatable {
         normalized(etaLabel) ?? "剩余时间估计中"
     }
 
+    /// 预计几点出包：现在 + eta_ms 折成钟点。Falcon 原话要的是个钟点，
+    /// 不是「还要多久」；没有 eta_ms 给 nil。
+    var etaArrivalText: String? {
+        guard let etaMilliseconds, etaMilliseconds > 0 else {
+            return nil
+        }
+        let arrival = Date().addingTimeInterval(TimeInterval(etaMilliseconds) / 1000)
+        return "预计 \(SentinelTimeFormat.clockTime(arrival))"
+    }
+
+    /// 右上角一句话：时长 + 钟点都要（「大约还要 12 分钟 · 预计 10:22」）。
+    var etaDisplayText: String {
+        if let etaArrivalText {
+            return "\(etaText) · \(etaArrivalText)"
+        }
+        return etaText
+    }
+
     /// 哪一炉：版本优先，没有版本退 run_id；两样都没有给 nil。
     var furnaceText: String? {
         normalized(version) ?? normalized(runID)
@@ -224,7 +242,7 @@ struct PackagingProgressSnapshot: Decodable, Equatable {
             parts.append(stepProgress)
         }
         parts.append(stepTitle)
-        parts.append(etaText)
+        parts.append(etaDisplayText)
         if let detailText {
             parts.append(detailText)
         }

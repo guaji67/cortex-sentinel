@@ -851,6 +851,7 @@ private enum PanelPreviewLayout {
          "current_step_id":"dmg","current_detail":"Electron 打包",
          "started_at":"\(formatter.string(from: Date().addingTimeInterval(-25 * 60)))",
          "updated_at":"\(formatter.string(from: Date()))",
+         "eta_ms":720000,
          "eta_label":"大约还要 12 分钟",
          "progress_file":"\(privateProgressPointer())",
          "steps":[{"id":"build","title":"构建 App 与 zip","status":"done"},

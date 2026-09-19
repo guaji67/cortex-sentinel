@@ -279,6 +279,43 @@ final class PackagingDisplayRegressionTests: XCTestCase {
         XCTAssertNil(lastRun)
     }
 
+    // MARK: - COR-7600 返工：error 人话上屏、与 running 视觉分档
+
+    /// running 与 error 必须一眼可分：图标、颜色、行档位三样都得不一样。
+    /// 曾经两者同为橙框橙图标，「在打包」和「出错了」扫一眼混掉。
+    func testErrorMoodDiffersFromRunningInIconColorAndTone() {
+        let running = SentinelPackagingSectionMood.running
+        let error = SentinelPackagingSectionMood.error
+        XCTAssertNotEqual(running.iconName, error.iconName, "running 与 error 图标必须不同")
+        XCTAssertNotEqual(running.accent, error.accent, "running 与 error 前景色必须不同")
+        XCTAssertNotEqual(running.tone, error.tone, "running 与 error 行档位必须不同")
+        // idle 保持安静档，也不许跟 error 撞。
+        XCTAssertNotEqual(SentinelPackagingSectionMood.idle.accent, error.accent)
+    }
+
+    /// 上屏文案一律人话：没看过我们代码的人要能读懂发生了什么、要不要做事。
+    /// JSON / 数据根 / 稳定落点 / 登记文件这些内部词只许进 --dump-state 诊断口。
+    func testOnScreenPackagingCopySpeaksHumanWithoutInternalJargon() {
+        let onScreenTexts = [
+            SentinelPackagingCopy.sectionTitle,
+            SentinelPackagingCopy.idleLine,
+            SentinelPackagingCopy.errorLine,
+            SentinelPackagingCopy.errorHint,
+        ]
+        let forbiddenJargon = ["JSON", "json", "数据根", "稳定落点", "登记", "解析", "镜像", "schema", "文件"]
+        for word in forbiddenJargon {
+            for text in onScreenTexts {
+                XCTAssertFalse(
+                    text.contains(word),
+                    "上屏文案不许出现内部词「\(word)」：\(text)"
+                )
+            }
+        }
+        // error 那句要同时说清「什么状态」和「要不要管」。
+        XCTAssertEqual(SentinelPackagingCopy.errorLine, "读不到打包状态")
+        XCTAssertEqual(SentinelPackagingCopy.errorHint, "下一炉起来会自己恢复")
+    }
+
     private func writeStablePackProgress(status: String) throws {
         let healthDirectory = root.appendingPathComponent("health", isDirectory: true)
         try fileManager.createDirectory(at: healthDirectory, withIntermediateDirectories: true)

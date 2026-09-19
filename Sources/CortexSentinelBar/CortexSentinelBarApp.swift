@@ -334,6 +334,7 @@ enum CortexSentinelBarMain {
             "  活跃按引擎（本机）：Codex=\(localActiveCounts.codex) CodeBuddy=\(localActiveCounts.codebuddy) Grok=\(localActiveCounts.grok) ox-alpha=\(localActiveCounts.claudeOxAlpha) 其它=\(localActiveCounts.unknown)"
         )
         // COR-7600：打包三态原样打印，稳定落点 / 旧落点各是哪条路一目了然。
+        // reason 是与主仓遥测逐字一致的机器口径，只进这个诊断口，不上屏。
         print("打包登记落点：\(paths.packProgressHealthURL?.path ?? "解析不出来（数据根与显式覆盖都不可用）")")
         print("打包旧落点：\(paths.packagingProgressRoot.path)")
         switch PackagingProgressReader.read(
@@ -349,7 +350,7 @@ enum CortexSentinelBarMain {
                 parts.append(stepProgress)
             }
             parts.append(packaging.stepTitle)
-            parts.append(packaging.etaText)
+            parts.append(packaging.etaDisplayText)
             print(parts.joined(separator: " · "))
         case .idle(let reason, let lastRun):
             var line = "打包进度：idle · \(reason)"

@@ -129,3 +129,35 @@ $ git worktree list | grep -i cor7600
 **新基重出三态渲染证据**：`reports/cor7600-assets/` 三张 PNG 已替换为新基版本（面板 760→828 宽，running/idle/error 内容同前：版本·步次·起算·ETA / reason+上一炉 / error 单独成态），running 态亲眼复核，打包分区与上游新版布局共存正常。`--dump-state` 行为与旧基一致（同一段代码，未受上游影响）。
 
 **旧分支清理**：新 PR 开好后已删——`git branch -D codex/cor7600-pack-stable-mirror`（was 76c656e）+ `git push origin --delete codex/cor7600-pack-stable-mirror`，本地与远端均已不存在；PR #44 已补评论注明新 PR 号（#45）。
+
+## 返工第二节：error 人话上屏、与 running 视觉分档、ETA 带钟点（2026-09-20，主控审 PR #45 后）
+
+**改后的三段上屏文案原文**（机器口径 reason 保留在读层与 `--dump-state`，与主仓遥测逐字一致那套不动；上屏走固定人话映射）：
+
+- running：标题「Cortex 打包」+「打 DMG」详情 +「1.2.3 · 第 3/3 步 · 09:56:13 起算」+ 右上角「**大约还要 12 分钟 · 预计 10:33:13**」+「更新于 10:21:13」
+- idle：标题「Cortex 打包」+「**当前没有在跑的炉**」（可带「上一炉 07:59:34」）
+- error：标题「Cortex 打包」+「**读不到打包状态**」+「**下一炉起来会自己恢复**」——两种 error（文件读不了 / 位置定不出来）对用户是同一件事，合成同一句人话；读屏 label 同步改
+
+**running 与 error 各自的样式**（`SentinelPackagingSectionMood` 三档，收在 `SentinelMenuSections.swift`）：
+
+| 档 | 图标 | 行档位（背景/描边） | 前景色 |
+|---|---|---|---|
+| running | `shippingbox.fill` | `.warning`（橙） | `Colors.warning`（0xFB923C 橙） |
+| idle | `shippingbox` | `.normal` | `Colors.secondaryForeground` |
+| error | `exclamationmark.triangle.fill` | `.danger`（红） | `Colors.danger`（0xF87171 红） |
+
+**新加的断言**（`PackagingDisplayRegressionTests`）：
+
+- `testErrorMoodDiffersFromRunningInIconColorAndTone` —— 钉住 running 与 error 的图标、前景色、行档位三样全不同（idle 也不许跟 error 撞色）
+- `testOnScreenPackagingCopySpeaksHumanWithoutInternalJargon` —— 守卫上屏四句文案不含内部词（JSON/数据根/稳定落点/登记/解析/镜像/schema/文件），并钉住 error 两句原文
+- `testEtaDisplayCarriesArrivalClockFromEtaMilliseconds`（`PackagingProgressTests`）—— 「预计 HH:mm」钟点来自 eta_ms；没有 eta_ms 只剩时长不硬造钟点
+
+**重跑 `swift test`**（隔离 `TMPDIR`，`out=$(swift test 2>&1); rc=$?`）：**rc=0，502 tests，0 failures**（499 + 返工新增 3 条；夹具补 eta_ms 后复跑仍全绿）。
+
+**三张 PNG 重出**（`reports/cor7600-assets/` 已替换，error 那张就是改后的红色档）：
+
+- `panel-pack-stable-running.png`：橙框 + 「大约还要 12 分钟 · 预计 10:33:13」（时长和钟点都在，宽度无压力）
+- `panel-pack-stable-idle.png`：灰档 +「当前没有在跑的炉 / 上一炉 07:59:34」
+- `panel-pack-stable-error.png`：**红框红三角 +「读不到打包状态 / 下一炉起来会自己恢复」**——不读字也能跟 running 分开
+
+夹具顺带修正：`writeStablePackProgress` 的 running 载荷补了 `eta_ms`（真实炉写方本就带，首轮夹具漏了导致首版渲染没出钟点）。契约文档「打包进度块」行同步改写。

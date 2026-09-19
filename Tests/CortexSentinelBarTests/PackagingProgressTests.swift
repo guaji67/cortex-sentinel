@@ -161,6 +161,32 @@ final class PackagingProgressTests: XCTestCase {
         XCTAssertEqual(PackagingProgressActivity.runningStaleAfterSeconds, 30 * 60)
     }
 
+    /// Falcon 原话要的是「预计几点出包」这个钟点，不只是「还要多久」。
+    func testEtaDisplayCarriesArrivalClockFromEtaMilliseconds() throws {
+        let withEta = try JSONDecoder().decode(
+            PackagingProgressSnapshot.self,
+            from: progressJSON(
+                status: "running",
+                updatedAt: Date(),
+                extra: ["eta_ms": 12 * 60 * 1000, "eta_label": "大约还要 12 分钟"]
+            )
+        )
+        XCTAssertEqual(withEta.etaText, "大约还要 12 分钟")
+        XCTAssertTrue(withEta.etaArrivalText?.hasPrefix("预计 ") == true, "钟点必须是「预计 HH:mm」的形状")
+        XCTAssertTrue(withEta.etaDisplayText.contains(withEta.etaText))
+        XCTAssertTrue(withEta.etaDisplayText.contains(withEta.etaArrivalText ?? ""), "右上角要时长和钟点都给")
+
+        // 裸 JSON：progressJSON 夹具基础载荷自带 eta_ms，测「没有 eta」得绕开它。
+        let withoutEta = try JSONDecoder().decode(
+            PackagingProgressSnapshot.self,
+            from: Data(
+                #"{"schema":"cortex.packaging-progress.v1","status":"running","updated_at":"2026-09-19T02:00:00.000Z"}"#.utf8
+            )
+        )
+        XCTAssertNil(withoutEta.etaArrivalText)
+        XCTAssertEqual(withoutEta.etaDisplayText, withoutEta.etaText, "没有 eta_ms 就只剩时长，不硬造钟点")
+    }
+
     func testCrossLanguageActivityFixtureMatchesSwiftVerdict() throws {
         let url = try XCTUnwrap(
             Bundle.module.url(

@@ -90,3 +90,18 @@ ls Sources/CortexSentinelBar/PackagingProgress.swift → 存在 ✓
 - 本线直接在 `$SENTINEL` 分支上做，未建 worktree。`git worktree list` 里列出的 `cortex-sentinel-worktrees/sentinellive`、`cortex-worktrees/sentinel-*` 全是其它线的既有工作树（多数带 lock），本线一个没建、一个不删。
 - 留给人事后查的：`reports/cor7600-assets/` 三张三态渲染 PNG（理由如上），此外没留下任何其它目录或文件；数据根 `repo-evidence-archive/` 未动、本线也没往里写过东西。
 - `git status --porcelain` 干净证据：实现与回执分两笔提交后原样贴在本节末尾（追加提交只补这三样证据，内容零改动）。
+
+收工三样证据（2026-09-20 01:05 CST 原样输出）：
+
+```text
+$ git status --porcelain
+（无输出，工作区干净）
+
+$ pgrep -fl CortexSentinelBar
+1791 /Applications/Cortex哨兵.app/Contents/MacOS/CortexSentinelBar
+（唯一命中是生产哨兵，launchd 常驻、本线开工前就在，非本线所起，未动）
+
+$ git worktree list | grep -i cor7600
+/Users/falcon/Documents/Code/cortex-sentinel   067a340 [codex/cor7600-pack-stable-mirror]
+（唯一命中是本线所在的主检出，未建任何 worktree）
+```

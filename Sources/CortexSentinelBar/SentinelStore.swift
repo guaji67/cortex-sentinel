@@ -61,9 +61,13 @@ final class SentinelStore {
     private(set) var channelStatus: ChannelStatusSnapshot = .missing
     private(set) var backgroundJobs: BackgroundJobsSnapshot = .missing
     /// Cortex 打包进度；没打包在跑时保持 nil，界面不占地方。
+    /// 只收活线快照（四道活线闸过了的 running），failed/completed 残留不走这里。
     private(set) var packagingProgress: PackagingProgressSnapshot?
-    /// 只在 running / 非 running 之间翻转。面板父 body 靠它决定要不要挂载打包分区，
-    /// 避免 LazyVStack 里 EmptyView 在隐藏 NSPopover 里丢掉从无到有的失效。
+    /// 打包读侧三态（COR-7600）：running / idle / error 原样发布。
+    /// 「没在打包」和「没拿到数据」是两态，面板分区靠它分开显示。
+    /// Equatable 去重：值不变不发布，残留落定成 idle 后不空转。
+    private(set) var packagingReading: PackagingProgressReading?
+    /// 只在 running / 非 running 之间翻转。状态栏「打包」段和旧挂载判据靠它。
     private(set) var packagingActive = false
     /// 每次把面板打开加一。隐藏的 NSHostingView 不调度 Observation 更新
     /// （设置窗对照测试已踩过）；打开时父 body 必须重新求值，按当前 store 挂载分区。
@@ -529,6 +533,7 @@ final class SentinelStore {
         let channelStatusURL = paths.channelStatusURL
         let ackURL = paths.lineTerminalAckURL
         let packagingProgressRoot = paths.packagingProgressRoot
+        let packagingStableURL = paths.packProgressHealthURL
         let lineStatusCache = lineStatusCache
         let lineRegistryCache = lineRegistryCache
         let includeOtherProcesses = isPanelPresented
@@ -541,6 +546,7 @@ final class SentinelStore {
                     registryURL: registryURL,
                     channelStatusURL: channelStatusURL,
                     ackURL: ackURL,
+                    packagingStableURL: packagingStableURL,
                     packagingProgressRoot: packagingProgressRoot,
                     lineStatusCache: lineStatusCache,
                     lineRegistryCache: lineRegistryCache,
@@ -569,11 +575,21 @@ final class SentinelStore {
         if localHost != refreshedHost {
             localHost = refreshedHost
         }
-        // 失败/完成的 progress.json 只是历史残留，界面不展示；不要把它
-        // 发布成一次状态变化，避免每轮空转给菜单栏再发一条通知。
-        let nextPackagingProgress = snapshot.packagingProgress?.isActive == true
-            ? snapshot.packagingProgress
-            : nil
+        // 打包三态（COR-7600）：running/idle/error 原样上屏，Equatable 相同
+        // 就不发。failed/completed 残留落进 idle（带上一次炉），不再像旧版
+        // 那样整段丢弃、也不空转发布。
+        let nextPackagingReading = snapshot.packagingReading
+        if packagingReading != nextPackagingReading {
+            packagingReading = nextPackagingReading
+        }
+        // 活线快照单独成面：状态栏「打包」段、无障碍摘要、旧挂载判据都只认
+        // running；idle/error 不点亮它们。
+        let nextPackagingProgress: PackagingProgressSnapshot?
+        if case let .running(active) = nextPackagingReading {
+            nextPackagingProgress = active
+        } else {
+            nextPackagingProgress = nil
+        }
         if packagingProgress != nextPackagingProgress {
             packagingProgress = nextPackagingProgress
         }

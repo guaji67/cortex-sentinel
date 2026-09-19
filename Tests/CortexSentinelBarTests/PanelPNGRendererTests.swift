@@ -48,6 +48,9 @@ final class PanelPNGRendererTests: XCTestCase {
                 "packaging-dead-pid",
                 "packaging-pid-reuse",
                 "packaging-stale",
+                "pack-stable-running",
+                "pack-stable-idle",
+                "pack-stable-error",
             ]
         )
         XCTAssertNil(PanelPreviewFixture(rawValue: "unknown"))

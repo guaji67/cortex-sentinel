@@ -21,6 +21,9 @@ enum PanelPreviewFixture: String, CaseIterable {
     case packagingDeadPID = "packaging-dead-pid"
     case packagingPIDReuse = "packaging-pid-reuse"
     case packagingStale = "packaging-stale"
+    case packStableRunning = "pack-stable-running"
+    case packStableIdle = "pack-stable-idle"
+    case packStableError = "pack-stable-error"
 }
 
 enum PanelPNGRenderError: Error {
@@ -32,6 +35,13 @@ enum PackagingPreviewMode {
     case deadPID
     case pidReuse
     case stale
+}
+
+/// COR-7600：稳定登记落点 <数据根>/health/pack-progress.json 的三态夹具。
+enum PackagingStablePreviewMode {
+    case running
+    case idle
+    case error
 }
 
 /// 给 `--render-panel-png` 用的离屏会话：临时监视目录 + 不扫本机进程表。
@@ -81,6 +91,12 @@ enum PanelPreviewFactory {
             try PanelPreviewLayout.writePackagingProgress(into: packRoot, mode: .pidReuse)
         case .packagingStale:
             try PanelPreviewLayout.writePackagingProgress(into: packRoot, mode: .stale)
+        case .packStableRunning:
+            try PanelPreviewLayout.writeStablePackProgress(into: root, mode: .running)
+        case .packStableIdle:
+            try PanelPreviewLayout.writeStablePackProgress(into: root, mode: .idle)
+        case .packStableError:
+            try PanelPreviewLayout.writeStablePackProgress(into: root, mode: .error)
         default:
             break
         }
@@ -362,7 +378,8 @@ private enum PanelPreviewLayout {
                 codex: ChannelJSON(status: "alive", evidence: "1 条在跑", running: 1)
             )
             try writeHealthyBackgroundJobs(into: root, generatedAt: now)
-        case .packaging, .packagingDeadPID, .packagingPIDReuse, .packagingStale:
+        case .packaging, .packagingDeadPID, .packagingPIDReuse, .packagingStale,
+             .packStableRunning, .packStableIdle, .packStableError:
             try writeChannel(
                 into: root,
                 generatedAt: now,
@@ -410,6 +427,58 @@ private enum PanelPreviewLayout {
              "steps":[{"id":"build","title":"构建 App 与 zip","status":"running"}]}
             """.utf8
         ).write(to: run.appendingPathComponent("progress.json"))
+    }
+
+    /// COR-7600：往稳定登记落点写三态夹具。root 就是 store 的 CORTEX_DATA_ROOT，
+    /// 文件落在 <root>/health/pack-progress.json，跟写方 packaging_progress.py
+    /// 的登记口径一致（v1 载荷 + progress_file 指针）。
+    static func writeStablePackProgress(into root: URL, mode: PackagingStablePreviewMode) throws {
+        let healthDirectory = root.appendingPathComponent("health", isDirectory: true)
+        try FileManager.default.createDirectory(at: healthDirectory, withIntermediateDirectories: true)
+        let url = healthDirectory.appendingPathComponent("pack-progress.json")
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        switch mode {
+        case .error:
+            try Data("this-is-not-pack-progress".utf8).write(to: url)
+            return
+        case .idle:
+            // 上一炉已完成：稳定落点留着 completed 残留，读侧投影成 idle + last_run。
+            let payload = """
+            {"schema":"cortex.packaging-progress.v1","run_id":"preview-last-run","entry":"release_app",
+             "version":"1.2.2","status":"completed",
+             "started_at":"\(formatter.string(from: Date().addingTimeInterval(-3 * 3600)))",
+             "updated_at":"\(formatter.string(from: Date().addingTimeInterval(-2 * 3600)))",
+             "progress_file":"\(privateProgressPointer())",
+             "steps":[{"id":"build","title":"构建 App 与 zip","status":"done"}]}
+            """
+            try Data(payload.utf8).write(to: url)
+            return
+        case .running:
+            break
+        }
+        let pid = Int(ProcessInfo.processInfo.processIdentifier)
+        let processStartedAt = PackagingProgressActivity.processStartedAt(pid)
+        let payload = """
+        {"schema":"cortex.packaging-progress.v1","run_id":"preview-stable-run","entry":"release_app",
+         "version":"1.2.3","status":"running",
+         "pid":\(pid),"process_started_at":"\(processStartedAt)",
+         "current_step_id":"dmg","current_detail":"Electron 打包",
+         "started_at":"\(formatter.string(from: Date().addingTimeInterval(-25 * 60)))",
+         "updated_at":"\(formatter.string(from: Date()))",
+         "eta_label":"大约还要 12 分钟",
+         "progress_file":"\(privateProgressPointer())",
+         "steps":[{"id":"build","title":"构建 App 与 zip","status":"done"},
+                  {"id":"sign","title":"签名与公证","status":"done"},
+                  {"id":"dmg","title":"打 DMG","status":"running"}]}
+        """
+        try Data(payload.utf8).write(to: url)
+    }
+
+    /// progress_file 指针的夹具值：跟私有落点口径，路径运行期拼，不写死。
+    private static func privateProgressPointer() -> String {
+        NSTemporaryDirectory()
+            + "cortex-pack-progress/preview-stable-run/progress.json"
     }
 
     private static func writeRawChannel(into root: URL, json: String) throws {

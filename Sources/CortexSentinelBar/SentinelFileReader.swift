@@ -11,6 +11,9 @@ struct SentinelPaths {
     let repositoryRoot: URL
     let poolDirectory: URL
     let packagingProgressRoot: URL
+    /// 打包进度稳定登记落点 <数据根>/health/pack-progress.json（COR-7600）。
+    /// 数据根解析不出来时为 nil，读侧按 error 报、退回旧私有落点兜底。
+    let packProgressHealthURL: URL?
     let aioDatabaseURL: URL
     let aioManifestURL: URL
     let codexConfigURL: URL
@@ -23,6 +26,7 @@ struct SentinelPaths {
         repositoryRoot: URL,
         poolDirectory: URL,
         packagingProgressRoot: URL = SentinelPaths.defaultPackagingProgressRoot,
+        packProgressHealthURL: URL? = nil,
         aioDatabaseURL: URL,
         aioManifestURL: URL,
         codexConfigURL: URL,
@@ -34,6 +38,7 @@ struct SentinelPaths {
         self.repositoryRoot = repositoryRoot
         self.poolDirectory = poolDirectory
         self.packagingProgressRoot = packagingProgressRoot
+        self.packProgressHealthURL = packProgressHealthURL
         self.aioDatabaseURL = aioDatabaseURL
         self.aioManifestURL = aioManifestURL
         self.codexConfigURL = codexConfigURL
@@ -43,7 +48,9 @@ struct SentinelPaths {
         self.selfHealingReason = selfHealingReason
     }
 
-    /// Cortex 打包进度根目录（scripts/packaging_progress.py 写的那处）。
+    /// 旧私有打包进度落点（scripts/packaging_progress.py 一直在写的那处）。
+    /// COR-7600 起降为兜底：先读稳定落点 <数据根>/health/pack-progress.json，
+    /// 读不到才退回这里。
     static var defaultPackagingProgressRoot: URL {
         let temporaryDirectory = ProcessInfo.processInfo.environment["TMPDIR"]
             .flatMap { value -> URL? in
@@ -144,6 +151,43 @@ struct SentinelPaths {
             .appendingPathComponent("background-jobs-health.json")
     }
 
+    /// 打包进度稳定登记落点的数据根解析（COR-7600）。照 backgroundJobsHealthURL
+    /// 同一套顺序，不另写一套：
+    /// 1. CORTEX_PACK_PROGRESS_MIRROR_DIR 显式覆盖（写方 packaging_progress.py
+    ///    的覆盖 env，指向目录），压过一切
+    /// 2. CORTEX_DATA_ROOT 显式数据根 → <root>/health/pack-progress.json
+    /// 3. XCTest 默认不碰本机 ~/CortexData，返回 nil（读侧按 error 报）
+    /// 4. ~/CortexData/health/pack-progress.json
+    /// home 都取不到也返回 nil，不兜底到任何写死的绝对路径。
+    static func packProgressHealthURL(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        homeDirectory: URL? = FileManager.default.homeDirectoryForCurrentUser
+    ) -> URL? {
+        if let mirrorDirectory = environment["CORTEX_PACK_PROGRESS_MIRROR_DIR"], !mirrorDirectory.isEmpty {
+            return URL(fileURLWithPath: mirrorDirectory, isDirectory: true)
+                .appendingPathComponent("pack-progress.json")
+        }
+        if let dataRoot = environment["CORTEX_DATA_ROOT"], !dataRoot.isEmpty {
+            return URL(fileURLWithPath: dataRoot, isDirectory: true)
+                .appendingPathComponent("health", isDirectory: true)
+                .appendingPathComponent("pack-progress.json")
+        }
+        // XCTest 默认不摸本机 ~/CortexData，免得测试读到真快照（同 backgroundJobsHealthURL
+        // 护栏；这套工具链的 swift test 进程不带 XCTestConfigurationFilePath，
+        // 所以补一个进程内 Loaded-XCTest 检测，意图一致）。
+        let processEnv = ProcessInfo.processInfo.environment
+        if processEnv["XCTestConfigurationFilePath"] != nil
+            || processEnv["XCTestSessionIdentifier"] != nil
+            || NSClassFromString("XCTestCase") != nil {
+            return nil
+        }
+        guard let homeDirectory, !homeDirectory.path.isEmpty else { return nil }
+        return homeDirectory
+            .appendingPathComponent("CortexData", isDirectory: true)
+            .appendingPathComponent("health", isDirectory: true)
+            .appendingPathComponent("pack-progress.json")
+    }
+
     var disabledJobsURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library", isDirectory: true)
@@ -226,6 +270,7 @@ struct SentinelPaths {
         let packagingProgressRoot = environment["CORTEX_PACK_PROGRESS_DIR"]
             .map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? SentinelPaths.defaultPackagingProgressRoot
+        let packProgressHealthURL = SentinelPaths.packProgressHealthURL(environment: environment)
 
         let homeDirectory = FileManager.default.homeDirectoryForCurrentUser
         let aioHome = homeDirectory.appendingPathComponent(".aio-coding-hub", isDirectory: true)
@@ -256,6 +301,7 @@ struct SentinelPaths {
             repositoryRoot: repositoryRoot,
             poolDirectory: poolDirectory,
             packagingProgressRoot: packagingProgressRoot,
+            packProgressHealthURL: packProgressHealthURL,
             aioDatabaseURL: aioDatabaseURL,
             aioManifestURL: aioManifestURL,
             codexConfigURL: codexConfigURL,
@@ -689,7 +735,9 @@ struct StatusDiskSnapshot {
     var boardWindow: SentinelBoardWindow
     var channelStatus: ChannelStatusSnapshot
     var backgroundJobs: BackgroundJobsSnapshot
-    var packagingProgress: PackagingProgressSnapshot?
+    /// 打包读侧三态投影（running / idle / error）。failed/completed 残留落进
+    /// idle（带上一次炉），不再整段丢弃。
+    var packagingReading: PackagingProgressReading
     var ack: TerminalAckLedger
     var otherCodexProcesses: [OtherCodexProcess]?
     var readOnMainThread: Bool
@@ -701,7 +749,8 @@ enum StatusDiskReader {
         registryURL: URL,
         channelStatusURL: URL,
         ackURL: URL,
-        packagingProgressRoot: URL? = nil,
+        packagingStableURL: URL?,
+        packagingProgressRoot: URL,
         lineStatusCache: LineStatusFileCache,
         lineRegistryCache: CodexLineRegistryCache,
         includeOtherProcesses: Bool,
@@ -725,10 +774,12 @@ enum StatusDiskReader {
             at: backgroundJobsURL,
             fileManager: fileManager
         )
-        // 没打包在跑时根目录多半不存在，Reader 直接返回 nil，不报错不占地方。
-        let packagingProgress = packagingProgressRoot.flatMap {
-            PackagingProgressReader.read(at: $0, fileManager: fileManager)
-        }
+        // COR-7600：先读稳定登记落点，读不到再退回旧私有落点；三态互斥投影。
+        let packagingReading = PackagingProgressReader.read(
+            stableURL: packagingStableURL,
+            legacyRoot: packagingProgressRoot,
+            fileManager: fileManager
+        )
         let ack = SentinelFileReader.readTerminalAck(at: ackURL)
         let processes: [OtherCodexProcess]?
         if includeOtherProcesses {
@@ -743,7 +794,7 @@ enum StatusDiskReader {
             boardWindow: SentinelBoardWindow.snapshot(groups: lineGroups),
             channelStatus: channelStatus,
             backgroundJobs: backgroundJobs,
-            packagingProgress: packagingProgress,
+            packagingReading: packagingReading,
             ack: ack,
             otherCodexProcesses: processes,
             readOnMainThread: Thread.isMainThread

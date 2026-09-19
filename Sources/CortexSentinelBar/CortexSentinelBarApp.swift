@@ -238,10 +238,32 @@ enum CortexSentinelBarMain {
         print(
             "  活跃按引擎（本机）：Codex=\(localActiveCounts.codex) Grok=\(localActiveCounts.grok) ox-alpha=\(localActiveCounts.claudeOxAlpha) 其它=\(localActiveCounts.unknown)"
         )
-        if let packaging = PackagingProgressReader.read(at: paths.packagingProgressRoot) {
-            print("打包进度：\(packaging.status.displayName) · \(packaging.stepTitle) · \(packaging.etaText)")
-        } else {
-            print("打包进度：无")
+        // COR-7600：打包三态原样打印，稳定落点 / 旧落点各是哪条路一目了然。
+        print("打包登记落点：\(paths.packProgressHealthURL?.path ?? "解析不出来（数据根与显式覆盖都不可用）")")
+        print("打包旧落点：\(paths.packagingProgressRoot.path)")
+        switch PackagingProgressReader.read(
+            stableURL: paths.packProgressHealthURL,
+            legacyRoot: paths.packagingProgressRoot
+        ) {
+        case .running(let packaging):
+            var parts = ["打包进度：running"]
+            if let furnace = packaging.furnaceText {
+                parts.append(furnace)
+            }
+            if let stepProgress = packaging.stepProgressText {
+                parts.append(stepProgress)
+            }
+            parts.append(packaging.stepTitle)
+            parts.append(packaging.etaText)
+            print(parts.joined(separator: " · "))
+        case .idle(let reason, let lastRun):
+            var line = "打包进度：idle · \(reason)"
+            if let lastRunAt = lastRun?.updatedAt {
+                line += " · 上一炉 \(SentinelTimeFormat.clockTime(lastRunAt))"
+            }
+            print(line)
+        case .error(let reason):
+            print("打包进度：error · \(reason)")
         }
         print(String(format: "读取耗时：%.1f ms", readMilliseconds))
         print("分组结果：")
@@ -442,7 +464,14 @@ enum StatusBarSnapshotter {
         let semaphore = DispatchSemaphore(value: 0)
         var probes: [InputStatusDisplayProbe] = []
         var balances: [StatusBarBalanceItem] = []
-        let packaging = PackagingProgressReader.read(at: paths.packagingProgressRoot)
+        // 状态栏「打包」段只认活线；idle / error 不上状态栏，只在面板三态里显示。
+        var packaging: PackagingProgressSnapshot?
+        if case let .running(active) = PackagingProgressReader.read(
+            stableURL: paths.packProgressHealthURL,
+            legacyRoot: paths.packagingProgressRoot
+        ) {
+            packaging = active
+        }
 
         Task {
             if let snapshot = try? await InputStatusClient(endpoint: paths.inputStatusURL).fetch() {

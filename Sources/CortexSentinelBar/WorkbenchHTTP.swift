@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import CryptoKit
+import Darwin
 
 struct WorkbenchRequest {
     var method: String
@@ -107,6 +108,7 @@ final class WorkbenchHTTPServer: @unchecked Sendable {
     private var listener: NWListener?
     private var connections: [ObjectIdentifier: NWConnection] = [:]
     private var processing: Set<ObjectIdentifier> = []
+    private var portLock: Int32 = -1
     private let handler: @Sendable (WorkbenchRequest) async -> WorkbenchResponse
     private let status: @Sendable (String?) -> Void
     let port: UInt16
@@ -115,11 +117,24 @@ final class WorkbenchHTTPServer: @unchecked Sendable {
         self.port = port; self.status = status; self.handler = handler
     }
     func start() throws {
-        let listener = try NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: port)!)
+        let lockPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cortex-sentinel-http-\(getuid())-\(port).lock").path
+        let descriptor = Darwin.open(lockPath, O_CREAT | O_RDWR | O_NOFOLLOW, S_IRUSR | S_IWUSR)
+        guard descriptor >= 0 else { throw WorkbenchError(503, "无法建立工作台端口锁") }
+        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+            Darwin.close(descriptor)
+            throw WorkbenchError(409, "另一份哨兵工作台正在使用这个端口")
+        }
+        portLock = descriptor
+        let parameters = NWParameters.tcp
+        // Replacing the previous HTTP process leaves accepted sockets in TIME_WAIT.
+        // Reuse the local endpoint so an App update does not require a minute of downtime.
+        parameters.allowLocalEndpointReuse = true
+        let listener = try NWListener(using: parameters, on: NWEndpoint.Port(rawValue: port)!)
         listener.service = NWListener.Service(name: Host.current().localizedName ?? "Cortex", type: "_cortex-board._tcp")
         listener.stateUpdateHandler = { [weak self] state in
             if case .ready = state { self?.status(nil) }
-            if case .failed = state { self?.status("工作台端口被占用或网络服务不可用；没有停止其他程序") }
+            if case .failed(let error) = state { self?.status("工作台未启动：\(error.localizedDescription)；没有停止其他程序") }
         }
         listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
         self.listener = listener; listener.start(queue: queue)
@@ -128,8 +143,10 @@ final class WorkbenchHTTPServer: @unchecked Sendable {
         queue.async {
             self.listener?.cancel(); self.listener = nil
             self.connections.values.forEach { $0.cancel() }; self.connections.removeAll()
+            if self.portLock >= 0 { Darwin.close(self.portLock); self.portLock = -1 }
         }
     }
+    deinit { if portLock >= 0 { Darwin.close(portLock) } }
     private func accept(_ connection: NWConnection) {
         guard connections.count < 32 else { connection.cancel(); return }
         connections[ObjectIdentifier(connection)] = connection

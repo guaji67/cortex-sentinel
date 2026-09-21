@@ -158,5 +158,35 @@ class NativeWorkbench(unittest.TestCase):
             sock.sendall(b"POST /api/update HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nContent-Length: 0\r\n\r\n")
             self.assertIn(b"400",sock.recv(1024))
 
+    def test_second_process_cannot_share_listener(self):
+        with tempfile.TemporaryDirectory(prefix="sentinel-port-conflict-") as second:
+            second=Path(second)
+            (second/"config.json").write_text(json.dumps(self.config))
+            run=subprocess.run([str(BINARY),"--workbench-serve",str(second),str(REPO/"Resources/Workbench")],
+                stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=5)
+            self.assertNotEqual(run.returncode,0)
+            self.assertEqual(self.request("/api/info")[0],200)
+
+    def test_rapid_restart_keeps_same_ledger_and_port(self):
+        cls=type(self)
+        event=self.event(patch={"body":"survives restart"})
+        self.assertEqual(self.request("/api/update",event)[0],200)
+        self.request("/api/overview")
+        cls.process.terminate();cls.process.wait(timeout=5)
+        started=time.monotonic()
+        cls.process=subprocess.Popen([str(BINARY),"--workbench-serve",str(cls.root),str(REPO/"Resources/Workbench")],stdout=cls.log,stderr=cls.log)
+        for _ in range(80):
+            try:
+                code,row=self.request("/api/entities/"+event["id"])
+                if code==200:
+                    break
+            except OSError:
+                pass
+            time.sleep(.025)
+        else:
+            self.fail("listener did not recover after rapid restart")
+        self.assertLess(time.monotonic()-started,3)
+        self.assertEqual(row["body"],"survives restart")
+
 if __name__ == "__main__":
     unittest.main()

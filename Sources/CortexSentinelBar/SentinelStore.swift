@@ -1076,6 +1076,7 @@ final class SentinelStore {
     }
 
     private func recordWorkbenchStartup(error: String?, resources: URL?) {
+        guard Bundle.main.bundlePath.hasPrefix("/Applications/"), Bundle.main.bundlePath.hasSuffix(".app") else { return }
         try? WorkbenchJSON.write(["pid": ProcessInfo.processInfo.processIdentifier,
                                  "at": WorkbenchJSON.timestamp(), "ready": error == nil,
                                  "error": error ?? "", "resources": resources?.path ?? ""],

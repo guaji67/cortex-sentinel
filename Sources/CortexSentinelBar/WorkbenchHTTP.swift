@@ -109,6 +109,7 @@ final class WorkbenchHTTPServer: @unchecked Sendable {
     private var connections: [ObjectIdentifier: NWConnection] = [:]
     private var processing: Set<ObjectIdentifier> = []
     private var portLock: Int32 = -1
+    private var stopped = false
     private let handler: @Sendable (WorkbenchRequest) async -> WorkbenchResponse
     private let status: @Sendable (String?) -> Void
     let port: UInt16
@@ -126,21 +127,40 @@ final class WorkbenchHTTPServer: @unchecked Sendable {
             throw WorkbenchError(409, "另一份哨兵工作台正在使用这个端口")
         }
         portLock = descriptor
+        try listen(attempt: 0)
+    }
+    private func listen(attempt: Int) throws {
+        guard !stopped else { return }
         let parameters = NWParameters.tcp
         // Replacing the previous HTTP process leaves accepted sockets in TIME_WAIT.
         // Reuse the local endpoint so an App update does not require a minute of downtime.
         parameters.allowLocalEndpointReuse = true
-        let listener = try NWListener(using: parameters, on: NWEndpoint.Port(rawValue: port)!)
+        // The LAN discovery contract currently resolves IPv4 endpoints. Bind the same
+        // address family as the retired server: a dual-stack wildcard cannot reuse an
+        // IPv4-only TIME_WAIT endpoint on macOS even with endpoint reuse enabled.
+        parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.any), port: NWEndpoint.Port(rawValue: port)!)
+        let listener = try NWListener(using: parameters)
         listener.service = NWListener.Service(name: Host.current().localizedName ?? "Cortex", type: "_cortex-board._tcp")
         listener.stateUpdateHandler = { [weak self] state in
             if case .ready = state { self?.status(nil) }
-            if case .failed(let error) = state { self?.status("工作台未启动：\(error.localizedDescription)；没有停止其他程序") }
+            if case .failed(let error) = state, let self {
+                if case .posix(.EADDRINUSE) = error, attempt < 60, !self.stopped {
+                    self.status("正在等待工作台端口释放；保留原账，稍后自动重试")
+                    self.listener?.cancel()
+                    self.queue.asyncAfter(deadline: .now() + 1) { [weak self] in
+                        guard let self, !self.stopped else { return }
+                        do { try self.listen(attempt: attempt + 1) }
+                        catch { self.status("工作台未启动：\(error.localizedDescription)") }
+                    }
+                } else { self.status("工作台未启动：\(error)；没有停止其他程序") }
+            }
         }
         listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
         self.listener = listener; listener.start(queue: queue)
     }
     func stop() {
         queue.async {
+            self.stopped = true
             self.listener?.cancel(); self.listener = nil
             self.connections.values.forEach { $0.cancel() }; self.connections.removeAll()
             if self.portLock >= 0 { Darwin.close(self.portLock); self.portLock = -1 }

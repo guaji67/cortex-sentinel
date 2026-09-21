@@ -48,6 +48,9 @@ enum CortexSentinelBarMain {
             do {
                 let runtime = try WorkbenchRuntime(directory: URL(fileURLWithPath: arguments[index + 1]),
                     assets: URL(fileURLWithPath: arguments[index + 2]), managedInstallation: false) { ["source": "headless-verification", "machines": [], "lines": []] }
+                runtime.onStatus = { error in
+                    if let error { FileHandle.standardError.write(Data((error + "\n").utf8)) }
+                }
                 try runtime.start()
                 withExtendedLifetime(runtime) { RunLoop.current.run() }
             } catch { FileHandle.standardError.write(Data((error.localizedDescription + "\n").utf8)); exit(1) }

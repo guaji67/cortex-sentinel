@@ -42,7 +42,10 @@ class NativeWorkbench(unittest.TestCase):
             except OSError:
                 time.sleep(.05)
         else:
-            raise RuntimeError("native server did not start")
+            cls.process.terminate();cls.process.wait(timeout=5)
+            message=(cls.root/"process.log").read_text()[-500:]
+            cls.log.close();cls.tmp.cleanup()
+            raise RuntimeError("native server did not start: "+message)
 
     @classmethod
     def tearDownClass(cls):
@@ -207,15 +210,15 @@ class NativeWorkbench(unittest.TestCase):
             (directory/"config.json").write_text(json.dumps({**self.config,"port":port}))
             child=subprocess.Popen([str(BINARY),"--workbench-serve",str(directory),str(REPO/"Resources/Workbench")],stdout=self.log,stderr=self.log)
             try:
-                for _ in range(80):
+                for _ in range(240):
                     try:
                         with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/info",timeout=.2) as response:
                             self.assertEqual(json.load(response)["schema"],1)
                             break
                     except OSError:
-                        time.sleep(.025)
+                        time.sleep(.25)
                 else:
-                    self.fail("native server did not reclaim the retired legacy HTTP endpoint")
+                    self.fail("native server did not reclaim the retired legacy HTTP endpoint: " + (self.root/"process.log").read_text()[-500:])
             finally:
                 child.terminate();child.wait(timeout=5)
 

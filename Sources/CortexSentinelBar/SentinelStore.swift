@@ -1051,19 +1051,35 @@ final class SentinelStore {
     }
 
     private func startWorkbench() {
-        guard let resources = Bundle.main.resourceURL?.appendingPathComponent("Workbench"),
-              FileManager.default.fileExists(atPath: resources.appendingPathComponent("index.html").path) else {
+        let executableResources = URL(fileURLWithPath: ProcessInfo.processInfo.arguments[0])
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Resources/Workbench")
+        let candidates = [Bundle.main.resourceURL?.appendingPathComponent("Workbench"), executableResources].compactMap { $0 }
+        guard let resources = candidates.first(where: { FileManager.default.fileExists(atPath: $0.appendingPathComponent("index.html").path) }) else {
             workbenchError = "当前构建没有工作台资源，请使用完整哨兵安装包"
+            recordWorkbenchStartup(error: workbenchError, resources: candidates.first)
             return
         }
         do {
             let runtime = try WorkbenchRuntime(assets: resources) { [weak self] in
                 await self?.workbenchSnapshot() ?? ["error": "哨兵正在退出"]
             }
-            runtime.onStatus = { [weak self] error in Task { @MainActor in self?.workbenchError = error } }
+            runtime.onStatus = { [weak self] error in Task { @MainActor in
+                self?.workbenchError = error
+                self?.recordWorkbenchStartup(error: error, resources: resources)
+            } }
             workbench = runtime
             try runtime.start()
-        } catch { workbenchError = error.localizedDescription }
+        } catch {
+            workbenchError = error.localizedDescription
+            recordWorkbenchStartup(error: workbenchError, resources: resources)
+        }
+    }
+
+    private func recordWorkbenchStartup(error: String?, resources: URL?) {
+        try? WorkbenchJSON.write(["pid": ProcessInfo.processInfo.processIdentifier,
+                                 "at": WorkbenchJSON.timestamp(), "ready": error == nil,
+                                 "error": error ?? "", "resources": resources?.path ?? ""],
+                                to: WorkbenchRuntime.defaultDirectory.appendingPathComponent("runtime-status.json"))
     }
 
     func openWorkbench() { workbench?.open() }

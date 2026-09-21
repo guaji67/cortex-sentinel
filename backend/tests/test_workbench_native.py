@@ -12,6 +12,8 @@ import unittest
 import urllib.error
 import urllib.request
 import uuid
+import http.server
+import threading
 
 REPO = Path(__file__).resolve().parents[2]
 BINARY = Path(os.environ.get("SENTINEL_TEST_BINARY", REPO / ".build/debug/CortexSentinelBar"))
@@ -187,6 +189,35 @@ class NativeWorkbench(unittest.TestCase):
             self.fail("listener did not recover after rapid restart")
         self.assertLess(time.monotonic()-started,3)
         self.assertEqual(row["body"],"survives restart")
+
+    def test_cutover_from_legacy_ipv4_http(self):
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200);self.end_headers();self.wfile.write(b"ok")
+            def log_message(self,*args):
+                pass
+        old=http.server.ThreadingHTTPServer(("127.0.0.1",0),Handler)
+        port=old.server_port
+        thread=threading.Thread(target=old.serve_forever,daemon=True);thread.start()
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/",timeout=2) as response:
+            response.read()
+        old.shutdown();old.server_close();thread.join(timeout=2)
+        with tempfile.TemporaryDirectory(prefix="sentinel-legacy-cutover-") as temporary:
+            directory=Path(temporary)
+            (directory/"config.json").write_text(json.dumps({**self.config,"port":port}))
+            child=subprocess.Popen([str(BINARY),"--workbench-serve",str(directory),str(REPO/"Resources/Workbench")],stdout=self.log,stderr=self.log)
+            try:
+                for _ in range(80):
+                    try:
+                        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/info",timeout=.2) as response:
+                            self.assertEqual(json.load(response)["schema"],1)
+                            break
+                    except OSError:
+                        time.sleep(.025)
+                else:
+                    self.fail("native server did not reclaim the retired legacy HTTP endpoint")
+            finally:
+                child.terminate();child.wait(timeout=5)
 
 if __name__ == "__main__":
     unittest.main()

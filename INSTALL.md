@@ -167,3 +167,31 @@ export CORTEX_INPUT_STATUS_URL=https://status.example.test/api/status
 ```
 
 `CORTEX_SENTINEL_WATCH_DIR` 优先于 `CORTEX_REPO_ROOT`。
+# 内置开发工作台
+
+工作台与哨兵是同一个 App：正常启动 **Cortex哨兵.app**，面板底部点「打开开发工作台」。
+不用另开终端、装 Python/Node、拉 Cortex 仓库或安装第二套后台服务。默认本机地址
+是 `http://127.0.0.1:8935/`；哨兵退出时工作台一起停止，按哨兵原有登录项和更新设置运行。
+
+## 安装到另一台 Mac
+
+1. 安装同一版本的哨兵 DMG，把 App 拖入应用程序并打开。
+2. 点「打开开发工作台」→「连接与接入」→连接已有工作台。
+3. 输入保存共享账那台机器的局域网地址和浏览配对码。附近哨兵由 Bonjour 提供候选，
+   不自动选主。配对后每次打开哨兵即可，不需日常 SSH。
+
+电视/大屏只需浏览器打开共享账地址并配对，不需要安装 App。配对码只读；AI 要维护，
+由共享账主机随包 `Workbench/client/authorize.py` 生成限板块 profile，密钥只安全传递一次。
+CLI 工具的安装坐标在 `~/.config/cortex-board/location.json`。协议见随包 `Workbench/GUIDE.md`。
+
+只有选中的一台机器保存共享账（`~/.cortex-sentinel/workbench`）。App 更新不覆盖它。
+断网显示连接失败，不分叉生成空账；浏览配对不能更改工单或写验收。跨外网使用安全隧道，
+不要将未加密 HTTP 端口映射到公网。Multica 同步需要共享账主机已登录 CLI；原图兼容
+发布需要 Python 3。这两项都是可选适配器，其他机器浏览和原生账本不依赖它们。
+
+## 从早期独立工作台迁移
+
+`scripts/migrate-workbench.py` 只读旧 SQLite 和资料，目标必须为空。保留全部实体、事件、
+草稿、完整来源和旧数据。先在备用端口验证，再停旧 `com.cortex.governance-board` /
+`com.cortex.governance-bridge` 服务、迁移最新事务快照，最后启动哨兵。旧目录留作恢复，
+不再作为第二套用户入口。迁移工具不随 App 运行，日常维护只走内置接口。

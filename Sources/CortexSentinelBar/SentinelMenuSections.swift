@@ -3084,6 +3084,14 @@ struct SentinelFooterSection: View {
     var body: some View {
         let topChannel = SentinelTopChannelPresentation(aio: store.aio)
         VStack(alignment: .leading, spacing: SentinelTheme.Spacing.md) {
+            Button { store.openWorkbench() } label: {
+                Label("打开开发工作台", systemImage: "square.grid.3x3")
+            }
+            .buttonStyle(SentinelButtonStyle(kind: .secondary, compact: true))
+            .disabled(store.workbench == nil)
+            if let error = store.workbenchError {
+                Text(error).font(SentinelTheme.Fonts.subtitle).foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+            }
             Rectangle()
                 .fill(SentinelTheme.Colors.border)
                 .frame(height: SentinelTheme.Spacing.hairline)
@@ -3286,4 +3294,3 @@ struct SentinelCommandCodeKeyPanel: View {
         onClose()
     }
 }
-

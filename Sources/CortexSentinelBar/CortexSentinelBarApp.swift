@@ -42,6 +42,17 @@ enum CortexSentinelBarMain {
         // 悬停详情 0.5 秒就出（系统默认约 1.5 秒起步，Falcon 2026-09-11 令）。
         UserDefaults.standard.register(defaults: ["NSInitialToolTipDelay": 500])
         let arguments = ProcessInfo.processInfo.arguments
+        // Headless integration verification uses the exact packaged server, without starting
+        // another menu app, installing launch agents, or touching the production data directory.
+        if let index = arguments.firstIndex(of: "--workbench-serve"), index + 2 < arguments.count {
+            do {
+                let runtime = try WorkbenchRuntime(directory: URL(fileURLWithPath: arguments[index + 1]),
+                    assets: URL(fileURLWithPath: arguments[index + 2]), managedInstallation: false) { ["source": "headless-verification", "machines": [], "lines": []] }
+                try runtime.start()
+                withExtendedLifetime(runtime) { RunLoop.current.run() }
+            } catch { FileHandle.standardError.write(Data((error.localizedDescription + "\n").utf8)); exit(1) }
+            return
+        }
         if arguments.contains(dumpStateArgument) {
             await runDumpStateCLI()
             return

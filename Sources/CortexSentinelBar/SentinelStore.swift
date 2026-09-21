@@ -10,6 +10,8 @@ import Observation
 @Observable
 @MainActor
 final class SentinelStore {
+    @ObservationIgnored var workbench: WorkbenchRuntime?
+    private(set) var workbenchError: String?
     private(set) var lines: [LineStatus] = []
     private(set) var otherCodexProcesses: [OtherCodexProcess] = []
     private(set) var aio: AIOSnapshot = .unconfigured
@@ -335,6 +337,7 @@ final class SentinelStore {
         }
         hasStarted = true
         startLanTelemetry()
+        startWorkbench()
         LaunchAgentManager.migrateKeepAliveIfNeeded()
         LaunchAgentManager.installOnFirstLaunch()
         reconcileLoginItem()
@@ -1045,6 +1048,47 @@ final class SentinelStore {
                 self?.refreshLanTelemetry()
             }
         }
+    }
+
+    private func startWorkbench() {
+        guard let resources = Bundle.main.resourceURL?.appendingPathComponent("Workbench"),
+              FileManager.default.fileExists(atPath: resources.appendingPathComponent("index.html").path) else {
+            workbenchError = "当前构建没有工作台资源，请使用完整哨兵安装包"
+            return
+        }
+        do {
+            let runtime = try WorkbenchRuntime(assets: resources) { [weak self] in
+                await self?.workbenchSnapshot() ?? ["error": "哨兵正在退出"]
+            }
+            runtime.onStatus = { [weak self] error in Task { @MainActor in self?.workbenchError = error } }
+            workbench = runtime
+            try runtime.start()
+        } catch { workbenchError = error.localizedDescription }
+    }
+
+    func openWorkbench() { workbench?.open() }
+
+    /// One native projection. Web never reparses files or guesses machine assignments.
+    func workbenchSnapshot() -> BoardObject {
+        let machines = CortexTelemetrySummaryDisplay.mergedMachines(kvPayload: telemetrySummary?.payload, lanMachines: lanMachines)
+        return [
+            "schema": 1, "observed_at": WorkbenchJSON.timestamp(),
+            "host": Host.current().localizedName ?? "本机", "source": "SentinelStore",
+            "machines": machines.map { machine -> BoardObject in
+                ["id": machine.machine ?? "unknown", "cpu_pct": machine.cpuPct as Any? ?? NSNull(),
+                 "mem_used_pct": machine.memUsedPct as Any? ?? NSNull(), "ts": machine.ts ?? "",
+                 "lines_by_model": machine.linesByModel ?? [:],
+                 "executors": telemetrySummary?.payload?.multica?.workingByMachine[machine.machine ?? ""] ?? []]
+            },
+            "lines": lines.map { line -> BoardObject in
+                ["id": line.slug, "state": line.state.displayName, "model": line.model ?? "",
+                 "active": line.isActive(now: Date()),
+                 "updated_at": line.updatedAt.map { ISO8601DateFormatter().string(from: $0) } ?? ""]
+            },
+            "multica_working": telemetrySummary?.payload?.multica?.working as Any? ?? NSNull(),
+            "telemetry_observed_at": telemetrySummary?.fetchedAt.map { ISO8601DateFormatter().string(from: $0) } ?? "",
+            "error": telemetrySummary?.failureText ?? ""
+        ]
     }
 
     /// 三机总览：与预案同一套形状（并发闸 + 失败留旧）。

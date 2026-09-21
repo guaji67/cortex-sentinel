@@ -76,8 +76,21 @@ final class WorkbenchRuntime: @unchecked Sendable {
         for host in [".claude", ".codex"] where fm.fileExists(atPath: home.appendingPathComponent(host).path) {
             let target = home.appendingPathComponent(host + "/skills/cortex-governance-board")
             guard !fm.fileExists(atPath: target.path) else { continue } // never replace somebody's customized skill
-            try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try fm.createSymbolicLink(at: target, withDestinationURL: assets.appendingPathComponent("skill"))
+            try fm.createDirectory(at: target, withIntermediateDirectories: true)
+            // A pointer, not a symlink into a signed App: another skill installer must never
+            // accidentally write through a link and invalidate the application signature.
+            let pointer = """
+            ---
+            name: cortex-governance-board
+            description: 梳理任意 Cortex 板块、维护板块图、关系与验收时使用。先读哨兵随包协议，不约束探索提纲，不负责派工。
+            ---
+
+            <!-- cortex-sentinel-managed -->
+            先完整读取 `/Applications/Cortex哨兵.app/Contents/Resources/Workbench/skill/SKILL.md`，
+            按那份正本执行；它随哨兵更新。本文件只负责让 AI 发现入口，不复制协议或写死机器分工。
+            未安装哨兵时先说明缺少工作台，不另起一套服务器或借用别的机器权限。
+            """
+            try Data(pointer.utf8).write(to: target.appendingPathComponent("SKILL.md"), options: .atomic)
         }
     }
 

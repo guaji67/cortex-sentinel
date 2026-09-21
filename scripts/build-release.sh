@@ -80,6 +80,7 @@ cp "$package_dir/Resources/Info.plist" "$app_dir/Contents/Info.plist"
 cp "$package_dir/Resources/AppIcon.icns" "$app_dir/Contents/Resources/AppIcon.icns"
 cp "$package_dir/scripts/sentinel-ctl.sh" "$app_dir/Contents/Resources/sentinel-ctl.sh"
 chmod 0755 "$app_dir/Contents/Resources/sentinel-ctl.sh"
+bash "$package_dir/scripts/bundle-workbench.sh" "$app_dir"
 
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$app_dir/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build_number" "$app_dir/Contents/Info.plist"
@@ -134,10 +135,12 @@ codesign --verify --deep --strict "$app_dir"
 echo "== 构建 DMG =="
 mkdir -p "$dist_dir"
 rm -f "$dmg_path" "$dmg_path.sha256"
+headless_args=()
+if [ "${SENTINEL_DMG_HEADLESS:-0}" = 1 ]; then headless_args+=(--headless); fi
 bash "$package_dir/scripts/build-dmg.sh" \
   --app "$app_dir" \
   --output "$dmg_path" \
-  --volume-name "Cortex 哨兵"
+  --volume-name "Cortex 哨兵" "${headless_args[@]}"
 hdiutil verify "$dmg_path"
 
 echo "== 签名 DMG =="

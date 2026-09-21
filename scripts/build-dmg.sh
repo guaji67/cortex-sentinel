@@ -24,6 +24,7 @@ APP_PATH=""
 OUTPUT_PATH=""
 VOLUME_NAME="Cortex 哨兵"
 DMG_FORMAT="ULMO"
+HEADLESS=0
 
 usage() {
   sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
@@ -36,6 +37,7 @@ while [ $# -gt 0 ]; do
     --output) OUTPUT_PATH="${2:-}"; shift 2 ;;
     --volume-name) VOLUME_NAME="${2:-}"; shift 2 ;;
     --format) DMG_FORMAT="${2:-}"; shift 2 ;;
+    --headless) HEADLESS=1; shift ;;
     -h|--help) usage 0 ;;
     *) echo "未知参数：$1" >&2; usage 1 ;;
   esac
@@ -71,6 +73,20 @@ cleanup() {
   exit $rc
 }
 trap cleanup EXIT INT TERM
+
+# CI/SSH packaging does not require Finder automation or a browser installation.
+# It preserves the same signed App + Applications layout contract; only decorative
+# Finder coordinates/background are omitted. Normal interactive packaging is unchanged.
+if [ "$HEADLESS" -eq 1 ]; then
+  mkdir -p "$STAGE_DIR"
+  /usr/bin/ditto "$APP_PATH" "$STAGE_DIR/$APP_NAME"
+  /bin/ln -s /Applications "$STAGE_DIR/Applications"
+  /usr/bin/hdiutil create -quiet -ov -format "$DMG_FORMAT" -fs HFS+ \
+    -volname "$VOLUME_NAME" -srcfolder "$STAGE_DIR" "$OUTPUT_PATH"
+  /usr/bin/hdiutil verify "$OUTPUT_PATH"
+  echo "DMG ready (headless): $OUTPUT_PATH"
+  exit 0
+fi
 
 echo "==> 渲染背景图"
 PROFILE_BG="$(mktemp -d "$WORK_DIR/chrome-bg.XXXXXX")"

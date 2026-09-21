@@ -700,6 +700,9 @@ echo "== 已安装独立重启入口：$restart_command_dest =="
 echo "== 生成自启配置并重新托管 =="
 write_launch_agent
 launchctl bootstrap "gui/$uid" "$plist"
+# bootstrap only registers the job. On a busy GUI session it can remain pending
+# (runs=0) past the process-count gate. Request the initial start explicitly.
+launchctl kickstart "gui/$uid/$service_label"
 sleep 4
 
 running_pids="$(pids_for_executable "$app_executable")"

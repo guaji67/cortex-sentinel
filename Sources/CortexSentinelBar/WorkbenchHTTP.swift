@@ -135,9 +135,8 @@ final class WorkbenchHTTPServer: @unchecked Sendable {
         // Replacing the previous HTTP process leaves accepted sockets in TIME_WAIT.
         // Reuse the local endpoint so an App update does not require a minute of downtime.
         parameters.allowLocalEndpointReuse = true
-        // The LAN discovery contract currently resolves IPv4 endpoints. Bind the same
-        // address family as the retired server: a dual-stack wildcard cannot reuse an
-        // IPv4-only TIME_WAIT endpoint on macOS even with endpoint reuse enabled.
+        // Match the current IPv4 LAN discovery contract. macOS may still retain an
+        // endpoint retired by a different HTTP stack; the bounded retry below handles it.
         parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.any), port: NWEndpoint.Port(rawValue: port)!)
         let listener = try NWListener(using: parameters)
         listener.service = NWListener.Service(name: Host.current().localizedName ?? "Cortex", type: "_cortex-board._tcp")

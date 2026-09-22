@@ -219,8 +219,17 @@ final class ManagedAIPackages: @unchecked Sendable {
     func status() -> BoardObject {
         lock.lock(); defer { lock.unlock() }
         let catalog = (try? Self.verify(self.catalog(), publicKey: publicKey)) ?? [:]
+        let transactionRoot = directory.appendingPathComponent("transactions")
+        let incomplete = ((try? fm.contentsOfDirectory(atPath: transactionRoot.path)) ?? []).filter { $0.hasSuffix(".json") }.compactMap { name -> String? in
+            guard let transaction = try? WorkbenchJSON.read(transactionRoot.appendingPathComponent(name)),
+                  let after = transaction["after"] as? BoardObject, let id = after["id"] as? String,
+                  rows("subscriptions")[id]?["digest"] as? String != after["digest"] as? String else { return nil }
+            return id
+        }
         return ["schema": 1, "public_key": publicKey, "fingerprint": Self.digest(key.publicKey.rawRepresentation), "syncing": syncing,
                 "packages": catalog["packages"] ?? [], "installed": installationRows(),
+                "incomplete_installs": incomplete,
+                "local_sources": rows("sources").values.map { source in source.filter { ["id", "title", "kind", "root", "files"].contains($0.key) } },
                 "peers": rows("peers").values.map { item -> BoardObject in var safe = item; safe.removeValue(forKey: "token"); return safe },
                 "hosts": Self.hosts.keys.sorted().filter { fm.fileExists(atPath: home.appendingPathComponent(Self.hosts[$0]!).deletingLastPathComponent().path) },
                 "inventory": inventory()]
@@ -282,11 +291,18 @@ final class ManagedAIPackages: @unchecked Sendable {
         if exists(destination) {
             guard treeMatches(destination, files: files) else { throw WorkbenchError(409, "保留版本已被本机修改；未覆盖") }
         } else {
-            try fm.createDirectory(at: destination, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            for (name, value) in files {
-                let file = destination.appendingPathComponent(name)
-                try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try Data(base64Encoded: value)!.write(to: file, options: .atomic)
+            let staging = destination.deletingLastPathComponent().appendingPathComponent(".stage-" + UUID().uuidString)
+            do {
+                try fm.createDirectory(at: staging, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                for (name, value) in files {
+                    let file = staging.appendingPathComponent(name)
+                    try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try Data(base64Encoded: value)!.write(to: file, options: .atomic)
+                }
+                try fm.moveItem(at: staging, to: destination)
+            } catch {
+                // Only the UUID staging directory created by this operation can be removed.
+                try? fm.removeItem(at: staging); throw error
             }
         }
         try WorkbenchJSON.write(package, to: directory.appendingPathComponent("packages/\(id)/\(digest).json"))
@@ -304,6 +320,7 @@ final class ManagedAIPackages: @unchecked Sendable {
             receipt["hook_group"] = group
         }
         receipts[id] = receipt; var next = state; next["subscriptions"] = receipts; try save(next)
+        try? fm.removeItem(at: directory.appendingPathComponent("transactions/\(id).json"))
         return ["ok": true, "id": id, "digest": digest, "activation": "已安装；宿主是否使用由调用回执判断"]
     }
     private func mergeHook(_ package: BoardObject, digest: String, previous: BoardObject?) throws -> BoardObject {
@@ -356,6 +373,7 @@ final class ManagedAIPackages: @unchecked Sendable {
             try fm.removeItem(at: hub(id))
         }
         var next = state, subscriptions = rows("subscriptions"); subscriptions.removeValue(forKey: id); next["subscriptions"] = subscriptions; try save(next)
+        try? fm.removeItem(at: directory.appendingPathComponent("transactions/\(id).json"))
         return ["ok": true, "message": "仅停用哨兵拥有的入口；正本和历史版本保留，可重新安装。"]
     }
     func recordError(_ id: String, _ error: String?) throws {

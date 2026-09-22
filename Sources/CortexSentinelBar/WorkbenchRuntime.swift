@@ -291,7 +291,11 @@ final class WorkbenchRuntime: @unchecked Sendable {
             return try await proxy(request.path, config: config)
         }
         if request.method == "GET" {
-            if path == "/api/guide" { return .json(["schema": 1, "guide": try String(contentsOf: assets.appendingPathComponent("GUIDE.md"), encoding: .utf8)]) }
+            if path == "/api/guide" {
+                let board = try String(contentsOf: assets.appendingPathComponent("GUIDE.md"), encoding: .utf8)
+                let ai = (try? String(contentsOf: assets.appendingPathComponent("AI-RULES.md"), encoding: .utf8)) ?? ""
+                return .json(["schema": 1, "guide": board + "\n\n" + ai])
+            }
             if path == "/api/history" { return .json(["events": Array((ledger.snapshot()["events"] as? [String: BoardObject] ?? [:]).values).sorted { ($0["at"] as? String ?? "") > ($1["at"] as? String ?? "") }.prefix(100).map { $0 }]) }
             if path.hasPrefix("/api/entities/") {
                 guard let entity = projectedEntities()[String(path.dropFirst(14))] else { throw WorkbenchError(404, "记录不存在") }; return .json(entity)

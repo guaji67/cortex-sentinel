@@ -38,7 +38,13 @@ macOS 菜单栏应用。盯着 AI 编码任务是否在跑、通道是否通、�
 bash scripts/install-app.sh
 ```
 
-## 开发
+## 开发工作台与 AI 规则
+
+打开菜单里的「开发工作台」（本机 `http://127.0.0.1:8935/`）。「AI 规则」按包展示正本、各机器安装版本、本机差异和调用证据；安装与活跃不等于产品交付。各机器可发布自己的规则，局域网订阅不需要日常 SSH。
+
+第一阶段：[看板设计](docs/workbench-design.md)。第二阶段：[规则管理协议](docs/ai-management-design.md)、[使用与迁移](docs/ai-management-runbook.md)。
+
+### 开发命令
 
 ```bash
 swift build         # 编译

@@ -1103,6 +1103,9 @@ final class SentinelStore {
                  "updated_at": line.updatedAt.map { ISO8601DateFormatter().string(from: $0) } ?? ""]
             },
             "multica_working": telemetrySummary?.payload?.multica?.working as Any? ?? NSNull(),
+            "gate_runtime": ["text": CortexGateRuntimeStatusDisplay.rowLine(gateRuntimeStatus, now: Date())?.text ?? "尚未取得工程规则运行时读数",
+                             "observed_at": gateRuntimeStatus?.fetchedAt.map { ISO8601DateFormatter().string(from: $0) } ?? "",
+                             "owner": "GateRuntime"] as BoardObject,
             "telemetry_observed_at": telemetrySummary?.fetchedAt.map { ISO8601DateFormatter().string(from: $0) } ?? "",
             "error": telemetrySummary?.failureText ?? ""
         ]

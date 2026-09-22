@@ -102,6 +102,11 @@ class ManagedAI(unittest.TestCase):
         self.assertEqual(code,403,value)
         self.assertEqual(self.req('catalog',remote=True,key=NativeWorkbench.view_key,actor=None)[0],200)
 
+    def test_headless_native_server_does_not_block_gui_singleton(self):
+        result=subprocess.run([str(BINARY),'--singleton-status'],capture_output=True,timeout=10)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertNotIn(NativeWorkbench.process.pid,json.loads(result.stdout)['app_pids'])
+
     def test_hook_requires_approval_preserves_settings_and_has_test_receipt(self):
         name,_,_=self.source('hook')
         settings=self.home/'.claude/settings.json'

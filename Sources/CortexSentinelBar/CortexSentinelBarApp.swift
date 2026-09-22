@@ -42,6 +42,11 @@ enum CortexSentinelBarMain {
         // 悬停详情 0.5 秒就出（系统默认约 1.5 秒起步，Falcon 2026-09-11 令）。
         UserDefaults.standard.register(defaults: ["NSInitialToolTipDelay": 500])
         let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("--singleton-status") {
+            let ids = Set(SentinelSingletonGuard.liveApplications().map(\.processIdentifier)).sorted()
+            FileHandle.standardOutput.write((try? WorkbenchJSON.data(["app_pids": ids])) ?? Data())
+            return
+        }
         if let index = arguments.firstIndex(of: "--managed-hook"), index + 3 < arguments.count {
             let code = await ManagedAIHookRunner.run(directory: URL(fileURLWithPath: arguments[index + 1]),
                 id: arguments[index + 2], digest: arguments[index + 3], test: arguments.contains("--test"))

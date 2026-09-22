@@ -66,13 +66,44 @@ enum SentinelSingletonGuard {
 
     @MainActor
     static func liveApplications() -> [SentinelRunningApplication] {
-        NSRunningApplication.runningApplications(withBundleIdentifier: "com.cortex.sentinelbar")
+        let applications = NSRunningApplication.runningApplications(withBundleIdentifier: "com.cortex.sentinelbar")
             .map(snapshot)
             + NSRunningApplication.runningApplications(withBundleIdentifier: "com.falcon.cortex.sentinelbar")
             .map(snapshot)
             + NSWorkspace.shared.runningApplications
             .map(snapshot)
             + processTableApplications()
+        let owners = applications.filter {
+            $0.bundleIdentifier.map(knownBundleIdentifiers.contains) == true ||
+            $0.executableName.map(ownerDisplayNames.contains) == true || $0.localizedName.map(ownerDisplayNames.contains) == true
+        }
+        let helpers = helperProcessIdentifiers(candidates: Set(owners.map(\.processIdentifier)))
+        return owners.filter { !helpers.contains($0.processIdentifier) }
+    }
+
+    /// CLI workers share the signed binary, but do not own a menu or a production listener.
+    /// Their argument boundary matters: paths containing a similarly named file are not flags.
+    static func isHeadlessCommand(_ command: String) -> Bool {
+        guard let executable = command.range(of: "(^|/)CortexSentinelBar(?=\\s|$)", options: .regularExpression) else { return false }
+        let arguments = String(command[executable.upperBound...]).split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard let first = arguments.first else { return false }
+        return ["--managed-hook", "--workbench-serve", "--dump-state", "--glm-usage-json", "--idle-refresh", "--singleton-status"].contains(first)
+    }
+
+    private static func helperProcessIdentifiers(candidates: Set<Int32>) -> Set<Int32> {
+        guard !candidates.isEmpty else { return [] }
+        let process = Process(), output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = ["-p", candidates.sorted().map(String.init).joined(separator: ","), "-o", "pid=,command="]
+        process.standardOutput = output
+        guard (try? process.run()) != nil else { return [] }
+        let data = output.fileHandleForReading.readDataToEndOfFile(); process.waitUntilExit()
+        guard let text = String(data: data, encoding: .utf8) else { return [] }
+        return Set(text.split(separator: "\n").compactMap { line in
+            let fields = line.split(maxSplits: 1, omittingEmptySubsequences: true, whereSeparator: { $0.isWhitespace })
+            guard fields.count == 2, let pid = Int32(fields[0]), isHeadlessCommand(String(fields[1])) else { return nil }
+            return pid
+        })
     }
 
     private static func snapshot(_ application: NSRunningApplication) -> SentinelRunningApplication {

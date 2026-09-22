@@ -21,7 +21,7 @@ async function api(path, options={}) {
   if (!response.ok) { const error = new Error(body.error || `请求失败 (${response.status})`); error.status=response.status; throw error; }
   return body;
 }
-function route() {const raw=location.hash.slice(1); return raw.startsWith('track:') ? 'modules' : (['overview','modules','delivery','connect'].includes(raw) ? raw : 'overview');}
+function route() {const raw=location.hash.slice(1); return raw.startsWith('track:') ? 'modules' : (['overview','modules','delivery','rules','connect'].includes(raw) ? raw : 'overview');}
 function goModule(id) {currentModule=id; parent='';search='';location.hash='track:'+encodeURIComponent(id);render();}
 function head(title,kicker,subtitle='',right='') {return `<div class="page-head"><div><span class="eyebrow">${esc(kicker)}</span><h1>${esc(title)}</h1><div class="subtle">${subtitle}</div></div><div class="toolbar">${right}</div></div>`;}
 function section(title,body,right='') {return `<section><div class="section-head"><h2>${esc(title)}</h2><span class="subtle">${right}</span></div>${body}</section>`;}
@@ -169,8 +169,9 @@ function bind(root=document) {
   root.querySelectorAll('[data-collection]').forEach(b=>b.onclick=()=>{const [kind,index]=b.dataset.collection.split(':');const row=data[kind][Number(index)];show(row.title||row.name||row.id,'依据来自原工作台',`<pre>${esc(JSON.stringify(row,null,2))}</pre>`);});
 }
 function render() {
-  if(!data)return;
   const view=route();document.querySelectorAll('.mast nav a').forEach(a=>a.classList.toggle('active',a.hash==='#'+view));
+  if(view==='rules'){rulesPage();return;}
+  if(!data)return;
   if(data.connection?.mode==='unconfigured'&&view!=='connect'){location.hash='connect';return;}
   if(view==='overview')overview();else if(view==='modules')modulePage();else if(view==='delivery')delivery();else connect();
   bind();
@@ -190,10 +191,12 @@ async function refresh(repaint=true) {
     if(repaint&&!$('#detail').open&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName))render();
   }catch(e){
     notice((data?'连接中断，保留上次画面。':'')+e.message);
+    if(route()==='rules')render();
     if(!data&&e.status===401){$('#main').innerHTML=head('连接共享工作台','需要浏览配对码','在保存共享账的哨兵中，“连接与接入”可查看。')+'<label class="field">浏览配对码<input id="pair-key" type="password" autocomplete="off"></label><button id="pair" class="primary">连接</button>';$('#pair').onclick=async()=>{try{await api('/api/pair',{method:'POST',body:JSON.stringify({key:$('#pair-key').value})});await refresh();}catch(err){notice(err.message);}};}
   }finally{refreshing=false;}
 }
 $('#close-detail').onclick=()=>{$('#detail').close();selectedEntity=null;};
+const rulesLink=document.createElement('a');rulesLink.href='#rules';rulesLink.textContent='AI 规则';$('.mast nav').insertBefore(rulesLink,$('.mast nav a[href="#connect"]'));
 $('#wall').onclick=()=>{document.body.classList.toggle('wall');$('#wall').textContent=document.body.classList.contains('wall')?'退出大屏':'大屏';};
 window.addEventListener('hashchange',()=>{search='';page=0;render();});
 refresh();setInterval(()=>refresh(),30000);

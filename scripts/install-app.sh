@@ -673,6 +673,7 @@ rollback_on_error() {
   fi
   if [ "$had_app" -eq 1 ] && [ "$had_plist" -eq 1 ]; then
     launchctl bootstrap "gui/$uid" "$plist" 2>/dev/null || true
+    launchctl kickstart "gui/$uid/$service_label" 2>/dev/null || true
   fi
   exit "$status"
 }
@@ -713,6 +714,30 @@ if [ "$running_count" -ne 1 ] || [ "$all_sentinel_count" -ne 1 ]; then
   exit 1
 fi
 echo "== 已运行唯一正式实例 pid=$running_pids =="
+
+# A PID can exit successfully after the duplicate-instance gate. Require the new
+# process's listener receipt and an actual local response before calling it installed.
+if [ -s "$app_dest/Contents/Resources/Workbench/index.html" ]; then
+  workbench_state="$HOME/.cortex-sentinel/workbench/runtime-status.json"
+  workbench_config="$HOME/.cortex-sentinel/workbench/config.json"
+  workbench_ready=0
+  for attempt in {1..60}; do
+    ready_pid="$(plutil -extract pid raw -o - "$workbench_state" 2>/dev/null || true)"
+    ready_flag="$(plutil -extract ready raw -o - "$workbench_state" 2>/dev/null || true)"
+    workbench_port="$(plutil -extract port raw -o - "$workbench_config" 2>/dev/null || true)"
+    if [ "$ready_pid" = "$running_pids" ] && [ "$ready_flag" = "true" ] &&
+       curl --fail --silent --max-time 2 "http://127.0.0.1:$workbench_port/api/info" >/dev/null; then
+      workbench_ready=1
+      break
+    fi
+    sleep 1
+  done
+  if [ "$workbench_ready" -ne 1 ]; then
+    echo "失败：新实例的工作台没有就绪；不会把 PID 当安装成功，回退到上一版。" >&2
+    exit 1
+  fi
+  echo "== 工作台真实响应已验证 =="
+fi
 
 echo "== 自检（首次换机时 macOS 只应询问一次文稿权限）=="
 if [ -n "$cortex_repo_root" ] && [ "$watch_dir_explicit" -eq 0 ]; then

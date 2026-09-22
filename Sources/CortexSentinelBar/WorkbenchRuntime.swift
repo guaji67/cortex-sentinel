@@ -11,6 +11,8 @@ final class WorkbenchRuntime: @unchecked Sendable {
     let assets: URL
     let ledger: WorkbenchLedger
     let multica: WorkbenchMultica
+    let aiPackages: ManagedAIPackages?
+    let aiStartupError: String?
     private let lock = NSLock()
     private var config: BoardObject
     private var server: WorkbenchHTTPServer?
@@ -18,6 +20,7 @@ final class WorkbenchRuntime: @unchecked Sendable {
     private var peers: [LanPeer] = []
     private var timer: DispatchSourceTimer?
     private var sourceRefreshInFlight = false
+    private var aiRefreshInFlight = false
     private var sourceErrors: [String: String] = [:]
     private let nativeSnapshot: @Sendable () async -> BoardObject
     private let managedInstallation: Bool
@@ -41,6 +44,21 @@ final class WorkbenchRuntime: @unchecked Sendable {
         ledger = try WorkbenchLedger(url: directory.appendingPathComponent("ledger.json"))
         multica = WorkbenchMultica(url: directory.appendingPathComponent("multica.json"),
             executable: config["multica_bin"] as? String ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/multica").path)
+        var manager: ManagedAIPackages?, managerError: String?
+        do {
+            manager = try ManagedAIPackages(directory: directory.appendingPathComponent("ai"),
+                home: managedInstallation ? FileManager.default.homeDirectoryForCurrentUser : directory.appendingPathComponent("ai-test-home"))
+            if managedInstallation, let manager {
+            _ = try manager.registerSource(["id": "cortex-governance-board", "title": "板块维护规范", "kind": "skill",
+                "root": assets.appendingPathComponent("skill").path, "files": ["SKILL.md"]])
+            if FileManager.default.fileExists(atPath: assets.appendingPathComponent("hooks/board-context.sh").path) {
+                _ = try manager.registerSource(["id": "sentinel-board-context", "title": "会话启动 · 板块维护入口", "kind": "hook",
+                    "root": assets.appendingPathComponent("hooks").path, "files": ["board-context.sh"],
+                    "hook": ["event": "SessionStart", "matcher": "", "entry": "board-context.sh", "interpreter": "/bin/sh"]])
+            }
+            }
+        } catch { managerError = error.localizedDescription }
+        aiPackages = manager; aiStartupError = managerError
     }
     func configuration() -> BoardObject { lock.lock(); defer { lock.unlock() }; return config }
     private func saveConfiguration(_ next: BoardObject) throws {
@@ -63,22 +81,24 @@ final class WorkbenchRuntime: @unchecked Sendable {
         guard managedInstallation else { return }
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
         timer.schedule(deadline: .now() + 10, repeating: 180)
-        timer.setEventHandler { [weak self] in self?.refreshSources() }
+        timer.setEventHandler { [weak self] in self?.refreshSources(); self?.refreshAIPackages() }
         self.timer = timer; timer.resume()
         installClientLocation()
-        if configuration()["install_ai_skill"] as? Bool == true { try? installSkill() }
+        if configuration()["install_ai_skill"] as? Bool == true {
+            do {
+                try installSkill()
+                var next = configuration(); next["install_ai_skill"] = false; try saveConfiguration(next)
+            } catch { /* Preserve customized legacy entries; AI Rules reports the unmanaged installation. */ }
+        }
     }
     func stop() { timer?.cancel(); timer = nil; discovery.stop(); server?.stop(); server = nil }
     func open() { NSWorkspace.shared.open(URL(string: "http://127.0.0.1:\(port)/")!) }
 
     private func installSkill() throws {
+        guard let aiPackages else { throw WorkbenchError(503, aiStartupError ?? "规则管理不可用；看板仍可继续使用") }
         let fm = FileManager.default, home = fm.homeDirectoryForCurrentUser
-        for host in [".claude", ".codex"] where fm.fileExists(atPath: home.appendingPathComponent(host).path) {
-            let target = home.appendingPathComponent(host + "/skills/cortex-governance-board")
-            guard !fm.fileExists(atPath: target.path) else { continue } // never replace somebody's customized skill
-            try fm.createDirectory(at: target, withIntermediateDirectories: true)
-            // A pointer, not a symlink into a signed App: another skill installer must never
-            // accidentally write through a link and invalidate the application signature.
+        let targets = ["claude", "codex"].filter { fm.fileExists(atPath: home.appendingPathComponent("." + $0).path) }
+        guard !targets.isEmpty else { throw WorkbenchError(409, "本机尚未发现 Claude 或 Codex") }
             let pointer = """
             ---
             name: cortex-governance-board
@@ -90,8 +110,8 @@ final class WorkbenchRuntime: @unchecked Sendable {
             按那份正本执行；它随哨兵更新。本文件只负责让 AI 发现入口，不复制协议或写死机器分工。
             未安装哨兵时先说明缺少工作台，不另起一套服务器或借用别的机器权限。
             """
-            try Data(pointer.utf8).write(to: target.appendingPathComponent("SKILL.md"), options: .atomic)
-        }
+        let package = try ManagedAIPackages.verify(aiPackages.exportPackage("cortex-governance-board"), publicKey: aiPackages.publicKey)
+        try aiPackages.adoptBoardPointers(expected: pointer, package: package, targets: targets)
     }
 
     private func installClientLocation() {
@@ -138,6 +158,14 @@ final class WorkbenchRuntime: @unchecked Sendable {
     private func finishSourceRefresh(_ errors: [String: String]) {
         lock.lock(); sourceRefreshInFlight = false; sourceErrors = errors; lock.unlock()
     }
+    private func refreshAIPackages() {
+        guard let aiPackages else { return }
+        lock.lock()
+        guard !aiRefreshInFlight else { lock.unlock(); return }
+        aiRefreshInFlight = true; lock.unlock()
+        Task { await aiPackages.synchronize(); finishAIRefresh() }
+    }
+    private func finishAIRefresh() { lock.lock(); aiRefreshInFlight = false; lock.unlock() }
     private func peerURLs() -> [String] {
         lock.lock(); defer { lock.unlock() }
         return peers.map { "http://\($0.host):\($0.port)" }.sorted()
@@ -179,7 +207,7 @@ final class WorkbenchRuntime: @unchecked Sendable {
         let path = request.path.components(separatedBy: "?")[0]
         let host = request.headers["host"]?.lowercased().split(separator: ":").first.map(String.init) ?? ""
         guard Self.validHub("http://" + host) else { throw WorkbenchError(403, "不接受此主机名") }
-        let staticFiles = ["/": "index.html", "/index.html": "index.html", "/workbench.js": "workbench.js", "/workbench.css": "workbench.css"]
+        let staticFiles = ["/": "index.html", "/index.html": "index.html", "/workbench.js": "workbench.js", "/ai-management.js": "ai-management.js", "/workbench.css": "workbench.css"]
         if request.method == "GET", let file = staticFiles[path] {
             return WorkbenchResponse(contentType: file.hasSuffix(".js") ? "text/javascript; charset=utf-8" : file.hasSuffix(".css") ? "text/css; charset=utf-8" : "text/html; charset=utf-8",
                                      data: try Data(contentsOf: assets.appendingPathComponent(file)))
@@ -240,11 +268,22 @@ final class WorkbenchRuntime: @unchecked Sendable {
         }
         if path == "/api/install-skill", request.method == "POST" {
             try request.localWrite()
+            guard managedInstallation else { throw WorkbenchError(403, "隔离验证实例不能更改真实 AI 目录") }
             try installSkill()
-            var next = configuration(); next["install_ai_skill"] = true; try saveConfiguration(next)
+            var next = configuration(); next["install_ai_skill"] = false; try saveConfiguration(next)
             return .json(["ok": true, "message": "已为已有 AI host 接入随包技能；已有自定义同名技能不会覆盖。新会话生效，当前会话可直接读取随包技能。"])
         }
         guard WorkbenchAuth.canRead(request, config: config) else { throw WorkbenchError(401, "需要配对后才能读取工作台") }
+        if path == "/api/ai/status", request.method == "GET", request.local {
+            guard let aiPackages else { throw WorkbenchError(503, aiStartupError ?? "规则管理不可用；看板仍可继续使用") }
+            var status = aiPackages.status(); status["gate_runtime"] = await nativeSnapshot()["gate_runtime"] ?? [:]
+            status["startup_error"] = aiStartupError
+            return .json(status)
+        }
+        if path.hasPrefix("/api/ai/") {
+            guard let aiPackages else { throw WorkbenchError(503, aiStartupError ?? "规则管理不可用；看板仍可继续使用") }
+            return try await aiPackages.respond(request)
+        }
         if config["mode"] as? String == "joined" {
             guard request.method == "GET", ["/api/overview", "/api/guide", "/api/history"].contains(path) || path.hasPrefix("/api/entities/") else {
                 throw WorkbenchError(403, "维护内容请使用有板块授权的客户端直连共享账；浏览配对码不能写账")
@@ -252,7 +291,11 @@ final class WorkbenchRuntime: @unchecked Sendable {
             return try await proxy(request.path, config: config)
         }
         if request.method == "GET" {
-            if path == "/api/guide" { return .json(["schema": 1, "guide": try String(contentsOf: assets.appendingPathComponent("GUIDE.md"), encoding: .utf8)]) }
+            if path == "/api/guide" {
+                let board = try String(contentsOf: assets.appendingPathComponent("GUIDE.md"), encoding: .utf8)
+                let ai = (try? String(contentsOf: assets.appendingPathComponent("AI-RULES.md"), encoding: .utf8)) ?? ""
+                return .json(["schema": 1, "guide": board + "\n\n" + ai])
+            }
             if path == "/api/history" { return .json(["events": Array((ledger.snapshot()["events"] as? [String: BoardObject] ?? [:]).values).sorted { ($0["at"] as? String ?? "") > ($1["at"] as? String ?? "") }.prefix(100).map { $0 }]) }
             if path.hasPrefix("/api/entities/") {
                 guard let entity = projectedEntities()[String(path.dropFirst(14))] else { throw WorkbenchError(404, "记录不存在") }; return .json(entity)

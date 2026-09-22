@@ -4,6 +4,18 @@ import XCTest
 final class SingletonGuardTests: XCTestCase {
     private let currentPID: Int32 = 100
 
+    func testHeadlessWorkersDoNotOwnMenuInstance() {
+        for flag in ["--managed-hook", "--workbench-serve", "--dump-state", "--singleton-status"] {
+            XCTAssertTrue(SentinelSingletonGuard.isHeadlessCommand("/Applications/Cortex 哨兵.app/Contents/MacOS/CortexSentinelBar \(flag) /path with spaces"))
+        }
+    }
+
+    func testGUIAndSimilarlyNamedArgumentsAreNotHelpers() {
+        XCTAssertFalse(SentinelSingletonGuard.isHeadlessCommand("/Applications/Cortex哨兵.app/Contents/MacOS/CortexSentinelBar"))
+        XCTAssertFalse(SentinelSingletonGuard.isHeadlessCommand("/test/CortexSentinelBar --managed-hook-other"))
+        XCTAssertFalse(SentinelSingletonGuard.isHeadlessCommand("/test/CortexSentinelBar --smoke-window /tmp/--managed-hook"))
+    }
+
     func testKnownBundleIdBlocksOtherProcess() {
         let applications = [
             SentinelRunningApplication(

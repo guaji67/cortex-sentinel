@@ -64,6 +64,38 @@ final class CortexTelemetrySummaryTests: XCTestCase {
         XCTAssertEqual(rows, ["三机总览：还没有机器上报（等各机哨兵 10 分钟一轮）"])
     }
 
+    func testTasksTotalDrivesRunningCount() throws {
+        // 新脚本：徽标数「正在执行的任务」，严格对账 tasks_by_machine。
+        let json = """
+            {"schema":2,"machines":[{"machine":"pro","load":7.7,"ts":"2026-09-18T00:00:00+00:00"}],
+             "multica":{"working":2,"idle":8,
+                        "tasks_total":24,
+                        "tasks_by_machine":{"pro":15,"m1max":5,"mini2":4,"unknown":0},
+                        "tasks_by_agent":[{"name":"Pro 执行者(ZCode)","machine":"pro","tasks":15},
+                                          {"name":"mini Grok 执行者(Cursor)","machine":"mini2","tasks":4}]}}
+            """
+        let payload = try JSONDecoder().decode(CortexTelemetrySummaryPayload.self, from: Data(json.utf8))
+        XCTAssertEqual(payload.multica?.tasksTotal, 24)
+        XCTAssertEqual(payload.multica?.tasksByMachine, ["pro": 15, "m1max": 5, "mini2": 4, "unknown": 0])
+        XCTAssertEqual(payload.multica?.tasksByAgent.count, 2)
+        XCTAssertEqual(payload.multica?.tasksByAgent.first?.tasks, 15)
+        let rows = CortexTelemetrySummaryDisplay.rows(Self.state(payload: payload, failure: nil), now: Date())
+        XCTAssertEqual(rows[0], "三机总览（Multica 在跑 24）")
+    }
+
+    func testMissingTaskKeysDecodeAsNilAndEmpty() throws {
+        // 旧脚本兼容：没 tasks_* 键给 nil/空，文本行退回 working 个数。
+        let payload = try JSONDecoder().decode(
+            CortexTelemetrySummaryPayload.self,
+            from: Data("{\"schema\":2,\"machines\":[{\"machine\":\"pro\",\"load\":1.0,\"ts\":\"2026-09-18T00:00:00+00:00\"}],\"multica\":{\"working\":7,\"idle\":2}}".utf8)
+        )
+        XCTAssertNil(payload.multica?.tasksTotal)
+        XCTAssertTrue(payload.multica?.tasksByMachine.isEmpty ?? true)
+        XCTAssertTrue(payload.multica?.tasksByAgent.isEmpty ?? true)
+        let rows = CortexTelemetrySummaryDisplay.rows(Self.state(payload: payload, failure: nil), now: Date())
+        XCTAssertEqual(rows[0], "三机总览（Multica 在跑 7）")
+    }
+
     func testShortModelAndMachineToken() {
         XCTAssertEqual(CortexTelemetrySummaryDisplay.shortModel("custom-local:BC-GLM-5.3-Flash"), "CodeBuddy")
         XCTAssertEqual(CortexTelemetrySummaryDisplay.shortModel("glm-5.3-flash"), "ZCode")

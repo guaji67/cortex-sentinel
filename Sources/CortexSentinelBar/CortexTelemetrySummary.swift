@@ -105,12 +105,30 @@ struct CortexTelemetrySummaryPayload: Decodable, Equatable, Sendable {
         /// 在跑执行者按机器归属拆账（键 pro/m1max/mini2/unknown），cortex 侧按
         /// 执行者名里的机器词分好；旧脚本没这键，给空。机器卡「在跑」用它对账。
         let workingByMachine: [String: [String]]
+        /// 正在执行的**任务**总数（一个执行者可同时背多条，cortex 侧按 run 状态
+        /// 数：running/dispatched/waiting_local_directory；queued 排队不算）。
+        /// 旧脚本没这键，给 nil——顶部徽标据此隐藏，别拿 working 冒充。
+        let tasksTotal: Int?
+        /// 在飞任务按机器拆账（键 pro/m1max/mini2/unknown），严格等于 tasksTotal。
+        /// 旧脚本没这键，给空。
+        let tasksByMachine: [String: Int]
+        /// 每执行者在飞任务数（hover 拆账用）；旧脚本没这键，给空。
+        let tasksByAgent: [AgentTasks]
+
+        struct AgentTasks: Decodable, Equatable, Sendable {
+            let name: String
+            let machine: String?
+            let tasks: Int
+        }
 
         enum CodingKeys: String, CodingKey {
             case working
             case idle
             case workingNames = "working_names"
             case workingByMachine = "working_by_machine"
+            case tasksTotal = "tasks_total"
+            case tasksByMachine = "tasks_by_machine"
+            case tasksByAgent = "tasks_by_agent"
         }
 
         init(from decoder: Decoder) throws {
@@ -121,6 +139,11 @@ struct CortexTelemetrySummaryPayload: Decodable, Equatable, Sendable {
             workingByMachine = try container.decodeIfPresent(
                 [String: [String]].self, forKey: .workingByMachine
             ) ?? [:]
+            tasksTotal = try container.decodeIfPresent(Int.self, forKey: .tasksTotal)
+            tasksByMachine = try container.decodeIfPresent(
+                [String: Int].self, forKey: .tasksByMachine
+            ) ?? [:]
+            tasksByAgent = try container.decodeIfPresent([AgentTasks].self, forKey: .tasksByAgent) ?? []
         }
     }
 }
@@ -144,13 +167,15 @@ enum CortexTelemetrySummaryFetcher {
     struct Configuration: Sendable {
         var manifestPath: String = "scripts/sentry_telemetry.files"
         var scriptArguments: [String] = ["scripts/sentry_telemetry.py", "summary"]
-        var scriptTimeout: TimeInterval = 45
+        /// summary 会并发拉每个在跑执行者的 run 历史（10 分钟一轮后台跑），
+        /// 实测整轮 20-60s，45s 的旧上限会把它掐成「这次没读到」。
+        var scriptTimeout: TimeInterval = 240
         var export: CortexGitScriptExport.Configuration
 
         init(
             manifestPath: String = "scripts/sentry_telemetry.files",
             scriptArguments: [String] = ["scripts/sentry_telemetry.py", "summary"],
-            scriptTimeout: TimeInterval = 45,
+            scriptTimeout: TimeInterval = 240,
             cacheRoot: URL? = nil,
             export: CortexGitScriptExport.Configuration? = nil
         ) {
@@ -234,8 +259,10 @@ enum CortexTelemetrySummaryDisplay {
             return ["三机总览：还没有机器上报（等各机哨兵 10 分钟一轮）"]
         }
         var lines: [String] = []
-        let working = payload.multica?.working
-        let title = working.map { "三机总览（Multica 在跑 \($0)）" } ?? "三机总览"
+        // 顶部数改成「正在执行的任务」（一个执行者可背多条）；旧脚本没 tasks_total
+        // 时退回 working 个数兜底显示。
+        let running = payload.multica?.tasksTotal ?? payload.multica?.working
+        let title = running.map { "三机总览（Multica 在跑 \($0)）" } ?? "三机总览"
         lines.append(title)
         for machine in payload.machines {
             lines.append(hardwareLine(of: machine))

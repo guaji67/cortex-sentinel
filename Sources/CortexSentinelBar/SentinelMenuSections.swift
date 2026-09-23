@@ -1606,8 +1606,11 @@ struct SentinelBalancesSection: View {
                         .font(SentinelTheme.Fonts.rowTitle)
                         .foregroundStyle(SentinelTheme.Colors.foreground)
                     Spacer(minLength: 0)
-                    if let working = payload?.multica?.working {
-                        Text("Multica 在跑 \(working)")
+                    // 徽标数「正在执行的任务」不数人：一个执行者可同时背多条
+                    // （Falcon 09-18 令）。旧脚本没 tasks_total 就不显示，别拿
+                    // working 个数冒充任务数。
+                    if let tasks = payload?.multica?.tasksTotal {
+                        Text("Multica 在跑 \(tasks)")
                             .font(SentinelTheme.Fonts.balanceName)
                             .foregroundStyle(SentinelTheme.Colors.info)
                             .padding(.horizontal, 9)
@@ -1621,7 +1624,8 @@ struct SentinelBalancesSection: View {
                     }
                 }
                 ForEach(Array(machines.enumerated()), id: \.offset) { _, machine in
-                    machineCard(machine, multicaByMachine: payload?.multica?.workingByMachine ?? [:])
+                    machineCard(machine, tasksByMachine: payload?.multica?.tasksByMachine ?? [:],
+                                tasksByAgent: payload?.multica?.tasksByAgent ?? [])
                 }
             }
         } else if let state = store.telemetrySummary {
@@ -1639,23 +1643,28 @@ struct SentinelBalancesSection: View {
         }
     }
 
-    /// Multica 徽标悬停：在跑的是哪几个执行者（Falcon 09-18 令：7 条要能看出是哪 7 条）。
+    /// Multica 徽标悬停：在飞任务拆到每个执行者——「名字 + 在飞任务数」
+    /// （Falcon 09-18 令：要能看出这几条都压在谁身上）。
     /// 弹层里系统 tooltip 不可靠，走自绘 HoverDetailCard（仓规同余额区）。
     private func multicaHoverContent(_ payload: CortexTelemetrySummaryPayload?) -> BalanceHoverContent {
-        let names = payload?.multica?.workingNames ?? []
-        let working = payload?.multica?.working ?? 0
-        guard !names.isEmpty else {
+        let tasks = payload?.multica?.tasksTotal ?? 0
+        let rows = payload?.multica?.tasksByAgent ?? []
+        guard !rows.isEmpty else {
             return BalanceHoverContent(
-                title: "Multica 在跑 \(working)",
+                title: "Multica 在跑 \(tasks)",
                 subtitle: "Multica 工作区",
                 lines: [],
-                footer: "Multica 没返回在跑名单"
+                footer: "Multica 没返回执行者拆账"
             )
         }
         return BalanceHoverContent(
-            title: "Multica 在跑 \(working)",
-            subtitle: "Multica 工作区",
-            lines: names.map { BalanceHoverLine(label: $0, value: "在跑", note: nil, noteColor: nil) }
+            title: "Multica 在跑 \(tasks)",
+            subtitle: "Multica 工作区 · 每行一名执行者名下的在飞任务",
+            lines: rows.map { row in
+                BalanceHoverLine(label: row.name.isEmpty ? "（未署名执行者）" : row.name,
+                                 value: "\(row.tasks) 条",
+                                 note: nil, noteColor: nil)
+            }
         )
     }
 
@@ -1679,9 +1688,12 @@ struct SentinelBalancesSection: View {
     /// 点会被裁半边（生产实锤），行2 尾永远有地方站。
     private func machineCard(
         _ machine: CortexTelemetrySummaryPayload.Machine,
-        multicaByMachine: [String: [String]]
+        tasksByMachine: [String: Int],
+        tasksByAgent: [CortexTelemetrySummaryPayload.Multica.AgentTasks]
     ) -> some View {
-        let multicaNames = multicaByMachine[machineName(machine).lowercased()] ?? []
+        let machineToken = machineName(machine).lowercased()
+        let multicaTasks = tasksByMachine[machineToken] ?? 0
+        let machineAgents = tasksByAgent.filter { ($0.machine ?? "") == machineToken }
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
                 Text(machineName(machine))
@@ -1704,7 +1716,7 @@ struct SentinelBalancesSection: View {
             }
             HStack(spacing: 10) {
                 slotDots(machine.devSlots)
-                runningBadge(machine.linesByModel, multicaNames: multicaNames)
+                runningBadge(machine.linesByModel, multicaTasks: multicaTasks)
                 Spacer(minLength: 0)
                 pressureDot(machine.pressureLevel)
             }
@@ -1712,7 +1724,7 @@ struct SentinelBalancesSection: View {
             // 拆账卡向左展出去会越过面板左缘整列被裁（0148 出图实锤）。
             .contentShape(Rectangle())
             .modifier(HoverDetailCard(
-                makeContent: { self.runningHoverContent(machine.linesByModel, multicaNames: multicaNames) },
+                makeContent: { self.runningHoverContent(machine.linesByModel, multicaTasks: multicaTasks, machineAgents: machineAgents) },
                 branchID: "running"
             ))
         }
@@ -1809,17 +1821,17 @@ struct SentinelBalancesSection: View {
         }
     }
 
-    /// 「在跑 N」只数 Multica 派到本机的执行者——三张卡加起来必须等于顶部
-    /// 「Multica 在跑」徽标（Falcon 09-18 令：要能对上账）。本机 CLI 直派线
-    /// 是另一套口径（界面上的「N 次运行」是累计历史，跟在跑无关），有活另给
-    /// 灰字「+N 本地」，不掺进这个数。
-    private func runningBadge(_ localLines: [String: Int]?, multicaNames: [String]) -> some View {
+    /// 「在跑 N」数 Multica 派到本机的**在飞任务数**——三张卡加起来必须等于
+    /// 顶部「Multica 在跑」徽标（Falcon 09-18 令：数任务不数人，要能对上账）。
+    /// 本机 CLI 直派线是另一套口径（界面上的「N 次运行」是累计历史，跟在跑
+    /// 无关），有活另给灰字「+N 本地」，不掺进这个数。
+    private func runningBadge(_ localLines: [String: Int]?, multicaTasks: Int) -> some View {
         let localTotal = (localLines ?? [:]).values.reduce(0, +)
         return HStack(spacing: 5) {
-            Text("在跑 \(multicaNames.count)")
+            Text("在跑 \(multicaTasks)")
                 .font(SentinelTheme.Fonts.balanceName)
                 .fixedSize()
-                .foregroundStyle(multicaNames.isEmpty ? SentinelTheme.Colors.secondaryForeground : SentinelTheme.Colors.primary)
+                .foregroundStyle(multicaTasks == 0 ? SentinelTheme.Colors.secondaryForeground : SentinelTheme.Colors.primary)
             if localTotal > 0 {
                 Text("+\(localTotal) 本地")
                     .font(SentinelTheme.Fonts.balanceMeta)
@@ -1831,7 +1843,8 @@ struct SentinelBalancesSection: View {
 
     private func runningHoverContent(
         _ localLines: [String: Int]?,
-        multicaNames: [String]
+        multicaTasks: Int,
+        machineAgents: [CortexTelemetrySummaryPayload.Multica.AgentTasks]
     ) -> BalanceHoverContent {
         let localTotal = (localLines ?? [:]).values.reduce(0, +)
         var lines: [BalanceHoverLine] = []
@@ -1851,13 +1864,21 @@ struct SentinelBalancesSection: View {
         }
         lines.append(BalanceHoverLine(
             label: "Multica 派本机",
-            value: "\(multicaNames.count)",
-            note: multicaNames.joined(separator: "、"),
+            value: "\(multicaTasks)",
+            note: nil,
             noteColor: nil
         ))
+        for agent in machineAgents {
+            lines.append(BalanceHoverLine(
+                label: agent.name.isEmpty ? "（未署名执行者）" : agent.name,
+                value: "\(agent.tasks) 条",
+                note: nil,
+                noteColor: nil
+            ))
+        }
         return BalanceHoverContent(
-            title: "Multica 派本机 \(multicaNames.count)",
-            subtitle: "本地 CLI 线另计，不含在上面这个数里",
+            title: "Multica 派本机 \(multicaTasks)",
+            subtitle: "本地 CLI 线另计；每行是一名执行者名下的在飞任务",
             lines: lines
         )
     }

@@ -164,6 +164,8 @@ final class SentinelStore {
     @ObservationIgnored private var inputStatusTimer: Timer?
     @ObservationIgnored private var officialUsageTimer: Timer?
     @ObservationIgnored private var cleanupTimer: Timer?
+    /// 三机总览 KV 汇总的独立后台轮：跟各机哨兵写 KV 同拍（10 分钟）。
+    @ObservationIgnored private var telemetryTimer: Timer?
     @ObservationIgnored private var aioRefreshInFlight = false
     @ObservationIgnored private var aioRefreshIncludesUsage = false
     @ObservationIgnored private var inputStatusRefreshInFlight = false
@@ -283,6 +285,7 @@ final class SentinelStore {
         inputStatusTimer?.invalidate()
         officialUsageTimer?.invalidate()
         cleanupTimer?.invalidate()
+        telemetryTimer?.invalidate()
     }
 
     var severity: SentinelSeverity {
@@ -370,6 +373,13 @@ final class SentinelStore {
         runLogCleanup()
         cleanupTimer = makeRepeatingTimer(interval: LogCleanupConstants.sweepInterval) { [weak self] in
             self?.runLogCleanup()
+        }
+        // 三机总览 KV 独立成轮：之前只挂在 GLM 用量刷新尾巴上，GLM 慢或闸跳过
+        // 时总览跟着饿着；KV 本身就是各机 10 分钟写一轮，跟这个拍子对齐。
+        telemetryTimer = makeRepeatingTimer(
+            interval: CortexTelemetrySummaryConstants.automaticRefreshInterval
+        ) { [weak self] in
+            self?.refreshTelemetrySummary()
         }
     }
 
@@ -477,6 +487,9 @@ final class SentinelStore {
         scheduledStatusTimerInterval = interval
         statusTimer = makeRepeatingTimer(interval: interval) { [weak self] in
             await self?.refreshStatuses()
+            // 局域网直连跟状态读盘同一拍（开面板 5 秒、关面板 2 分钟）。
+            // 端点 2 秒超时、并发闸兜底，挂在这一拍不会拖住谁。
+            self?.refreshLanTelemetry()
         }
     }
 
@@ -720,6 +733,9 @@ final class SentinelStore {
         // 打包进度走磁盘状态刷新，不能跟余额新鲜度闸绑在一起——闸一跳过，
         // 打开面板也看不到正在跑的打包。
         await refreshStatuses()
+        // 局域网直连不吃余额闸、也不等 GLM 的 HTTP 往返：开面板这一拍先拉，
+        // 2 秒超时内同网机器的新读数就能上屏。
+        refreshLanTelemetry()
         await refreshOnPanelOpenIfNeeded()
     }
 
@@ -861,7 +877,6 @@ final class SentinelStore {
             self.refreshGateRuntimeStatus()
             self.refreshRoutePreview()
             self.refreshTelemetrySummary()
-            self.refreshLanTelemetry()
         }
     }
 
@@ -1021,6 +1036,10 @@ final class SentinelStore {
                 return
             }
             self.lanFetchInFlight = false
+            // 5 秒一拍，没变化就不重复上屏，免得面板白跳。
+            guard machines != self.lanMachines else {
+                return
+            }
             self.lanMachines = machines
         }
     }

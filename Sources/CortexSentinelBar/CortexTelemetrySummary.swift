@@ -163,6 +163,12 @@ enum CortexTelemetrySummaryOutcome: Equatable, Sendable {
 
 // MARK: - 取数
 
+enum CortexTelemetrySummaryConstants {
+    /// KV 汇总的独立后台轮：各机哨兵 10 分钟写一轮 KV，拉得再勤也看不到新数据，
+    /// 后台跟这个拍子对齐；开面板那轮仍跟 GLM 用量同一拍触发。
+    static let automaticRefreshInterval: TimeInterval = 10 * 60
+}
+
 enum CortexTelemetrySummaryFetcher {
     struct Configuration: Sendable {
         var manifestPath: String = "scripts/sentry_telemetry.files"

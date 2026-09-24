@@ -739,6 +739,10 @@ struct StatusDiskSnapshot {
     var lineGroups: SentinelLineGroups
     var boardWindow: SentinelBoardWindow
     var channelStatus: ChannelStatusSnapshot
+    /// channel-status.json 的落盘时刻；跟下面那个比，判汇总是不是落后于派工线。
+    var channelStatusModifiedAt: Date?
+    /// 本轮认出的派工线状态文件里最新的落盘时刻（与 lines 同一次列目录）。
+    var newestLineStatusModifiedAt: Date?
     var backgroundJobs: BackgroundJobsSnapshot
     /// 打包读侧三态投影（running / idle / error）。failed/completed 残留落进
     /// idle（带上一次炉），不再整段丢弃。
@@ -770,6 +774,7 @@ enum StatusDiskReader {
         let registry = lineRegistryCache.read(at: registryURL)
         let lineGroups = SentinelAggregation.lineGroups(lines: lines, registry: registry)
         let channelStatus = SentinelFileReader.readChannelStatus(at: channelStatusURL)
+        let channelStatusModifiedAt = (try? fileManager.attributesOfItem(atPath: channelStatusURL.path))?[.modificationDate] as? Date
         let backgroundJobsURL = SentinelPaths.backgroundJobsHealthURL(
             logsDirectory: logsDirectory,
             environment: environment,
@@ -798,6 +803,8 @@ enum StatusDiskReader {
             lineGroups: lineGroups,
             boardWindow: SentinelBoardWindow.snapshot(groups: lineGroups),
             channelStatus: channelStatus,
+            channelStatusModifiedAt: channelStatusModifiedAt,
+            newestLineStatusModifiedAt: lines.compactMap(\.sourceModifiedAt).max(),
             backgroundJobs: backgroundJobs,
             packagingReading: packagingReading,
             ack: ack,

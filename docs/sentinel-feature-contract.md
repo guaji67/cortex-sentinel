@@ -22,7 +22,7 @@
 |---|---|---|---|
 | 标题 | `paths` / `lineGroups` / `boardWindow` / `localHost` | 本机活跃、最近、外机计数 | `PanelSectionIsolationTests` header |
 | 打包进度块 | `packagingReading` 三态 | running 显示哪一炉/第几步/几点起算/**预计几点出包**；idle 显示「当前没有在跑的炉」（可带上一炉时间）；error 用**红色警示档**（danger 色 + 警告图标，与 running 橙框一眼可分）单独显示「读不到打包状态 · 下一炉起来会自己恢复」。**上屏一律人话，不许出现内部词**（JSON/数据根/稳定落点/登记文件等——机器口径 reason 只进 `--dump-state`）。首轮刷新落定后常驻 | `PackagingDisplayRegressionTests` 全组（含 COR-7600 三态、error 人话与视觉分档断言） |
-| 通道 | `channelStatus` + 本机引擎计数 | 三卡 Codex / Grok / ox-alpha | `ChannelSectionPresentationTests` |
+| 通道 | `channelStatus` + 本机引擎计数 | 三卡 Codex / CodeBuddy / Grok。`channel-status.json` 落后于最新派工线状态文件或放过 10 分钟，哨兵按 cortex `scripts/channel_status.files` 导出 `channel_status.py --logs-dir <监视目录>` 重算，60 秒节流、失败退避 10 分钟；判据仍只在 cortex | `ChannelSectionPresentationTests`、`CortexChannelStatusRefreshTests` |
 | Input 服务 | `inputStatus` | 全好时收成一行，有问题展开 | `InputStatusTests` + isolation service |
 | 余额 | `aio` + `officialUsage` | 冷开尽快填数，刷新不塌陷 | isolation balances；`PanelBalanceRefreshTests` |
 | 已登记派工 | `lineGroups.activeRegistered` | 空态「当前没有活跃派工」；行上有强制开始 | isolation dispatch；`SentinelLineControlsTests` |

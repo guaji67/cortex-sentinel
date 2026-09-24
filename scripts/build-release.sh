@@ -135,12 +135,13 @@ codesign --verify --deep --strict "$app_dir"
 echo "== 构建 DMG =="
 mkdir -p "$dist_dir"
 rm -f "$dmg_path" "$dmg_path.sha256"
+# 空数组在 bash 3.2 + set -u 下直接展开会报 unbound variable，用 ${a[@]+"${a[@]}"} 写法。
 headless_args=()
 if [ "${SENTINEL_DMG_HEADLESS:-0}" = 1 ]; then headless_args+=(--headless); fi
 bash "$package_dir/scripts/build-dmg.sh" \
   --app "$app_dir" \
   --output "$dmg_path" \
-  --volume-name "Cortex 哨兵" "${headless_args[@]}"
+  --volume-name "Cortex 哨兵" ${headless_args[@]+"${headless_args[@]}"}
 hdiutil verify "$dmg_path"
 
 echo "== 签名 DMG =="

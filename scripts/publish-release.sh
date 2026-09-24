@@ -17,7 +17,7 @@ dist_dir="$package_dir/dist"
 dmg="$dist_dir/Cortex哨兵-$version.dmg"
 manifest="$dist_dir/Cortex哨兵-$version.manifest.json"
 
-[ -f "$dmg" ] || { echo "失败：找不到 $dmg，先跑 build-release.sh" >&2; exit 1; }
+[ -f "$dmg" ] || { echo "失败：找不到 ${dmg}，先跑 build-release.sh" >&2; exit 1; }
 [ -f "$dmg.sha256" ] || { echo "失败：找不到 $dmg.sha256" >&2; exit 1; }
 [ -f "$manifest" ] || { echo "失败：找不到 $manifest" >&2; exit 1; }
 [ -f "$notes_file" ] || { echo "失败：找不到说明文件 $notes_file" >&2; exit 1; }

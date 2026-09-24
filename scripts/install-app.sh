@@ -428,7 +428,7 @@ if [ "$used_fallback_watch" -eq 1 ] && [ ! -e "$default_watch_dir" ]; then
         cortex_repo_root="$repo_candidate"
         cortex_repo_root_probed=1
         used_fallback_watch=0
-        echo "认到 Cortex 仓库 $repo_candidate，已把 $default_watch_dir 软链到它的 logs。"
+        echo "认到 Cortex 仓库 ${repo_candidate}，已把 $default_watch_dir 软链到它的 logs。"
       fi
       break
     fi

@@ -45,7 +45,7 @@ done
 
 case "$DMG_FORMAT" in
   UDZO|ULFO|ULMO) ;;
-  *) echo "不支持的 DMG 压缩格式：$DMG_FORMAT（可选 UDZO、ULFO、ULMO）" >&2; exit 1 ;;
+  *) echo "不支持的 DMG 压缩格式：${DMG_FORMAT}（可选 UDZO、ULFO、ULMO）" >&2; exit 1 ;;
 esac
 [ -n "$APP_PATH" ] || { echo "必须 --app 指定 .app" >&2; exit 1; }
 APP_PATH="$(cd "$(dirname "$APP_PATH")" && pwd)/$(basename "$APP_PATH")"
@@ -122,7 +122,7 @@ if [ -e "$LEFTOVER_VOLUME" ]; then
     sleep 1
   done
   [ ! -e "$LEFTOVER_VOLUME" ] || {
-    echo "卷名仍被占：$LEFTOVER_VOLUME，先弹出再出包" >&2
+    echo "卷名仍被占：${LEFTOVER_VOLUME}，先弹出再出包" >&2
     exit 1
   }
 fi

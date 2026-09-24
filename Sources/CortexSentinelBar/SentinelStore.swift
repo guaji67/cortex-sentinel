@@ -100,6 +100,10 @@ final class SentinelStore {
     @ObservationIgnored private var routePreviewFetchInFlight = false
     /// 三机总览取数并发闸：同一时间最多一个在跑。
     @ObservationIgnored private var telemetrySummaryFetchInFlight = false
+    /// 通道汇总过期自刷：nil 表示不自刷（单元测试）；同一时间最多一个在跑。
+    @ObservationIgnored private let channelStatusRefresher: CortexChannelStatusRefresh.Refresher?
+    @ObservationIgnored private var channelStatusRefreshInFlight = false
+    @ObservationIgnored private var lastChannelStatusRefreshAttempt: CortexChannelStatusRefresh.Attempt?
     /// 局域网直连：本机 server（暴露 collect 遥测）与同网端点发现/拉取结果。
     @ObservationIgnored private var lanTelemetryServer: LanTelemetryServer?
     @ObservationIgnored private var lanTelemetryServerStarted = false
@@ -204,9 +208,11 @@ final class SentinelStore {
         launchctlRunner: any LaunchctlRunning = ProcessLaunchctlRunner(),
         fileManager: FileManager = .default,
         disabledJobsURL: URL? = nil,
-        launchctlUID: Int32 = Int32(getuid())
+        launchctlUID: Int32 = Int32(getuid()),
+        channelStatusRefresher: CortexChannelStatusRefresh.Refresher? = CortexChannelStatusRefresh.productionRefresherUnlessTesting()
     ) {
         self.defaults = defaults
+        self.channelStatusRefresher = channelStatusRefresher
         self.environment = environment
         self.otherCodexProcessReader = otherCodexProcessReader
         self.now = now
@@ -579,6 +585,49 @@ final class SentinelStore {
         lastStatusDiskReadWasOnMainThreadForTests = snapshot.readOnMainThread
         scrollPublishGate.publish(surface: .statuses) { [weak self] in
             self?.applyStatusSnapshot(snapshot, refreshedHost: refreshedHost)
+        }
+        refreshChannelStatusIfStale(
+            snapshotModifiedAt: snapshot.channelStatusModifiedAt,
+            newestLineStatusModifiedAt: snapshot.newestLineStatusModifiedAt
+        )
+    }
+
+    /// 通道汇总落后于派工线（或放太久）就叫 cortex 重算一次，算完立刻再读一轮盘上屏。
+    /// 子进程放后台不卡界面；同一时间最多一个在跑，节流与失败退避见 CortexChannelStatusRefresh。
+    private func refreshChannelStatusIfStale(snapshotModifiedAt: Date?, newestLineStatusModifiedAt: Date?) {
+        guard let refresher = channelStatusRefresher,
+              !channelStatusRefreshInFlight,
+              CortexChannelStatusRefresh.shouldRefresh(
+                  snapshotModifiedAt: snapshotModifiedAt,
+                  newestLineStatusModifiedAt: newestLineStatusModifiedAt,
+                  lastAttempt: lastChannelStatusRefreshAttempt,
+                  now: now()
+              )
+        else {
+            return
+        }
+        channelStatusRefreshInFlight = true
+        let request = CortexChannelStatusRefresh.Request(
+            environment: environment,
+            watchDirectory: paths.logsDirectory,
+            fallbackRepositoryRoot: paths.repositoryRoot,
+            homeDirectory: FileManager.default.homeDirectoryForCurrentUser.path
+        )
+        Task { @MainActor [weak self] in
+            let outcome = await Task.detached(priority: .utility) {
+                await refresher(request)
+            }.value
+            guard let self else {
+                return
+            }
+            self.channelStatusRefreshInFlight = false
+            self.lastChannelStatusRefreshAttempt = CortexChannelStatusRefresh.Attempt(
+                at: self.now(),
+                failed: outcome != .refreshed
+            )
+            if outcome == .refreshed {
+                await self.refreshStatuses()
+            }
         }
     }
 

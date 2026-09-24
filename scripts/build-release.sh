@@ -90,7 +90,7 @@ bash "$package_dir/scripts/write-installer-manifest.sh" \
 head_commit="$(git -C "$package_dir" rev-parse HEAD)"
 manifest_commit="$(plutil -extract commit raw -o - "$app_dir/Contents/Resources/installer-manifest.json")"
 if [ "$manifest_commit" != "$head_commit" ]; then
-  echo "失败：安装器清单 commit=$manifest_commit，期望 $head_commit" >&2
+  echo "失败：安装器清单 commit=${manifest_commit}，期望 $head_commit" >&2
   exit 1
 fi
 
@@ -115,7 +115,7 @@ submit_notarization() {
     --output-format json > "$result_file"
   status="$(/usr/bin/jq -r '.status // empty' "$result_file")"
   if [ "$status" != "Accepted" ]; then
-    echo "失败：公证未 Accepted：$artifact（状态：${status:-未知}）" >&2
+    echo "失败：公证未 Accepted：${artifact}（状态：${status:-未知}）" >&2
     /usr/bin/jq -r 'if .status then "status=\(.status)" else empty end, if .message then "message=\(.message)" else empty end' "$result_file" >&2
     exit 1
   fi
@@ -168,12 +168,12 @@ xcrun stapler validate "$mounted_app"
 codesign --verify --deep --strict "$mounted_app"
 mounted_commit="$(plutil -extract commit raw -o - "$mounted_app/Contents/Resources/installer-manifest.json")"
 if [ "$mounted_commit" != "$head_commit" ]; then
-  echo "失败：DMG 内清单 commit=$mounted_commit，期望 $head_commit" >&2
+  echo "失败：DMG 内清单 commit=${mounted_commit}，期望 $head_commit" >&2
   exit 1
 fi
 mounted_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$mounted_app/Contents/Info.plist")"
 if [ "$mounted_version" != "$version" ]; then
-  echo "失败：DMG 内 CFBundleShortVersionString=$mounted_version，期望 $version" >&2
+  echo "失败：DMG 内 CFBundleShortVersionString=${mounted_version}，期望 $version" >&2
   exit 1
 fi
 if [ ! -L "$mount_dir/Applications" ] || [ "$(readlink "$mount_dir/Applications")" != "/Applications" ]; then

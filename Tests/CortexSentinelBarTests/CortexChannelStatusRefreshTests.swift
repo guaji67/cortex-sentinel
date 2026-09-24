@@ -255,6 +255,11 @@ final class CortexChannelStatusRefreshTests: XCTestCase {
         XCTAssertEqual(store.channelStatus.codebuddy.status, .alive, "重算后应立刻上屏新卡")
         XCTAssertEqual(store.channelStatus.codebuddy.running, 1)
 
+        // 线又写了一次状态，汇总重新落后；仍在 60 秒节流窗内，不许再叫。
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(5)],
+            ofItemAtPath: logs.appendingPathComponent("codebuddy-fixture-line.status.json").path
+        )
         await store.refreshStatuses()
         try await Task.sleep(nanoseconds: 50_000_000)
         let callCount = await calls.value

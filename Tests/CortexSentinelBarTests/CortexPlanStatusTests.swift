@@ -248,7 +248,9 @@ final class CortexPlanStatusTests: XCTestCase {
         keySHA12: String,
         alsoKeySHA12: [String]? = nil,
         planNotes: [String: Any]? = nil,
-        executors: [[String: Any]]? = nil
+        executors: [[String: Any]]? = nil,
+        runningSplit: [String: Any]? = nil,
+        lines: [[String: Any]]? = nil
     ) -> [String: Any] {
         var object: [String: Any] = [
             "id": id,
@@ -268,6 +270,12 @@ final class CortexPlanStatusTests: XCTestCase {
         }
         if let planNotes {
             object["plan_notes"] = planNotes
+        }
+        if let runningSplit {
+            object.merge(runningSplit) { _, new in new }
+        }
+        if let lines {
+            object["lines"] = lines
         }
         return object
     }
@@ -469,6 +477,174 @@ final class CortexPlanStatusTests: XCTestCase {
         // 没登记执行者 → 看板格不显示，没有可报告的对象。
         let noExecutors = try decodePayload(plans: [Self.planObject(keySHA12: "0123456789ab")]).plans[0]
         XCTAssertNil(CortexPlanStatusDisplay.offBoardCellText(executors: noExecutors.executors))
+    }
+
+    // MARK: - 在跑拆分（COR-9198：本机线 / Multica，值全是合成样例）
+
+    /// 新键齐全：拆分数、硬上限、逐条线都能解出来。
+    func testRunningSplitKeysDecodeFull() throws {
+        let plan = try decodePayload(plans: [Self.planObject(
+            keySHA12: "0123456789ab",
+            runningSplit: [
+                "running": 5,
+                "running_local": 2,
+                "running_multica": 4,
+                "local_lines_known": true,
+                "hard_parallel": 8,
+            ],
+            lines: [
+                ["kind": "local", "label": "cor-9001-a", "executor": "样例执行者", "machine": "pro"],
+                ["kind": "multica", "label": "COR-9001", "executor": "样例执行者", "machine": "pro"],
+            ]
+        )]).plans[0]
+        XCTAssertEqual(plan.running, 5)
+        XCTAssertEqual(plan.runningLocal, 2)
+        XCTAssertEqual(plan.runningMultica, 4)
+        XCTAssertEqual(plan.localLinesKnown, true)
+        XCTAssertEqual(plan.hardParallel, 8)
+        XCTAssertEqual(plan.lines.count, 2)
+        XCTAssertEqual(plan.lines[0].kind, "local")
+        XCTAssertEqual(plan.lines[0].label, "cor-9001-a")
+        XCTAssertEqual(plan.lines[0].executor, "样例执行者")
+        XCTAssertEqual(plan.lines[0].machine, "pro")
+        XCTAssertEqual(plan.lines[1].kind, "multica")
+        XCTAssertEqual(plan.lines[1].label, "COR-9001")
+    }
+
+    /// 缺键和显式 null 都照常解码，不许整份丢。
+    func testLegacyPayloadWithoutSplitKeysStillDecodes() throws {
+        // 旧 payload：这些键整个不在。
+        let legacy = try decodePayload(plans: [Self.planObject(keySHA12: "0123456789ab")]).plans[0]
+        XCTAssertNil(legacy.runningLocal)
+        XCTAssertNil(legacy.runningMultica)
+        XCTAssertNil(legacy.localLinesKnown)
+        XCTAssertNil(legacy.hardParallel)
+        XCTAssertTrue(legacy.lines.isEmpty, "旧输出没有 lines，解出来是空数组")
+        XCTAssertEqual(legacy.running, 2)
+        XCTAssertEqual(legacy.maxParallel, 5)
+        XCTAssertEqual(legacy.label, "Sample 套餐")
+
+        // 键在、单项 null：解出 nil / 空数组，其余字段照旧。
+        let nullSplits = try decodePayload(plans: [Self.planObject(
+            keySHA12: "0123456789ab",
+            runningSplit: [
+                "running_local": NSNull(),
+                "running_multica": NSNull(),
+                "local_lines_known": true,
+                "hard_parallel": NSNull(),
+            ],
+            lines: []
+        )]).plans[0]
+        XCTAssertNil(nullSplits.runningLocal)
+        XCTAssertNil(nullSplits.runningMultica)
+        XCTAssertEqual(nullSplits.localLinesKnown, true)
+        XCTAssertNil(nullSplits.hardParallel)
+        XCTAssertTrue(nullSplits.lines.isEmpty)
+    }
+
+    /// 本机线读不到（running_local 为 null、local_lines_known 为 false）：
+    /// note 走「本机线读不到，只含看板」，value 仍是合计。
+    func testDetailRunningNoteUnknownLocalLines() throws {
+        let plan = try decodePayload(plans: [Self.planObject(
+            keySHA12: "0123456789ab",
+            runningSplit: [
+                "running": 3,
+                "running_local": NSNull(),
+                "running_multica": 4,
+                "local_lines_known": false,
+            ]
+        )]).plans[0]
+        let lines = CortexPlanStatusDisplay.detailLines(
+            plan: plan,
+            payload: nil,
+            failureText: nil,
+            fetchedAt: nil,
+            cashBalance: nil
+        )
+        let runningRow = try XCTUnwrap(lines.first { $0.label == "在跑" })
+        XCTAssertEqual(runningRow.value, "3 条 / 上限 5")
+        XCTAssertEqual(runningRow.note, "本机线读不到，只含看板")
+        // 没有逐条线可列。
+        XCTAssertFalse(lines.contains { $0.label == "cor-9001-a" })
+    }
+
+    /// 两项之和（本机 2 + 看板 4 = 6）大于封顶后的合计（5）：value 仍显示
+    /// 合计，note 并列两项加硬上限，不写等式；逐条线按本机 / Multica 列出，
+    /// 机器名不上屏。
+    func testDetailRunningValueKeepsTotalWhenSplitExceedsIt() throws {
+        let plan = try decodePayload(plans: [Self.planObject(
+            keySHA12: "0123456789ab",
+            runningSplit: [
+                "running": 5,
+                "running_local": 2,
+                "running_multica": 4,
+                "local_lines_known": true,
+                "hard_parallel": 8,
+            ],
+            lines: [
+                ["kind": "local", "label": "cor-9001-a", "executor": "样例执行者", "machine": "pro"],
+                ["kind": "multica", "label": "COR-9001", "executor": "样例执行者", "machine": "pro"],
+            ]
+        )]).plans[0]
+        let lines = CortexPlanStatusDisplay.detailLines(
+            plan: plan,
+            payload: nil,
+            failureText: nil,
+            fetchedAt: nil,
+            cashBalance: nil
+        )
+        let runningRow = try XCTUnwrap(lines.first { $0.label == "在跑" })
+        XCTAssertEqual(runningRow.value, "5 条 / 上限 5")
+        XCTAssertEqual(runningRow.note, "本机 2 · 看板 4（含排队） · 硬上限 8")
+        // 逐条线两行：行名是 label，值是本机 / Multica 加执行者名。
+        XCTAssertEqual(try XCTUnwrap(lines.first { $0.label == "cor-9001-a" }).value, "本机 样例执行者")
+        XCTAssertEqual(try XCTUnwrap(lines.first { $0.label == "COR-9001" }).value, "Multica 样例执行者")
+        let allText = lines.map { [$0.label, $0.value, $0.note ?? ""].joined(separator: " ") }.joined(separator: "\n")
+        XCTAssertFalse(allText.contains("pro"), "机器名不上屏")
+    }
+
+    /// 旧 payload 没有拆分键：「在跑」行不给 note，也不列逐条线。
+    func testDetailRunningNoteAbsentForLegacyPayload() throws {
+        let plan = try decodePayload(plans: [Self.planObject(keySHA12: "0123456789ab")]).plans[0]
+        let lines = CortexPlanStatusDisplay.detailLines(
+            plan: plan,
+            payload: nil,
+            failureText: nil,
+            fetchedAt: nil,
+            cashBalance: nil
+        )
+        let runningRow = try XCTUnwrap(lines.first { $0.label == "在跑" })
+        XCTAssertEqual(runningRow.value, "2 条 / 上限 5")
+        XCTAssertNil(runningRow.note)
+        XCTAssertFalse(lines.contains { $0.label == "cor-9001-a" })
+        XCTAssertFalse(lines.contains { $0.label.hasPrefix("还有") })
+    }
+
+    /// 逐条线最多列 10 行，超出的并成最后一行「还有 N 条」。
+    func testDetailLineRowsCapAtTenWithOverflowRow() throws {
+        let many: [[String: Any]] = (0..<13).map { index in
+            [
+                "kind": index < 4 ? "local" : "multica",
+                "label": "cor-90\(index)",
+                "executor": "样例执行者",
+            ]
+        }
+        let plan = try decodePayload(plans: [Self.planObject(
+            keySHA12: "0123456789ab",
+            lines: many
+        )]).plans[0]
+        let lines = CortexPlanStatusDisplay.detailLines(
+            plan: plan,
+            payload: nil,
+            failureText: nil,
+            fetchedAt: nil,
+            cashBalance: nil
+        )
+        let lineRows = lines.filter { $0.label.hasPrefix("cor-90") }
+        XCTAssertEqual(lineRows.count, 10, "最多列 10 条")
+        XCTAssertEqual(lineRows.map(\.label), (0..<10).map { "cor-90\($0)" }, "按 cortex 给的顺序取前 10 条")
+        let overflow = try XCTUnwrap(lines.first { $0.label.hasPrefix("还有") })
+        XCTAssertEqual(overflow.label, "还有 3 条")
     }
 
     /// 归并目标：附加钥匙指回套餐；主钥匙和谁都不是的行不归并。
@@ -1481,6 +1657,56 @@ final class CortexPlanStatusTests: XCTestCase {
 
     // MARK: - 子命令白名单
 
+    /// 跑脚本那一步的环境：要带 CORTEX_GATE_CHECKOUT_BASE 且值等于认到的仓根
+    /// （套餐脚本据它找 cortex 主检出来读本机线），共用环境照旧、命令行参数不动。
+    func testFetchPassesCheckoutBaseToScriptEnvironment() async throws {
+        guard FileManager.default.fileExists(atPath: "/usr/bin/python3") else {
+            throw XCTSkip("本机没有 /usr/bin/python3")
+        }
+        let fakeRepoRoot = tempRoot.appendingPathComponent("any-repo", isDirectory: true)
+        try FileManager.default.createDirectory(at: fakeRepoRoot, withIntermediateDirectories: true)
+        let runner = FakeSubprocessRunner(revParseRoot: fakeRepoRoot.path)
+        runner.responses["show"] = CortexSubprocessResult(
+            exitCode: 0,
+            standardOutput: Data("# 清单\nscripts/glm_plan_status.py\n".utf8),
+            standardError: Data(),
+            timedOut: false
+        )
+        runner.responses["ls-tree"] = CortexSubprocessResult(
+            exitCode: 0,
+            standardOutput: Data("100644 blob deadbeef\tscripts/glm_plan_status.py\n".utf8),
+            standardError: Data(),
+            timedOut: false
+        )
+
+        let outcome = await CortexPlanStatusFetcher.fetch(
+            environment: [:],
+            watchDirectory: tempRoot,
+            fallbackRepositoryRoot: nil,
+            homeDirectory: tempRoot.path,
+            usageJSON: sampleUsageJSON,
+            configuration: CortexPlanStatusFetcher.Configuration(
+                cacheRoot: tempRoot.appendingPathComponent("cache", isDirectory: true),
+                interpreterCandidates: { _ in ["/usr/bin/python3"] }
+            ),
+            runner: runner
+        )
+        guard case .success = outcome else {
+            XCTFail("取数应该成功：\(outcome)")
+            return
+        }
+        let scriptCall = try XCTUnwrap(runner.calls.last { $0.executablePath == "/usr/bin/python3" })
+        XCTAssertEqual(
+            scriptCall.environment?["CORTEX_GATE_CHECKOUT_BASE"],
+            fakeRepoRoot.path,
+            "传给脚本的环境要带 CORTEX_GATE_CHECKOUT_BASE，值等于认到的仓根"
+        )
+        // 共用的脚本环境照旧，命令行参数不动。
+        XCTAssertEqual(scriptCall.arguments, ["scripts/glm_plan_status.py", "--json"])
+        XCTAssertEqual(scriptCall.environment?["CORTEX_REPO_ROOT"], fakeRepoRoot.path)
+        XCTAssertEqual(scriptCall.environment?["HOME"], tempRoot.path)
+    }
+
     /// 注入命令执行器：对 cortex 仓只准出现 rev-parse / show / ls-tree / archive 四种只读命令。
     func testGitSubcommandsAreReadOnlyWhitelist() async throws {
         let fakeRepoRoot = tempRoot.appendingPathComponent("any-repo", isDirectory: true)
@@ -1537,6 +1763,7 @@ private final class FakeSubprocessRunner: CortexSubprocessRunning, @unchecked Se
     struct Call: Equatable {
         let executablePath: String
         let arguments: [String]
+        let environment: [String: String]?
     }
 
     var responses: [String: CortexSubprocessResult] = [:]
@@ -1564,7 +1791,7 @@ private final class FakeSubprocessRunner: CortexSubprocessRunning, @unchecked Se
         timeout: TimeInterval
     ) async -> CortexSubprocessResult {
         lock.lock()
-        _calls.append(Call(executablePath: executablePath, arguments: arguments))
+        _calls.append(Call(executablePath: executablePath, arguments: arguments, environment: environment))
         lock.unlock()
 
         if executablePath == "/usr/bin/git" {

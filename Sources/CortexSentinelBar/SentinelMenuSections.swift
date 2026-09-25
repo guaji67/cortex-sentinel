@@ -1016,6 +1016,9 @@ struct SentinelBalancesSection: View {
             glmUsageRows
                 .zIndex(branchesWithHoverCard.contains("glm") ? 1 : 0)
 
+            codeBuddyUsageRow
+                .zIndex(branchesWithHoverCard.contains("codebuddy") ? 1 : 0)
+
             cursorUsageRow
 
             officialUsageRow
@@ -2425,6 +2428,160 @@ struct SentinelBalancesSection: View {
             parts.append(errorMessage)
         }
         return parts.joined(separator: " · ")
+    }
+
+    /// CodeBuddy 积分余额：三个号并排一行（等宽网格，无横条——积分没有时间窗）。
+    /// 一把 key 都没有时整行不占位；封禁的号在抓取层就被剔除；
+    /// 可用的号超过三个时只取前三个进格子，其余进悬停。
+    @ViewBuilder private var codeBuddyUsageRow: some View {
+        let snapshot = store.codeBuddyCredit
+        if snapshot.accounts.isEmpty {
+            EmptyView()
+        } else {
+            let grid = CodeBuddyCreditConstants.gridSplit(snapshot.accounts)
+            HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
+                Circle()
+                    .fill(codeBuddyStatusColor(visible: grid.visible))
+                    .frame(
+                        width: SentinelTheme.Metrics.balanceDot,
+                        height: SentinelTheme.Metrics.balanceDot
+                    )
+                Text("CodeBuddy")
+                    .font(SentinelTheme.Fonts.balanceName)
+                    .foregroundStyle(SentinelTheme.Colors.foreground)
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                Spacer(minLength: SentinelTheme.Spacing.xs)
+                HStack(alignment: .top, spacing: SentinelTheme.Metrics.usageSegmentGap) {
+                    ForEach(grid.visible) { account in
+                        codeBuddyGridSegment(account)
+                    }
+                }
+                .frame(
+                    width: SentinelTheme.Metrics.usageBlockWidth,
+                    alignment: .leading
+                )
+                .layoutPriority(2)
+            }
+            .frame(height: SentinelTheme.Metrics.usageRowHeight)
+            .contentShape(Rectangle())
+            .modifier(HoverDetailCard(
+                makeContent: { self.codeBuddyDetailContent(snapshot) },
+                branchID: "codebuddy",
+                previewRowMatch: self.rowMatchesPreviewSelection("CodeBuddy")
+            ))
+        }
+    }
+
+    /// 格子：短名 + 剩余积分（向下取整）。颜色只看剩余积分档位。
+    private func codeBuddyGridSegment(_ account: CodeBuddyAccountCredit) -> some View {
+        let color = account.credits.map(Self.codeBuddyCreditColor)
+            ?? SentinelTheme.Colors.secondaryForeground
+        return quotaSegmentWithBar(
+            label: account.label,
+            valueText: CodeBuddyCreditConstants.creditsText(account.credits),
+            valueColor: color,
+            columnWidth: SentinelTheme.Metrics.usageColWidth1,
+            barFraction: nil
+        )
+    }
+
+    /// 行左状态点取三格里最坏的那档；有账号数据过期至少黄，全没数字给灰。
+    private func codeBuddyStatusColor(visible: [CodeBuddyAccountCredit]) -> Color {
+        if visible.contains(where: \.stale) {
+            return SentinelTheme.Colors.warning
+        }
+        let levels = visible.compactMap { account in
+            account.credits.map(CodeBuddyCreditConstants.creditLevel)
+        }
+        guard let worst = CodeBuddyCreditConstants.worstLevel(levels) else {
+            return SentinelTheme.Colors.secondaryForeground
+        }
+        return Self.codeBuddyLevelColor(worst)
+    }
+
+    private static func codeBuddyLevelColor(_ level: CodeBuddyCreditLevel) -> Color {
+        switch level {
+        case .normal:
+            return SentinelTheme.Colors.success
+        case .low:
+            return SentinelTheme.Colors.warning
+        case .critical:
+            return SentinelTheme.Colors.danger
+        }
+    }
+
+    private static func codeBuddyCreditColor(_ credits: Double) -> Color {
+        codeBuddyLevelColor(CodeBuddyCreditConstants.creditLevel(credits))
+    }
+
+    /// 悬停：每个号三行（余额+人民币 / key+到期 / 今日+累计）；
+    /// 号数超过格子容量的也全在这里列出；抓取失败的把失败原因写在余额备注里。
+    private func codeBuddyDetailContent(_ snapshot: CodeBuddyCreditSnapshot) -> BalanceHoverContent {
+        var lines: [BalanceHoverLine] = []
+        var usedNames: Set<String> = []
+        for account in snapshot.accounts {
+            // 悬停行按 label 去重渲染，重名账号追加 key 尾巴保证唯一。
+            var name = account.label
+            if usedNames.contains(name) {
+                name = "\(name)·\(account.key.suffix(4))"
+            }
+            usedNames.insert(name)
+            if let credits = account.credits {
+                lines.append(BalanceHoverLine(
+                    label: name,
+                    value: CodeBuddyCreditConstants.creditsText(credits),
+                    note: CodeBuddyCreditConstants.cnyText(credits: credits, payBase1000: snapshot.payBase1000),
+                    noteColor: nil
+                ))
+            } else {
+                lines.append(BalanceHoverLine(
+                    label: name,
+                    value: "—",
+                    note: account.errorMessage,
+                    noteColor: SentinelTheme.Colors.danger
+                ))
+            }
+            lines.append(BalanceHoverLine(
+                label: "\(name) key",
+                value: account.maskedKeyText,
+                note: account.expiryText,
+                noteColor: nil
+            ))
+            lines.append(BalanceHoverLine(
+                label: "\(name) 用量",
+                value: "今日 \(CodeBuddyCreditConstants.creditsText(account.todayUsed))",
+                note: codeBuddyTotalsNote(account),
+                noteColor: nil
+            ))
+        }
+        var alert: String?
+        var alertColor: Color?
+        if snapshot.accounts.contains(where: \.stale) {
+            alert = "数据已过期"
+            alertColor = SentinelTheme.Colors.warning
+        }
+        return BalanceHoverContent(
+            title: "CodeBuddy 积分余额",
+            subtitle: snapshot.payBase1000.map {
+                String(format: "按站点现价 1000 积分 = %g 元", $0)
+            },
+            lines: lines,
+            footer: snapshot.checkedAt.map { "\(SentinelTimeFormat.clockTime($0)) 更新" },
+            alert: alert,
+            alertColor: alertColor
+        )
+    }
+
+    private func codeBuddyTotalsNote(_ account: CodeBuddyAccountCredit) -> String? {
+        var parts: [String] = []
+        if let used = account.totalUsed {
+            parts.append("累 \(CodeBuddyCreditConstants.creditsText(used))")
+        }
+        if let recharged = account.totalRecharged {
+            parts.append("充 \(CodeBuddyCreditConstants.creditsText(recharged))")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " / ")
     }
 
     private var unreadSection: some View {

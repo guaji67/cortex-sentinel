@@ -333,6 +333,53 @@ enum DemoBalancesPreview {
             checkedAt: checked
         )
 
+        /// CodeBuddy 演示：三个号（Pro / Max / mini）并排，数值用 Falcon 给的样例。
+        let codeBuddy = CodeBuddyCreditSnapshot(
+            accounts: [
+                CodeBuddyAccountCredit(
+                    key: "demo-bc-key-pro-0000000000000001",
+                    label: "Pro",
+                    credits: 10200,
+                    todayUsed: 4594.51,
+                    totalUsed: 86800.87,
+                    totalRecharged: 100000,
+                    expiry: .until(checked.addingTimeInterval(3600 * 24 * 97)),
+                    banned: false,
+                    checkedAt: checked,
+                    stale: false,
+                    errorMessage: nil
+                ),
+                CodeBuddyAccountCredit(
+                    key: "demo-bc-key-max-0000000000000001",
+                    label: "Max",
+                    credits: 9200,
+                    todayUsed: 1200,
+                    totalUsed: 8800,
+                    totalRecharged: 18000,
+                    expiry: .permanent,
+                    banned: false,
+                    checkedAt: checked,
+                    stale: false,
+                    errorMessage: nil
+                ),
+                CodeBuddyAccountCredit(
+                    key: "demo-bc-key-mini-000000000000001",
+                    label: "mini",
+                    credits: 8000,
+                    todayUsed: 300.5,
+                    totalUsed: 2000,
+                    totalRecharged: 10000,
+                    expiry: .absent,
+                    banned: false,
+                    checkedAt: checked,
+                    stale: false,
+                    errorMessage: nil
+                ),
+            ],
+            checkedAt: checked,
+            payBase1000: 3
+        )
+
         func aioProvider(
             id: Int64,
             name: String,
@@ -383,6 +430,7 @@ enum DemoBalancesPreview {
             cursor: cursor,
             glm: glm,
             commandCode: commandCode,
+            codeBuddy: codeBuddy,
             aio: aio,
             inputStatus: demoInputStatus(checked: checked),
             glmPlanStatus: demoPlanStatus(checked: checked, stale: planStatusStale)

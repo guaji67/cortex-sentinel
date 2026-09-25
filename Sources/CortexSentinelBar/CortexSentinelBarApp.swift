@@ -23,6 +23,8 @@ enum CortexSentinelBarMain {
     static let dumpStateArgument = "--dump-state"
     /// GLM 额度读数 JSON 给程序吃（实现和字段说明在 GLMUsageCLI.swift）。
     static let glmUsageJSONArgument = "--glm-usage-json"
+    /// CodeBuddy 积分读数 JSON 给程序吃（实现和字段说明在 CodeBuddyCredit.swift）。
+    static let codeBuddyCreditJSONArgument = "--codebuddy-credit-json"
     static let idleRefreshArgument = "--idle-refresh"
     static let smokeSettingsArgument = "--smoke-settings"
     static let openSettingsArgument = "--open-settings"
@@ -72,6 +74,10 @@ enum CortexSentinelBarMain {
         }
         if arguments.contains(glmUsageJSONArgument) {
             await GLMUsageCLI.run()
+            return
+        }
+        if arguments.contains(codeBuddyCreditJSONArgument) {
+            await CodeBuddyCreditCLI.run()
             return
         }
         if arguments.contains(idleRefreshArgument) {

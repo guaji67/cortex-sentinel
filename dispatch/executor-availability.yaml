@@ -1,6 +1,6 @@
 # 公开镜像（勿直接改本文件）：正本在私有仓 guaji67/cortex 的 docs/reference/executor-availability.yaml。
 # 本镜像给没有 GitHub 凭据的机器匿名拉（refresh_gate_runtime.sh 的 dispatch-override 兜底链），由白名单投影产出，只带选人字段，不带原话与自由文本。
-# 镜像源 commit: 8d24e751975875cb26b99d32eb58dc0d55d30d3c  镜像时间: 2026-09-26 02:39:12
+# 镜像源 commit: 26fa3fa845eb6e96628376ae5898ff55004b8231  镜像时间: 2026-09-26 03:45:30
 public_mirror: true
 executors:
 - id: 69777d31-2038-4460-8f2f-05eac6ab7150
@@ -11,8 +11,8 @@ executors:
 - id: 5d9868d0-0156-4105-bb32-d9059ddc009e
   name: Pro 执行者(ZCode GLM Flash·Falcon 套餐)
   model: glm-5.3-flash
-  status: never
-  since: 2026-09-24 09:1x
+  status: available
+  since: 2026-09-26 03:30
 - id: d77b68ce-4d0c-40c5-a3e8-aa9803bcae1f
   name: Pro 执行者(ZCode GLM Flash·开佬套餐)
   model: glm-5.3-flash

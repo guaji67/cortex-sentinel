@@ -449,7 +449,9 @@ enum DemoBalancesPreview {
             running: Int?,
             cooldownMinutes: Double?,
             skipTextZH: String? = nil,
-            alsoKeys: [String] = []
+            alsoKeys: [String] = [],
+            planNotes: [String: Any]? = nil,
+            executors: [[String: Any]]? = nil
         ) -> [String: Any] {
             var object: [String: Any] = [
                 "id": "demo-plan-\(label)",
@@ -457,9 +459,9 @@ enum DemoBalancesPreview {
                 "key_sha12": GLMUsageCLI.keySHA12(key),
                 "max_parallel": 5,
                 "running": running.map(NSNumber.init(value:)) ?? NSNull(),
-                "executors": running != nil
+                "executors": executors ?? (running != nil
                     ? [["name": "执行者 1", "running": running!]]
-                    : [],
+                    : []),
                 "dispatchable": skipTextZH == nil,
                 "skip_code": NSNull(),
                 "skip_text_zh": skipTextZH.map { $0 } ?? NSNull(),
@@ -470,6 +472,9 @@ enum DemoBalancesPreview {
             ]
             if !alsoKeys.isEmpty {
                 object["also_key_sha12"] = alsoKeys.map { GLMUsageCLI.keySHA12($0) }
+            }
+            if let planNotes {
+                object["plan_notes"] = planNotes
             }
             return object
         }
@@ -488,7 +493,19 @@ enum DemoBalancesPreview {
                     label: "Sample 套餐",
                     running: 2,
                     cooldownMinutes: nil,
-                    alsoKeys: ["demo-key-pro-proxy"]
+                    alsoKeys: ["demo-key-pro-proxy"],
+                    // 档案四格演示（COR-8595 T5）：值全是合成样例；第二个执行者
+                    // 不在默认名单，出「看板隐藏 1 个」。
+                    planNotes: [
+                        "expiry": "2099-01-01",
+                        "weekly_reset": "每周一 00:00",
+                        "owner": "样例归属",
+                        "complete": true,
+                    ],
+                    executors: [
+                        ["name": "执行者 1", "running": 2, "on_board": true, "off_board_reason": NSNull()],
+                        ["name": "执行者 2", "running": 0, "on_board": false, "off_board_reason": "archived"],
+                    ]
                 ),
                 planObject(
                     key: "demo-key-trial",

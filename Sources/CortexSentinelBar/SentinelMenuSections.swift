@@ -1955,7 +1955,7 @@ struct SentinelBalancesSection: View {
             windowLength: 7 * 24 * 3600,
             now: now
         )
-        return HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
+        let mainLine = HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
             providerDot(
                 color: glmUsageStatusColor(account),
                 namespace: ProviderRenameNamespace.glm,
@@ -2031,6 +2031,11 @@ struct SentinelBalancesSection: View {
                 alignment: .leading
             )
         }
+        // 套餐行在主行下带一排档案四格 meta 行；非套餐行没有这排，形状照旧。
+        return VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xxs) {
+            mainLine
+            glmPlanNotesLine(plan)
+        }
         .frame(height: SentinelTheme.Metrics.usageRowHeight)
         .contentShape(Rectangle())
         .modifier(HoverDetailCard(
@@ -2039,6 +2044,27 @@ struct SentinelBalancesSection: View {
             branchID: "glm",
             previewRowMatch: self.rowMatchesPreviewSelection(displayName)
         ))
+    }
+
+    /// 套餐行下的档案四格 meta 行（COR-8595 T5）：到期 / 刷新 / 归属 / 看板隐藏。
+    /// 文本原样、没登记写「未登记」，规则在 CortexPlanStatusDisplay.planNoteCells；
+    /// 字号颜色照失败备注那行（balanceMeta + 次级色），不新开整块。
+    @ViewBuilder
+    private func glmPlanNotesLine(_ plan: CortexPlanStatusPlan?) -> some View {
+        if let plan {
+            let cells = CortexPlanStatusDisplay.planNoteCells(plan: plan)
+            HStack(alignment: .firstTextBaseline, spacing: SentinelTheme.Spacing.md) {
+                ForEach(cells.indices, id: \.self) { index in
+                    Text(cells[index])
+                        .font(SentinelTheme.Fonts.balanceMeta)
+                        .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(cells.joined(separator: "，"))
+        }
     }
 
     /// 出图选行：给的是行名（用户改名后的最终名）子串，命中才出卡。

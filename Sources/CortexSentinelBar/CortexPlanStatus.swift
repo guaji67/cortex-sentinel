@@ -93,6 +93,10 @@ struct CortexPlanStatusPlan: Decodable, Equatable, Sendable {
     /// 同账号其他钥匙的指纹前 12 位：这一行在面板上把它们一并代表。
     /// 旧输出没有这个字段，解出来是空数组。
     let alsoKeySHA12: [String]
+    /// 看板说明里「〔套餐档案〕」块的解析产物（cortex 侧解析，三项文本原样，
+    /// null 即未登记；complete = 选中的块三项是否齐全，cortex 给布尔）。
+    /// 旧输出没有这个键，解出来是 nil。
+    let planNotes: PlanNotes?
 
     var cooldownUntil: Date? {
         cooldownUntilText.flatMap(CortexPlanStatusDate.parse)
@@ -116,6 +120,7 @@ struct CortexPlanStatusPlan: Decodable, Equatable, Sendable {
         case cooldown_until
         case usage_known
         case also_key_sha12
+        case plan_notes
     }
 
     init(from decoder: Decoder) throws {
@@ -132,21 +137,54 @@ struct CortexPlanStatusPlan: Decodable, Equatable, Sendable {
         cooldownUntilText = try container.decodeIfPresent(String.self, forKey: .cooldown_until)
         usageKnown = try container.decodeIfPresent(Bool.self, forKey: .usage_known)
         alsoKeySHA12 = try container.decodeIfPresent([String].self, forKey: .also_key_sha12) ?? []
+        planNotes = try container.decodeIfPresent(PlanNotes.self, forKey: .plan_notes)
+    }
+
+    /// 〔套餐档案〕块的四项：到期 / 周刷新 / 归属是看板说明里的自由文本，
+    /// 原样透出、不清洗不格式化；complete 只表示选中的块三项是否齐全。
+    struct PlanNotes: Decodable, Equatable, Sendable {
+        let expiry: String?
+        let weeklyReset: String?
+        let owner: String?
+        let complete: Bool?
+
+        enum CodingKeys: String, CodingKey {
+            case expiry
+            case weekly_reset
+            case owner
+            case complete
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            expiry = try container.decodeIfPresent(String.self, forKey: .expiry)
+            weeklyReset = try container.decodeIfPresent(String.self, forKey: .weekly_reset)
+            owner = try container.decodeIfPresent(String.self, forKey: .owner)
+            complete = try container.decodeIfPresent(Bool.self, forKey: .complete)
+        }
     }
 
     struct Executor: Decodable, Equatable, Sendable {
         let name: String
         let running: Int?
+        /// 在不在看板默认名单：隐藏 / 归档 = false；看板整表没取到 = null。
+        let onBoard: Bool?
+        /// 不在名单的原因：archived / not_listed；可见或未知 = null。
+        let offBoardReason: String?
 
         enum CodingKeys: String, CodingKey {
             case name
             case running
+            case on_board
+            case off_board_reason
         }
 
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
             running = try container.decodeIfPresent(Int.self, forKey: .running)
+            onBoard = try container.decodeIfPresent(Bool.self, forKey: .on_board)
+            offBoardReason = try container.decodeIfPresent(String.self, forKey: .off_board_reason)
         }
     }
 }
@@ -657,6 +695,41 @@ enum CortexPlanStatusDisplay {
     private static func measuredWidth(_ text: String) -> CGFloat {
         let font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
         return ceil((text as NSString).size(withAttributes: [.font: font]).width)
+    }
+
+    // MARK: 套餐档案四格（COR-8595 T5：到期 / 刷新 / 归属 / 看板隐藏）
+
+    /// cortex 给 null 就写这个占位词，不猜不补格式。
+    static let planNotesAbsentText = "未登记"
+
+    /// 套餐行下那排档案格的文案。前三格照 plan_notes 原样，没登记写「未登记」；
+    /// 看板那格只在该显示时出现（offBoardCellText），所以最少三格、最多四格。
+    static func planNoteCells(plan: CortexPlanStatusPlan) -> [String] {
+        let notes = plan.planNotes
+        var cells = [
+            "到期 \(notes?.expiry ?? planNotesAbsentText)",
+            "刷新 \(notes?.weeklyReset ?? planNotesAbsentText)",
+            "归属 \(notes?.owner ?? planNotesAbsentText)",
+        ]
+        if let offBoard = offBoardCellText(executors: plan.executors) {
+            cells.append(offBoard)
+        }
+        return cells
+    }
+
+    /// 看板那格：有执行者不在默认名单给「N 个」（隐藏和归档都算）；
+    /// 全可见不显示（nil）；on_board 全是 null 给「看板未取到」；
+    /// 没登记执行者就没有可报告的对象，也不显示。
+    static func offBoardCellText(executors: [CortexPlanStatusPlan.Executor]) -> String? {
+        guard !executors.isEmpty else {
+            return nil
+        }
+        let knownOnBoard = executors.compactMap(\.onBoard)
+        guard !knownOnBoard.isEmpty else {
+            return "看板未取到"
+        }
+        let offBoardCount = knownOnBoard.filter { !$0 }.count
+        return offBoardCount > 0 ? "看板隐藏 \(offBoardCount) 个" : nil
     }
 
     /// 套餐行的状态点：只看订阅窗口和冷却，现金不参与（套餐派工不花现金）。

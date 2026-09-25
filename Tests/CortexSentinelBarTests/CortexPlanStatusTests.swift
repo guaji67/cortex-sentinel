@@ -246,7 +246,9 @@ final class CortexPlanStatusTests: XCTestCase {
         id: String = "plan-a",
         label: String = "Sample 套餐",
         keySHA12: String,
-        alsoKeySHA12: [String]? = nil
+        alsoKeySHA12: [String]? = nil,
+        planNotes: [String: Any]? = nil,
+        executors: [[String: Any]]? = nil
     ) -> [String: Any] {
         var object: [String: Any] = [
             "id": id,
@@ -254,7 +256,7 @@ final class CortexPlanStatusTests: XCTestCase {
             "key_sha12": keySHA12,
             "max_parallel": 5,
             "running": 2,
-            "executors": [[String: Any]](),
+            "executors": executors ?? [[String: Any]](),
             "dispatchable": true,
             "skip_code": NSNull(),
             "skip_text_zh": NSNull(),
@@ -263,6 +265,9 @@ final class CortexPlanStatusTests: XCTestCase {
         ]
         if let alsoKeySHA12 {
             object["also_key_sha12"] = alsoKeySHA12
+        }
+        if let planNotes {
+            object["plan_notes"] = planNotes
         }
         return object
     }
@@ -342,6 +347,128 @@ final class CortexPlanStatusTests: XCTestCase {
         XCTAssertEqual(withoutField.keySHA12, "0123456789ab")
         XCTAssertEqual(withoutField.running, 2)
         XCTAssertEqual(withoutField.maxParallel, 5)
+    }
+
+    // MARK: - 套餐档案四格（COR-8595 T5，值全是合成样例）
+
+    func testPlanNotesDecodeFullWithBoardState() throws {
+        let plan = try decodePayload(plans: [Self.planObject(
+            keySHA12: "0123456789ab",
+            planNotes: [
+                "expiry": "2099-01-01",
+                "weekly_reset": "每周一 00:00",
+                "owner": "样例归属",
+                "complete": true,
+            ],
+            executors: [
+                ["name": "执行者 1", "running": 2, "on_board": true, "off_board_reason": NSNull()],
+                ["name": "执行者 2", "running": 0, "on_board": false, "off_board_reason": "archived"],
+            ]
+        )]).plans[0]
+        XCTAssertEqual(plan.planNotes?.expiry, "2099-01-01")
+        XCTAssertEqual(plan.planNotes?.weeklyReset, "每周一 00:00")
+        XCTAssertEqual(plan.planNotes?.owner, "样例归属")
+        XCTAssertEqual(plan.planNotes?.complete, true)
+        XCTAssertEqual(plan.executors[0].onBoard, true)
+        XCTAssertNil(plan.executors[0].offBoardReason)
+        XCTAssertEqual(plan.executors[1].onBoard, false)
+        XCTAssertEqual(plan.executors[1].offBoardReason, "archived")
+    }
+
+    func testLegacyPayloadWithoutNewKeysStillDecodes() throws {
+        let plan = try decodePayload(plans: [Self.planObject(keySHA12: "0123456789ab")]).plans[0]
+        XCTAssertNil(plan.planNotes, "旧输出没有 plan_notes，解出来是 nil，整份照常")
+        XCTAssertTrue(plan.executors.isEmpty || plan.executors.allSatisfy { $0.onBoard == nil })
+        XCTAssertEqual(plan.label, "Sample 套餐")
+        XCTAssertEqual(plan.running, 2)
+        XCTAssertEqual(plan.maxParallel, 5)
+    }
+
+    func testPlanNotesNullBlockAndNullFieldsDecode() throws {
+        // 整块 null。
+        var nullBlockObject = Self.planObject(keySHA12: "0123456789ab")
+        nullBlockObject["plan_notes"] = NSNull()
+        let nullBlock = try decodePayload(plans: [nullBlockObject]).plans[0]
+        XCTAssertNil(nullBlock.planNotes)
+
+        // 块在、单项 null。
+        let partial = try decodePayload(plans: [Self.planObject(
+            keySHA12: "0123456789ab",
+            planNotes: [
+                "expiry": NSNull(),
+                "weekly_reset": "每周一 00:00",
+                "owner": NSNull(),
+                "complete": false,
+            ]
+        )]).plans[0]
+        XCTAssertNil(partial.planNotes?.expiry)
+        XCTAssertEqual(partial.planNotes?.weeklyReset, "每周一 00:00")
+        XCTAssertNil(partial.planNotes?.owner)
+        XCTAssertEqual(partial.planNotes?.complete, false)
+    }
+
+    func testExecutorOnBoardThreeStates() throws {
+        let plan = try decodePayload(plans: [Self.planObject(
+            keySHA12: "0123456789ab",
+            executors: [
+                ["name": "执行者 1", "running": 1, "on_board": true, "off_board_reason": NSNull()],
+                ["name": "执行者 2", "running": 0, "on_board": false, "off_board_reason": "not_listed"],
+                ["name": "执行者 3", "running": 0, "on_board": NSNull(), "off_board_reason": NSNull()],
+            ]
+        )]).plans[0]
+        XCTAssertEqual(plan.executors.map(\.onBoard), [true, false, nil], "on_board 三态都要能解")
+        XCTAssertEqual(plan.executors[1].offBoardReason, "not_listed")
+        XCTAssertNil(plan.executors[2].offBoardReason)
+    }
+
+    func testPlanNoteCellsRegisteredAndOffBoardCount() throws {
+        let plan = try decodePayload(plans: [Self.planObject(
+            keySHA12: "0123456789ab",
+            planNotes: [
+                "expiry": "2099-01-01",
+                "weekly_reset": "每周一 00:00",
+                "owner": "样例归属",
+                "complete": true,
+            ],
+            executors: [
+                ["name": "执行者 1", "running": 2, "on_board": true, "off_board_reason": NSNull()],
+                ["name": "执行者 2", "running": 0, "on_board": false, "off_board_reason": "archived"],
+            ]
+        )]).plans[0]
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.planNoteCells(plan: plan),
+            ["到期 2099-01-01", "刷新 每周一 00:00", "归属 样例归属", "看板隐藏 1 个"]
+        )
+    }
+
+    func testPlanNoteCellsUnregisteredAllVisibleAndUnknownBoard() throws {
+        // 没登记（旧 payload）：三格全「未登记」，执行者全可见 → 看板格不显示。
+        let allVisible = try decodePayload(plans: [Self.planObject(
+            keySHA12: "0123456789ab",
+            executors: [["name": "执行者 1", "running": 2, "on_board": true, "off_board_reason": NSNull()]]
+        )]).plans[0]
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.planNoteCells(plan: allVisible),
+            ["到期 未登记", "刷新 未登记", "归属 未登记"]
+        )
+
+        // on_board 全是 null → 「看板未取到」。
+        let boardUnknown = try decodePayload(plans: [Self.planObject(
+            keySHA12: "0123456789ab",
+            planNotes: ["expiry": "2099-01-01", "weekly_reset": NSNull(), "owner": "样例归属", "complete": false],
+            executors: [
+                ["name": "执行者 1", "running": 1, "on_board": NSNull(), "off_board_reason": NSNull()],
+                ["name": "执行者 2", "running": 0, "on_board": NSNull(), "off_board_reason": NSNull()],
+            ]
+        )]).plans[0]
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.planNoteCells(plan: boardUnknown),
+            ["到期 2099-01-01", "刷新 未登记", "归属 样例归属", "看板未取到"]
+        )
+
+        // 没登记执行者 → 看板格不显示，没有可报告的对象。
+        let noExecutors = try decodePayload(plans: [Self.planObject(keySHA12: "0123456789ab")]).plans[0]
+        XCTAssertNil(CortexPlanStatusDisplay.offBoardCellText(executors: noExecutors.executors))
     }
 
     /// 归并目标：附加钥匙指回套餐；主钥匙和谁都不是的行不归并。

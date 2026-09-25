@@ -97,6 +97,17 @@ struct CortexPlanStatusPlan: Decodable, Equatable, Sendable {
     /// null 即未登记；complete = 选中的块三项是否齐全，cortex 给布尔）。
     /// 旧输出没有这个键，解出来是 nil。
     let planNotes: PlanNotes?
+    /// 在跑的拆分（cortex 侧与派工器共用同一份本机线读法，旧输出没有这些键）：
+    /// running 是派工器账号层口径，每个执行者按看板帽封顶后相加；下面两项是
+    /// 不封顶的原始条数，看板那项含排队，两项之和可以大于 running。
+    let runningLocal: Int?
+    let runningMultica: Int?
+    /// 本机线读没读到：false = 读不到，此时 runningLocal 是 nil、running 只含看板。
+    let localLinesKnown: Bool?
+    /// 看板帽之外账号层的硬上限；旧输出没有是 nil。
+    let hardParallel: Int?
+    /// 在跑的线逐条清单（本机线 + 看板任务）；旧输出没有这个键，解出来是空数组。
+    let lines: [Line]
 
     var cooldownUntil: Date? {
         cooldownUntilText.flatMap(CortexPlanStatusDate.parse)
@@ -121,6 +132,11 @@ struct CortexPlanStatusPlan: Decodable, Equatable, Sendable {
         case usage_known
         case also_key_sha12
         case plan_notes
+        case running_local
+        case running_multica
+        case local_lines_known
+        case hard_parallel
+        case lines
     }
 
     init(from decoder: Decoder) throws {
@@ -138,6 +154,11 @@ struct CortexPlanStatusPlan: Decodable, Equatable, Sendable {
         usageKnown = try container.decodeIfPresent(Bool.self, forKey: .usage_known)
         alsoKeySHA12 = try container.decodeIfPresent([String].self, forKey: .also_key_sha12) ?? []
         planNotes = try container.decodeIfPresent(PlanNotes.self, forKey: .plan_notes)
+        runningLocal = try container.decodeIfPresent(Int.self, forKey: .running_local)
+        runningMultica = try container.decodeIfPresent(Int.self, forKey: .running_multica)
+        localLinesKnown = try container.decodeIfPresent(Bool.self, forKey: .local_lines_known)
+        hardParallel = try container.decodeIfPresent(Int.self, forKey: .hard_parallel)
+        lines = try container.decodeIfPresent([Line].self, forKey: .lines) ?? []
     }
 
     /// 〔套餐档案〕块的四项：到期 / 周刷新 / 归属是看板说明里的自由文本，
@@ -161,6 +182,30 @@ struct CortexPlanStatusPlan: Decodable, Equatable, Sendable {
             weeklyReset = try container.decodeIfPresent(String.self, forKey: .weekly_reset)
             owner = try container.decodeIfPresent(String.self, forKey: .owner)
             complete = try container.decodeIfPresent(Bool.self, forKey: .complete)
+        }
+    }
+
+    /// 在跑的一条线：本机线或看板任务，四项都是可选文本。
+    /// machine 只是 cortex 侧带来的归属信息，不上屏。
+    struct Line: Decodable, Equatable, Sendable {
+        let kind: String?
+        let label: String?
+        let executor: String?
+        let machine: String?
+
+        enum CodingKeys: String, CodingKey {
+            case kind
+            case label
+            case executor
+            case machine
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            kind = try container.decodeIfPresent(String.self, forKey: .kind)
+            label = try container.decodeIfPresent(String.self, forKey: .label)
+            executor = try container.decodeIfPresent(String.self, forKey: .executor)
+            machine = try container.decodeIfPresent(String.self, forKey: .machine)
         }
     }
 
@@ -447,11 +492,16 @@ enum CortexPlanStatusFetcher {
         }
 
         // 5. 在缓存目录里跑脚本，stdin 喂 --glm-usage-json 同一份字节。
+        //    共用导出核心的环境之上补一个 CORTEX_GATE_CHECKOUT_BASE，只加在这
+        //    一个调用上：套餐脚本据它找 cortex 主检出来读本机线，旧版脚本不认
+        //    这个键就忽略，命令行参数不动。
+        var scriptEnvironment = CortexGitScriptExport.scriptEnvironment(homeDirectory: homeDirectory, repoRoot: exported.repoRoot)
+        scriptEnvironment["CORTEX_GATE_CHECKOUT_BASE"] = exported.repoRoot.path
         let run = await runner.run(
             executablePath: exported.interpreterPath,
             arguments: ["scripts/glm_plan_status.py", "--json"],
             workingDirectory: exported.cacheDirectory,
-            environment: CortexGitScriptExport.scriptEnvironment(homeDirectory: homeDirectory, repoRoot: exported.repoRoot),
+            environment: scriptEnvironment,
             stdin: usageJSON,
             timeout: configuration.scriptTimeout
         )
@@ -780,7 +830,7 @@ enum CortexPlanStatusDisplay {
         lines.append(BalanceHoverLine(
             label: "在跑",
             value: "\(runningText) / 上限 \(capText)",
-            note: nil
+            note: runningSplitNote(plan)
         ))
         for executor in plan.executors {
             lines.append(BalanceHoverLine(
@@ -789,6 +839,7 @@ enum CortexPlanStatusDisplay {
                 note: nil
             ))
         }
+        lines.append(contentsOf: planLineRows(plan))
         // 冷却中写到几点，跟行上「冷却 HH:MM」一致；不冷却才看 cortex 的拦人理由。
         if plan.isCoolingDown(now: now), let until = plan.cooldownUntil {
             lines.append(BalanceHoverLine(
@@ -827,6 +878,74 @@ enum CortexPlanStatusDisplay {
             ))
         }
         return lines
+    }
+
+    /// 「在跑」行的 note：cortex 给了拆分才写，旧输出没有这些键就是 nil。
+    /// 合计 running 是派工器封顶口径，拆分是原始行数（看板那项含排队），
+    /// 两项相加可以大于合计，note 只并列两项、不写等式。
+    static func runningSplitNote(_ plan: CortexPlanStatusPlan) -> String? {
+        guard plan.runningLocal != nil || plan.runningMultica != nil || plan.localLinesKnown == false else {
+            return nil
+        }
+        var note: String
+        if plan.localLinesKnown == false {
+            note = "本机线读不到，只含看板"
+        } else {
+            var parts: [String] = []
+            if let local = plan.runningLocal {
+                parts.append("本机 \(local)")
+            }
+            if let multica = plan.runningMultica {
+                parts.append("看板 \(multica)（含排队）")
+            }
+            note = parts.joined(separator: " · ")
+        }
+        if let hard = plan.hardParallel {
+            note += " · 硬上限 \(hard)"
+        }
+        return note
+    }
+
+    /// 详情卡的逐条线清单：本机线与看板任务各一行，最多 10 行，
+    /// 超出的并成一行「还有 N 条」。
+    static func planLineRows(_ plan: CortexPlanStatusPlan) -> [BalanceHoverLine] {
+        let maxVisibleRows = 10
+        guard !plan.lines.isEmpty else {
+            return []
+        }
+        var rows = plan.lines.prefix(maxVisibleRows).map { item in
+            BalanceHoverLine(
+                label: item.label ?? "",
+                value: planLineValue(item),
+                note: nil
+            )
+        }
+        if plan.lines.count > maxVisibleRows {
+            rows.append(BalanceHoverLine(
+                label: "还有 \(plan.lines.count - maxVisibleRows) 条",
+                value: "",
+                note: nil
+            ))
+        }
+        return rows
+    }
+
+    /// 线一行的值：本机 / Multica 加执行者名；kind 不认识就原样给出。
+    static func planLineValue(_ item: CortexPlanStatusPlan.Line) -> String {
+        let kindText: String
+        if item.kind == "local" {
+            kindText = "本机"
+        } else if item.kind == "multica" {
+            kindText = "Multica"
+        } else if let kind = item.kind, !kind.isEmpty {
+            kindText = kind
+        } else {
+            kindText = "—"
+        }
+        guard let executor = item.executor, !executor.isEmpty else {
+            return kindText
+        }
+        return "\(kindText) \(executor)"
     }
 
     /// 过时态详情卡：数过时了，只留在跑（不可知）、现金余额、失败原因；

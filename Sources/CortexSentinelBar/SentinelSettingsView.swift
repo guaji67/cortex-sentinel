@@ -35,6 +35,10 @@ final class SentinelSettingsModel: ObservableObject {
     @Published var ccEntries: [CommandCodeKeyEntry] = []
     @Published var ccNewLabel: String = ""
     @Published var ccNewKey: String = ""
+    /// CodeBuddy 积分监控的生效 key 列表，同 GLM / Command Code 一套结构。
+    @Published var cbEntries: [CodeBuddyKeyEntry] = []
+    @Published var cbNewLabel: String = ""
+    @Published var cbNewKey: String = ""
     /// 自更新：自动下载并安装（默认关，只提醒）。
     @Published var updateAutoInstall: Bool
 
@@ -44,6 +48,7 @@ final class SentinelSettingsModel: ObservableObject {
     var chooseWatchDirectory: (() -> Void)?
     var applyGLMKeys: (() -> Void)?
     var applyCommandCodeKeys: (() -> Void)?
+    var applyCodeBuddyKeys: (() -> Void)?
 
     private let defaults: UserDefaults
 
@@ -291,6 +296,39 @@ final class SentinelSettingsModel: ObservableObject {
         applyCommandCodeKeys?()
     }
 
+    /// 把两个输入框里的内容录成一把新 CodeBuddy key；不是 bc_ 开头、太短或已存在就不动。
+    func addCodeBuddyKeyFromFields() {
+        addCodeBuddyKey(name: cbNewLabel, key: cbNewKey)
+        cbNewLabel = ""
+        cbNewKey = ""
+    }
+
+    /// 录入一把新 CodeBuddy key（名称可空）；不是 bc_ 开头、太短或已存在就不动，也不发变更通知。
+    func addCodeBuddyKey(name: String, key: String) {
+        let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard CodeBuddyKeyDetector.isValidKey(trimmedKey) else {
+            return
+        }
+        let label = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let added = SentinelSettings.addCodeBuddyUserKey(
+            CodeBuddyKeyEntry(label: label.isEmpty ? "账号" : label, key: trimmedKey, source: "user"),
+            defaults: defaults
+        )
+        // 手动加回来的 key 同时从删除名单里捞回来。
+        SentinelSettings.removeCodeBuddyRemovedKey(trimmedKey, defaults: defaults)
+        guard added else {
+            return
+        }
+        applyCodeBuddyKeys?()
+    }
+
+    /// 删一把 CodeBuddy key：手加的直接删，自动识别的进删除名单。
+    func removeCodeBuddyKey(_ entry: CodeBuddyKeyEntry) {
+        SentinelSettings.removeCodeBuddyUserKey(entry.key, defaults: defaults)
+        SentinelSettings.addCodeBuddyRemovedKey(entry.key, defaults: defaults)
+        applyCodeBuddyKeys?()
+    }
+
     static func preview(
         fixture: SettingsPreviewFixture,
         defaults: UserDefaults = UserDefaults(suiteName: "com.falcon.cortex.sentinelbar.preview")
@@ -341,6 +379,9 @@ final class SentinelSettingsModel: ObservableObject {
         model.ccEntries = [
             CommandCodeKeyEntry(label: "账号1", key: "demo-cc-0000000000000000000000000001"),
         ]
+        model.cbEntries = [
+            CodeBuddyKeyEntry(label: "Pro", key: "bc_demo00000000000000000000000001"),
+        ]
         return model
     }
 }
@@ -375,6 +416,9 @@ struct SentinelSettingsView: View {
             }
             settingsGroup(title: SentinelSettingsCopy.commandCodeGroupTitle) {
                 commandCodeKeyGroup
+            }
+            settingsGroup(title: SentinelSettingsCopy.codeBuddyGroupTitle) {
+                codeBuddyKeyGroup
             }
             settingsGroup(title: SentinelSettingsCopy.notifyGroupTitle) {
                 notifyGroup
@@ -548,6 +592,49 @@ struct SentinelSettingsView: View {
                 model.addCommandCodeKey(name: name, key: key)
             }
             hintText(SentinelSettingsCopy.commandCodeHint)
+        }
+    }
+
+    /// CodeBuddy key 管理：列表 + 增删，和 Command Code 组同一套交互。
+    /// key 校验比 CC 多一道 bc_ 前缀（在 addCodeBuddyKey 里把守）。
+    private var codeBuddyKeyGroup: some View {
+        VStack(alignment: .leading, spacing: SentinelTheme.Spacing.md) {
+            if model.cbEntries.isEmpty {
+                hintText(SentinelSettingsCopy.codeBuddyEmptyHint)
+            } else {
+                VStack(alignment: .leading, spacing: SentinelTheme.Spacing.sm) {
+                    ForEach(model.cbEntries, id: \.key) { entry in
+                        HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
+                            Text(entry.label.isEmpty ? "CodeBuddy" : entry.label)
+                                .font(SentinelTheme.Fonts.rowTitle)
+                                .foregroundStyle(SentinelTheme.Colors.foreground)
+                                .lineLimit(1)
+                            Spacer(minLength: SentinelTheme.Spacing.sm)
+                            Text(entry.maskedKeyText)
+                                .font(SentinelTheme.Fonts.metadata)
+                                .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                                .lineLimit(1)
+                            Button(SentinelSettingsCopy.codeBuddyDeleteButton) {
+                                model.removeCodeBuddyKey(entry)
+                            }
+                            .buttonStyle(SentinelButtonStyle(kind: .secondary, compact: true))
+                            .accessibilityIdentifier("settings-codebuddy-delete-\(entry.label)")
+                        }
+                    }
+                }
+            }
+
+            SettingsKeyInputRow(
+                namePlaceholder: SentinelSettingsCopy.codeBuddyNameFieldPlaceholder,
+                keyPlaceholder: SentinelSettingsCopy.codeBuddyKeyFieldPlaceholder,
+                addButtonTitle: SentinelSettingsCopy.codeBuddyAddButton,
+                identifierPrefix: "settings-codebuddy",
+                minKeyLength: CodeBuddyCreditConstants.minKeyLength,
+                rendersOffscreen: rendersOffscreen
+            ) { name, key in
+                model.addCodeBuddyKey(name: name, key: key)
+            }
+            hintText(SentinelSettingsCopy.codeBuddyHint)
         }
     }
 

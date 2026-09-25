@@ -43,6 +43,9 @@ final class SentinelStore {
     private(set) var telemetrySummary: CortexTelemetrySummaryDisplayState?
     /// Command Code 订阅额度（5h / 周 / 月）；每把 key 一行，跟随官方额度同一套刷新时机。
     private(set) var commandCodeUsage: CommandCodeUsageSnapshot = .empty
+    /// CodeBuddy 积分余额（三个号并排一行）；跟随官方额度同一套刷新时机。
+    /// 现价（payBase1000）跟账号同轮抓，读不到时保留上一轮的。
+    private(set) var codeBuddyCredit: CodeBuddyCreditSnapshot = .empty
     /// 生效的 Command Code key 数。余额区引导行的显隐读它（tracked），
     /// 增删 key 后界面立刻跟着变；entries 本体是内部消费，不进 Observation。
     private(set) var commandCodeKeyCount = 0
@@ -117,6 +120,10 @@ final class SentinelStore {
     @ObservationIgnored private var lastCommandCodeAttemptAt: Date?
     /// 当前生效的 Command Code key（自动识别 ∪ 用户添加 − 用户删除）。
     @ObservationIgnored private var commandCodeKeyEntries: [CommandCodeKeyEntry] = []
+    @ObservationIgnored private var codeBuddyFetchInFlight = false
+    @ObservationIgnored private var lastCodeBuddyAttemptAt: Date?
+    /// 当前生效的 CodeBuddy key（手加 ∪ 本机自动识别 − 用户删除）。
+    @ObservationIgnored private var codeBuddyKeyEntries: [CodeBuddyKeyEntry] = []
     @ObservationIgnored private var updateCheckInFlight = false
     @ObservationIgnored private var lastUpdateCheckAt: Date?
     /// 下载并校验过的 DMG 本地路径；重启后临时目录可能被清，用时再验。
@@ -274,6 +281,9 @@ final class SentinelStore {
         settingsModel.applyCommandCodeKeys = { [weak self] in
             self?.commandCodeKeysDidChange()
         }
+        settingsModel.applyCodeBuddyKeys = { [weak self] in
+            self?.codeBuddyKeysDidChange()
+        }
         providerRenames = ProviderRenameStore.renames(defaults: defaults)
         providerOrders = [
             ProviderRenameNamespace.glm: defaults.stringArray(
@@ -372,6 +382,7 @@ final class SentinelStore {
             self?.refreshCursorUsage()
             self?.refreshGLMUsage()
             self?.refreshCommandCodeUsage()
+            self?.refreshCodeBuddyCredit()
             self?.refreshUpdateCheck()
         }
 
@@ -458,6 +469,7 @@ final class SentinelStore {
         settingsModel.isWatchMissing = !paths.logsDirectoryExists
         reloadGLMKeys()
         reloadCommandCodeKeys()
+        reloadCodeBuddyKeys()
         SentinelSettingsWindowController.shared.show(model: settingsModel)
     }
 
@@ -541,6 +553,7 @@ final class SentinelStore {
         refreshCursorUsage()
         refreshGLMUsage()
         refreshCommandCodeUsage()
+        refreshCodeBuddyCredit()
         refreshUpdateCheck()
     }
 
@@ -815,6 +828,7 @@ final class SentinelStore {
         refreshCursorUsage(bypassMinimumInterval: true)
         refreshGLMUsage(bypassMinimumInterval: true)
         refreshCommandCodeUsage(bypassMinimumInterval: true)
+        refreshCodeBuddyCredit(bypassMinimumInterval: true)
     }
 
     func refreshOfficialUsageManually() {
@@ -822,6 +836,7 @@ final class SentinelStore {
         refreshCursorUsage()
         refreshGLMUsage()
         refreshCommandCodeUsage()
+        refreshCodeBuddyCredit()
     }
 
     /// Cursor 余额跟着官方额度走同一套时机（启动 / 定时 / 开面板 / 手动点刷新），
@@ -1354,6 +1369,88 @@ final class SentinelStore {
     private func commandCodeKeysDidChange() {
         reloadCommandCodeKeys()
         refreshCommandCodeUsage(bypassMinimumInterval: true)
+    }
+
+    /// CodeBuddy 积分跟着官方额度走同一套时机（启动 / 定时 / 开面板 / 手动点刷新）。
+    /// 一个号一条并发请求，单个失败不拖垮其他号；一把 key 都没有就保持空快照，
+    /// 余额区整行不占位。
+    private func refreshCodeBuddyCredit(bypassMinimumInterval: Bool = false) {
+        let timestamp = self.now()
+        guard !codeBuddyFetchInFlight else {
+            return
+        }
+        if !bypassMinimumInterval, let lastCodeBuddyAttemptAt {
+            let minimumInterval: TimeInterval
+            if isPanelPresented {
+                minimumInterval = SentinelSettings.balanceRecheckInterval(defaults: defaults).rawValue
+            } else {
+                minimumInterval = CodeBuddyCreditConstants.automaticRefreshInterval
+            }
+            guard timestamp.timeIntervalSince(lastCodeBuddyAttemptAt) >= minimumInterval else {
+                return
+            }
+        }
+        reloadCodeBuddyKeys()
+        guard !codeBuddyKeyEntries.isEmpty else {
+            lastCodeBuddyAttemptAt = timestamp
+            publishCodeBuddyCredit(.empty)
+            return
+        }
+        codeBuddyFetchInFlight = true
+        lastCodeBuddyAttemptAt = timestamp
+        let entries = codeBuddyKeyEntries
+        let client = CodeBuddyCreditClient()
+
+        Task { @MainActor [weak self] in
+            async let payBase1000 = client.fetchPayBase1000()
+            let outcome = await client.fetchOutcome(entries: entries)
+            let price = await payBase1000
+            guard let self else {
+                return
+            }
+            self.codeBuddyFetchInFlight = false
+            let merged = CodeBuddyCreditSnapshot.merged(
+                previous: self.codeBuddyCredit,
+                fresh: outcome.accounts,
+                payBase1000: price,
+                now: self.now()
+            )
+            self.publishCodeBuddyCredit(merged)
+        }
+    }
+
+    private func publishCodeBuddyCredit(_ snapshot: CodeBuddyCreditSnapshot) {
+        scrollPublishGate.publish(surface: .officialUsage) { [weak self] in
+            guard let self, self.codeBuddyCredit != snapshot else {
+                return
+            }
+            self.codeBuddyCredit = snapshot
+        }
+    }
+
+    /// 重新认一遍 CodeBuddy key（手加 ∪ 本机 models.json 自动识别 − 用户删除），
+    /// 并把结果同步给设置窗；增删 key 之后不用重启就生效。
+    func reloadCodeBuddyKeys() {
+        let detected = CodeBuddyKeyDetector.detect()
+        let user = SentinelSettings.codeBuddyUserKeys(defaults: defaults)
+        let removed = SentinelSettings.codeBuddyRemovedKeys(defaults: defaults)
+        let effective = CodeBuddyKeyStore.effectiveEntries(
+            detected: detected,
+            user: user,
+            removedKeys: removed
+        )
+        if codeBuddyKeyEntries != effective {
+            codeBuddyKeyEntries = effective
+        }
+        if settingsModel.cbEntries != effective {
+            settingsModel.cbEntries = effective
+        }
+    }
+
+    /// 设置里增删 key 后走这里：重识别 + 立刻重查一轮。
+    private func codeBuddyKeysDidChange() {
+        reloadCodeBuddyKeys()
+        refreshCodeBuddyCredit(bypassMinimumInterval: true)
     }
 
     /// 面板行的显示名：优先用户改过的覆盖名。
@@ -1903,6 +2000,7 @@ final class SentinelStore {
         cursor: CursorUsageSnapshot? = nil,
         glm: GLMUsageSnapshot? = nil,
         commandCode: CommandCodeUsageSnapshot? = nil,
+        codeBuddy: CodeBuddyCreditSnapshot? = nil,
         aio: AIOSnapshot? = nil,
         inputStatus: InputStatusSnapshot? = nil,
         glmPlanStatus: CortexPlanStatusDisplayState? = nil
@@ -1918,6 +2016,9 @@ final class SentinelStore {
         }
         if let commandCode {
             self.commandCodeUsage = commandCode
+        }
+        if let codeBuddy {
+            self.codeBuddyCredit = codeBuddy
         }
         if let glmPlanStatus {
             self.glmPlanStatus = glmPlanStatus

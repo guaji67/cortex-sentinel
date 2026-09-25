@@ -66,6 +66,14 @@ enum SentinelSettingsCopy {
     static let commandCodeKeyFieldPlaceholder = "粘贴 Command Code API Key"
     static let commandCodeEmptyHint = "没识别到本机的 Command Code key，可以在下面手动添加。"
     static let commandCodeHint = "粘贴 Command Code API Key 即用；删掉的 key 会记住。"
+
+    static let codeBuddyGroupTitle = "CodeBuddy Key"
+    static let codeBuddyAddButton = "添加"
+    static let codeBuddyDeleteButton = "删除"
+    static let codeBuddyNameFieldPlaceholder = "名称（Pro）"
+    static let codeBuddyKeyFieldPlaceholder = "粘贴 CodeBuddy Key（bc_ 开头）"
+    static let codeBuddyEmptyHint = "没识别到本机的 CodeBuddy key，可以在下面手动添加。"
+    static let codeBuddyHint = "粘贴 bc_ 开头的 CodeBuddy Key 即用；删掉的 key 会记住。"
 }
 
 enum SentinelAppVersion {
@@ -136,6 +144,9 @@ enum SentinelSettingsKey {
     /// Command Code 额度监控：同 GLM 一套结构。
     static let commandCodeUserKeys = "\(bundlePrefix).commandCodeUserKeys"
     static let commandCodeRemovedKeys = "\(bundlePrefix).commandCodeRemovedKeys"
+    /// CodeBuddy 积分监控：同 GLM / Command Code 一套结构。
+    static let codeBuddyUserKeys = "\(bundlePrefix).codeBuddyUserKeys"
+    static let codeBuddyRemovedKeys = "\(bundlePrefix).codeBuddyRemovedKeys"
     /// 面板点名字改显示名的覆盖表（命名空间:完整 key → 显示名）。
     static let providerRenames = "\(bundlePrefix).providerRenames"
     /// 自更新：自动下载并安装开关（默认关，只提醒）+ 已提醒过的版本（防重复弹）。
@@ -644,6 +655,73 @@ enum SentinelSettings {
             return nil
         }
         return try? JSONDecoder().decode([CommandCodeKeyEntry].self, from: data)
+    }
+
+    // MARK: CodeBuddy 积分 key
+
+    static func codeBuddyUserKeys(defaults: UserDefaults) -> [CodeBuddyKeyEntry] {
+        decodeCodeBuddyEntries(defaults.data(forKey: SentinelSettingsKey.codeBuddyUserKeys)) ?? []
+    }
+
+    static func setCodeBuddyUserKeys(_ entries: [CodeBuddyKeyEntry], defaults: UserDefaults) {
+        defaults.set(encodeCodeBuddyEntries(entries), forKey: SentinelSettingsKey.codeBuddyUserKeys)
+    }
+
+    @discardableResult
+    static func addCodeBuddyUserKey(_ entry: CodeBuddyKeyEntry, defaults: UserDefaults) -> Bool {
+        var entries = codeBuddyUserKeys(defaults: defaults)
+        guard !entries.contains(where: { $0.key == entry.key }) else {
+            return false
+        }
+        entries.append(entry)
+        setCodeBuddyUserKeys(entries, defaults: defaults)
+        return true
+    }
+
+    static func removeCodeBuddyUserKey(_ key: String, defaults: UserDefaults) {
+        setCodeBuddyUserKeys(
+            codeBuddyUserKeys(defaults: defaults).filter { $0.key != key },
+            defaults: defaults
+        )
+    }
+
+    static func codeBuddyRemovedKeys(defaults: UserDefaults) -> Set<String> {
+        Set(decodeCodeBuddyEntries(defaults.data(forKey: SentinelSettingsKey.codeBuddyRemovedKeys))?
+            .map(\.key) ?? [])
+    }
+
+    static func addCodeBuddyRemovedKey(_ key: String, defaults: UserDefaults) {
+        var keys = codeBuddyRemovedKeys(defaults: defaults)
+        guard !keys.contains(key) else {
+            return
+        }
+        keys.insert(key)
+        defaults.set(
+            encodeCodeBuddyEntries(keys.map { CodeBuddyKeyEntry(label: "", key: $0) }),
+            forKey: SentinelSettingsKey.codeBuddyRemovedKeys
+        )
+    }
+
+    static func removeCodeBuddyRemovedKey(_ key: String, defaults: UserDefaults) {
+        let keys = codeBuddyRemovedKeys(defaults: defaults)
+        guard keys.contains(key) else {
+            return
+        }
+        defaults.set(
+            encodeCodeBuddyEntries(keys.subtracting([key]).map { CodeBuddyKeyEntry(label: "", key: $0) }),
+            forKey: SentinelSettingsKey.codeBuddyRemovedKeys
+        )
+    }
+
+    private static func encodeCodeBuddyEntries(_ entries: [CodeBuddyKeyEntry]) -> Data? {
+        try? JSONEncoder().encode(entries)
+    }
+
+    private static func decodeCodeBuddyEntries(_ data: Data?) -> [CodeBuddyKeyEntry]? {
+        guard let data else {
+            return nil
+        }
+        return try? JSONDecoder().decode([CodeBuddyKeyEntry].self, from: data)
     }
 
     private static func encodeGLMEntries(_ entries: [GLMKeyEntry]) -> Data? {

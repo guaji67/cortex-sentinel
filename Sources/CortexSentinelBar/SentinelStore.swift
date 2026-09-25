@@ -39,6 +39,9 @@ final class SentinelStore {
     /// 派工路由预案（此刻生效的派工顺序，纯展示不调节），cortex 仓路由表算好；
     /// 与派工路由状态同一轮触发，失败时保留上一份。
     private(set) var routePreview: CortexRoutePreviewDisplayState?
+    /// 派工预案点胶囊的反馈一句（COR-9242）：点灰/恢复的确认、命令失败原因、
+    /// 别的原因灰点的解释。超时不再显示（显示层按时刻判）。
+    private(set) var dispatchToggleFeedback: DispatchToggleFeedback?
     /// 三机总览（跨机遥测 KV 汇总），cortex 仓脚本算好这边只显示；同一轮触发。
     private(set) var telemetrySummary: CortexTelemetrySummaryDisplayState?
     /// Command Code 订阅额度（5h / 周 / 月）；每把 key 一行，跟随官方额度同一套刷新时机。
@@ -101,6 +104,11 @@ final class SentinelStore {
     @ObservationIgnored private var gateRuntimeStatusFetchInFlight = false
     /// 派工预案取数并发闸：同一时间最多一个在跑。
     @ObservationIgnored private var routePreviewFetchInFlight = false
+    /// 派工预案刷新排队（COR-9242）：点完命令那轮强刷撞上在飞取数时记一笔，
+    /// 取数回来立刻补一轮，保证点的颜色尽快以写后的看板为准。
+    @ObservationIgnored private var routePreviewRefreshQueued = false
+    /// 点灰/恢复命令并发闸：同一时间只许一条 --board-only 命令在跑。
+    @ObservationIgnored private var dispatchToggleInFlight = false
     /// 三机总览取数并发闸：同一时间最多一个在跑。
     @ObservationIgnored private var telemetrySummaryFetchInFlight = false
     /// 通道汇总过期自刷：nil 表示不自刷（单元测试）；同一时间最多一个在跑。
@@ -1026,8 +1034,13 @@ final class SentinelStore {
     }
 
     /// 派工预案：与派工路由状态同一套形状（并发闸 + 失败留旧）。
-    private func refreshRoutePreview() {
+    /// ``force``（COR-9242）：点完停派/恢复命令后那轮要强刷——撞上在飞取数时
+    /// 记一笔排队，取数回来立刻补一轮，保证点的颜色以写完看板之后的读数为准。
+    private func refreshRoutePreview(force: Bool = false) {
         guard !routePreviewFetchInFlight else {
+            if force {
+                routePreviewRefreshQueued = true
+            }
             return
         }
         routePreviewFetchInFlight = true
@@ -1049,6 +1062,8 @@ final class SentinelStore {
                 return
             }
             self.routePreviewFetchInFlight = false
+            let queued = self.routePreviewRefreshQueued
+            self.routePreviewRefreshQueued = false
             switch outcome {
             case let .success(payload):
                 self.routePreview = CortexRoutePreviewDisplayState(
@@ -1063,6 +1078,53 @@ final class SentinelStore {
                     fetchedAt: self.routePreview?.fetchedAt,
                     failureText: reason,
                     failureAt: self.now()
+                )
+            }
+            if queued {
+                self.refreshRoutePreview()
+            }
+        }
+    }
+
+    /// 派工预案点执行者胶囊（COR-9242 哨兵点灰）：绿点停派、自己点灰的灰点恢复、
+    /// 别的原因的灰点只把原因显示出来。点的颜色一律以重拉的预案为准——命令
+    /// 成功就强刷一轮预案，失败当场亮原因、颜色不动；同一时间只跑一条命令。
+    func handleRouteChipTap(_ chip: CortexRoutePreviewDisplay.RouteChip) {
+        let action = CortexRoutePreviewDisplay.action(for: chip)
+        if case let .information(reason) = action {
+            dispatchToggleFeedback = DispatchToggleFeedback(text: reason, at: now())
+            return
+        }
+        guard !dispatchToggleInFlight else {
+            return
+        }
+        dispatchToggleInFlight = true
+        let environment = self.environment
+        let watchDirectory = self.paths.logsDirectory
+        let fallbackRepositoryRoot = self.paths.repositoryRoot
+        let homeDirectory = FileManager.default.homeDirectoryForCurrentUser.path
+        Task { @MainActor [weak self] in
+            let outcome = await Task.detached(priority: .utility) {
+                await ExecutorAvailabilityCommandFetcher.run(
+                    action: action,
+                    environment: environment,
+                    watchDirectory: watchDirectory,
+                    fallbackRepositoryRoot: fallbackRepositoryRoot,
+                    homeDirectory: homeDirectory,
+                    runner: CortexProcessSubprocessRunner()
+                )
+            }.value
+            guard let self else {
+                return
+            }
+            self.dispatchToggleInFlight = false
+            switch outcome {
+            case let .success(message):
+                self.dispatchToggleFeedback = DispatchToggleFeedback(text: message, at: self.now())
+                self.refreshRoutePreview(force: true)
+            case let .failure(reason):
+                self.dispatchToggleFeedback = DispatchToggleFeedback(
+                    text: "没改成：\(reason)", at: self.now()
                 )
             }
         }

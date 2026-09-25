@@ -357,7 +357,7 @@ final class CortexPlanStatusTests: XCTestCase {
         XCTAssertEqual(withoutField.maxParallel, 5)
     }
 
-    // MARK: - 套餐档案四格（COR-8595 T5，值全是合成样例）
+    // MARK: - 套餐档案四项（COR-8595 T5，只进详情卡；值全是合成样例）
 
     func testPlanNotesDecodeFullWithBoardState() throws {
         let plan = try decodePayload(plans: [Self.planObject(
@@ -429,7 +429,8 @@ final class CortexPlanStatusTests: XCTestCase {
         XCTAssertNil(plan.executors[2].offBoardReason)
     }
 
-    func testPlanNoteCellsRegisteredAndOffBoardCount() throws {
+    /// 详情卡里的档案四行：登记了照原文，一个执行者不在默认名单 → 看板隐藏「1 个」。
+    func testPlanNoteLinesRegisteredAndOffBoardCount() throws {
         let plan = try decodePayload(plans: [Self.planObject(
             keySHA12: "0123456789ab",
             planNotes: [
@@ -443,24 +444,26 @@ final class CortexPlanStatusTests: XCTestCase {
                 ["name": "执行者 2", "running": 0, "on_board": false, "off_board_reason": "archived"],
             ]
         )]).plans[0]
-        XCTAssertEqual(
-            CortexPlanStatusDisplay.planNoteCells(plan: plan),
-            ["到期 2099-01-01", "刷新 每周一 00:00", "归属 样例归属", "看板隐藏 1 个"]
-        )
+        let lines = CortexPlanStatusDisplay.planNoteLines(plan: plan)
+        XCTAssertEqual(lines.map(\.label), ["到期", "刷新", "归属", "看板隐藏"])
+        XCTAssertEqual(lines.map(\.value), ["2099-01-01", "每周一 00:00", "样例归属", "1 个"])
+        XCTAssertTrue(lines.allSatisfy { $0.note == nil }, "档案几行是普通行，右侧不带备注")
     }
 
-    func testPlanNoteCellsUnregisteredAllVisibleAndUnknownBoard() throws {
-        // 没登记（旧 payload）：三格全「未登记」，执行者全可见 → 看板格不显示。
+    func testPlanNoteLinesUnregisteredZeroHiddenAndUnknownBoard() throws {
+        // 没登记（旧 payload）：三行全「未登记」；执行者全在默认名单（隐藏 0 个）→ 看板隐藏不出行。
         let allVisible = try decodePayload(plans: [Self.planObject(
             keySHA12: "0123456789ab",
-            executors: [["name": "执行者 1", "running": 2, "on_board": true, "off_board_reason": NSNull()]]
+            executors: [
+                ["name": "执行者 1", "running": 2, "on_board": true, "off_board_reason": NSNull()],
+                ["name": "执行者 2", "running": 0, "on_board": true, "off_board_reason": NSNull()],
+            ]
         )]).plans[0]
-        XCTAssertEqual(
-            CortexPlanStatusDisplay.planNoteCells(plan: allVisible),
-            ["到期 未登记", "刷新 未登记", "归属 未登记"]
-        )
+        let visibleLines = CortexPlanStatusDisplay.planNoteLines(plan: allVisible)
+        XCTAssertEqual(visibleLines.map(\.label), ["到期", "刷新", "归属"])
+        XCTAssertEqual(visibleLines.map(\.value), ["未登记", "未登记", "未登记"])
 
-        // on_board 全是 null → 「看板未取到」。
+        // 块在、单项 null → 那一项「未登记」；on_board 全是 null → 看板隐藏「未取到」。
         let boardUnknown = try decodePayload(plans: [Self.planObject(
             keySHA12: "0123456789ab",
             planNotes: ["expiry": "2099-01-01", "weekly_reset": NSNull(), "owner": "样例归属", "complete": false],
@@ -469,14 +472,17 @@ final class CortexPlanStatusTests: XCTestCase {
                 ["name": "执行者 2", "running": 0, "on_board": NSNull(), "off_board_reason": NSNull()],
             ]
         )]).plans[0]
-        XCTAssertEqual(
-            CortexPlanStatusDisplay.planNoteCells(plan: boardUnknown),
-            ["到期 2099-01-01", "刷新 未登记", "归属 样例归属", "看板未取到"]
-        )
+        let unknownLines = CortexPlanStatusDisplay.planNoteLines(plan: boardUnknown)
+        XCTAssertEqual(unknownLines.map(\.label), ["到期", "刷新", "归属", "看板隐藏"])
+        XCTAssertEqual(unknownLines.map(\.value), ["2099-01-01", "未登记", "样例归属", "未取到"])
 
-        // 没登记执行者 → 看板格不显示，没有可报告的对象。
+        // 没登记执行者 → 看板隐藏不出行，没有可报告的对象。
         let noExecutors = try decodePayload(plans: [Self.planObject(keySHA12: "0123456789ab")]).plans[0]
-        XCTAssertNil(CortexPlanStatusDisplay.offBoardCellText(executors: noExecutors.executors))
+        XCTAssertNil(CortexPlanStatusDisplay.offBoardValueText(executors: noExecutors.executors))
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.planNoteLines(plan: noExecutors).map(\.label),
+            ["到期", "刷新", "归属"]
+        )
     }
 
     // MARK: - 在跑拆分（COR-9198：本机线 / Multica，值全是合成样例）

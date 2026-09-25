@@ -747,39 +747,39 @@ enum CortexPlanStatusDisplay {
         return ceil((text as NSString).size(withAttributes: [.font: font]).width)
     }
 
-    // MARK: 套餐档案四格（COR-8595 T5：到期 / 刷新 / 归属 / 看板隐藏）
+    // MARK: 套餐档案（COR-8595 T5：到期 / 刷新 / 归属 / 看板隐藏，只进详情卡）
 
     /// cortex 给 null 就写这个占位词，不猜不补格式。
     static let planNotesAbsentText = "未登记"
 
-    /// 套餐行下那排档案格的文案。前三格照 plan_notes 原样，没登记写「未登记」；
-    /// 看板那格只在该显示时出现（offBoardCellText），所以最少三格、最多四格。
-    static func planNoteCells(plan: CortexPlanStatusPlan) -> [String] {
+    /// 详情卡里的套餐档案几行。前三行照 plan_notes 原样，没登记写「未登记」；
+    /// 看板隐藏那行只在该显示时出现（offBoardValueText），所以最少三行、最多四行。
+    static func planNoteLines(plan: CortexPlanStatusPlan) -> [BalanceHoverLine] {
         let notes = plan.planNotes
-        var cells = [
-            "到期 \(notes?.expiry ?? planNotesAbsentText)",
-            "刷新 \(notes?.weeklyReset ?? planNotesAbsentText)",
-            "归属 \(notes?.owner ?? planNotesAbsentText)",
+        var lines = [
+            BalanceHoverLine(label: "到期", value: notes?.expiry ?? planNotesAbsentText, note: nil),
+            BalanceHoverLine(label: "刷新", value: notes?.weeklyReset ?? planNotesAbsentText, note: nil),
+            BalanceHoverLine(label: "归属", value: notes?.owner ?? planNotesAbsentText, note: nil),
         ]
-        if let offBoard = offBoardCellText(executors: plan.executors) {
-            cells.append(offBoard)
+        if let offBoard = offBoardValueText(executors: plan.executors) {
+            lines.append(BalanceHoverLine(label: "看板隐藏", value: offBoard, note: nil))
         }
-        return cells
+        return lines
     }
 
-    /// 看板那格：有执行者不在默认名单给「N 个」（隐藏和归档都算）；
-    /// 全可见不显示（nil）；on_board 全是 null 给「看板未取到」；
-    /// 没登记执行者就没有可报告的对象，也不显示。
-    static func offBoardCellText(executors: [CortexPlanStatusPlan.Executor]) -> String? {
+    /// 看板隐藏那行的值：有执行者不在默认名单给「N 个」（隐藏和归档都算）；
+    /// 全可见不出行（nil）；on_board 全是 null 给「未取到」（取不到不等于没隐藏）；
+    /// 没登记执行者就没有可报告的对象，也不出行。
+    static func offBoardValueText(executors: [CortexPlanStatusPlan.Executor]) -> String? {
         guard !executors.isEmpty else {
             return nil
         }
         let knownOnBoard = executors.compactMap(\.onBoard)
         guard !knownOnBoard.isEmpty else {
-            return "看板未取到"
+            return "未取到"
         }
         let offBoardCount = knownOnBoard.filter { !$0 }.count
-        return offBoardCount > 0 ? "看板隐藏 \(offBoardCount) 个" : nil
+        return offBoardCount > 0 ? "\(offBoardCount) 个" : nil
     }
 
     /// 套餐行的状态点：只看订阅窗口和冷却，现金不参与（套餐派工不花现金）。

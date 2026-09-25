@@ -494,8 +494,9 @@ enum DemoBalancesPreview {
                     running: 2,
                     cooldownMinutes: nil,
                     alsoKeys: ["demo-key-pro-proxy"],
-                    // 档案四格演示（COR-8595 T5）：值全是合成样例；第二个执行者
-                    // 不在默认名单，出「看板隐藏 1 个」。
+                    // 套餐档案演示（COR-8595 T5）：只进悬停卡，行上不出，出图加
+                    // --preview-hover-row 看卡。值全是合成样例；第二个执行者
+                    // 不在默认名单，卡里出「看板隐藏 1 个」。
                     planNotes: [
                         "expiry": "2099-01-01",
                         "weekly_reset": "每周一 00:00",

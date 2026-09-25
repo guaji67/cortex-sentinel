@@ -3,8 +3,11 @@ import SwiftUI
 
 /// 机器分级候选流（Falcon 09-18 令）：机器胶囊 tab 动态生成（含「全部」）；
 /// 全部态每台只亮一个首选执行者；点某台展开该台全部执行者胶囊。
+/// 执行者胶囊可点（COR-9242 哨兵点灰）：绿点停派、自己点灰的灰点恢复、
+/// 别的原因的灰点点了只显示原因；处置在 store（onChipTap），这里只发点击。
 struct RouteMachinePickerView: View {
     let card: CortexRoutePreviewDisplay.RouteCard
+    var onChipTap: (CortexRoutePreviewDisplay.RouteChip) -> Void = { _ in }
 
     @State private var selection: String?
 
@@ -67,21 +70,13 @@ struct RouteMachinePickerView: View {
                         .font(SentinelTheme.Fonts.metadata)
                         .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
                         .frame(width: 44, alignment: .leading)
-                    let primary = group.chips.first(where: { !$0.paused }) ?? group.chips.first
+                    // 首选挑第一个可派的（isBlocked 才算灰），没有可派的再挑第一个。
+                    let primary = group.chips.first(where: { !$0.isBlocked }) ?? group.chips.first
                     if let chip = primary {
                         // 概览行机器名已在本行行首，chip 文本里重复的机器括号剥掉。
                         let suffix = " (\(group.machine))"
-                        let shown = chip.paused
-                            ? "\(chip.text)（暂停）"
-                            : (chip.text.hasSuffix(suffix) ? String(chip.text.dropLast(suffix.count)) : chip.text)
-                        Text(shown)
-                            .font(SentinelTheme.Fonts.balanceName)
-                            .lineLimit(1)
-                            .foregroundStyle(chip.paused ? SentinelTheme.Colors.secondaryForeground : SentinelTheme.Colors.foreground)
-                            .padding(.horizontal, 9)
-                            .padding(.vertical, 4)
-                            .background(Capsule().fill(chip.paused ? SentinelTheme.Colors.inset : SentinelTheme.Colors.success.opacity(0.12)))
-                            .overlay(Capsule().stroke(chip.paused ? SentinelTheme.Colors.borderSoft : SentinelTheme.Colors.success.opacity(0.3), lineWidth: 1))
+                        let shown = chip.text.hasSuffix(suffix) ? String(chip.text.dropLast(suffix.count)) : chip.text
+                        RouteChipButton(chip: chip, text: shown, onChipTap: onChipTap)
                     }
                     if group.chips.count > 1 {
                         Text("+\(group.chips.count - 1)")
@@ -97,17 +92,42 @@ struct RouteMachinePickerView: View {
     private func chipsFlow(_ chips: [CortexRoutePreviewDisplay.RouteChip]) -> some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 118), spacing: 4)], alignment: .leading, spacing: 4) {
             ForEach(Array(chips.enumerated()), id: \.offset) { _, chip in
-                Text(chip.paused ? "\(chip.text)（暂停）" : chip.text)
-                    .font(SentinelTheme.Fonts.balanceName)
-                    .lineLimit(1)
-                    .foregroundStyle(chip.paused ? SentinelTheme.Colors.secondaryForeground : SentinelTheme.Colors.foreground)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 4)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Capsule().fill(chip.paused ? SentinelTheme.Colors.inset : SentinelTheme.Colors.success.opacity(0.12)))
-                    .overlay(Capsule().stroke(chip.paused ? SentinelTheme.Colors.borderSoft : SentinelTheme.Colors.success.opacity(0.3), lineWidth: 1))
+                RouteChipButton(chip: chip, text: chip.text, onChipTap: onChipTap)
             }
         }
+    }
+}
+
+/// 可点的执行者胶囊（COR-9242 哨兵点灰）：执行者名前一颗状态点——绿=按派工器
+/// 同一份判定当前可派，灰=被拦（清单 paused / 停派标记 / ai_hold / 冷却都算）。
+/// 点的处置在 store：点灰/恢复要等命令跑完、预案重拉后才变色，这里不自己改。
+private struct RouteChipButton: View {
+    let chip: CortexRoutePreviewDisplay.RouteChip
+    let text: String
+    let onChipTap: (CortexRoutePreviewDisplay.RouteChip) -> Void
+
+    var body: some View {
+        Button {
+            onChipTap(chip)
+        } label: {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(chip.isBlocked ? SentinelTheme.Colors.secondaryForeground : SentinelTheme.Colors.success)
+                    .frame(width: 7, height: 7)
+                Text(text)
+                    .font(SentinelTheme.Fonts.balanceName)
+                    .lineLimit(1)
+                    .foregroundStyle(chip.isBlocked ? SentinelTheme.Colors.secondaryForeground : SentinelTheme.Colors.foreground)
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Capsule().fill(chip.isBlocked ? SentinelTheme.Colors.inset : SentinelTheme.Colors.success.opacity(0.12)))
+            .overlay(Capsule().stroke(chip.isBlocked ? SentinelTheme.Colors.borderSoft : SentinelTheme.Colors.success.opacity(0.3), lineWidth: 1))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(text)\(chip.isBlocked ? "（不可派）" : "（可派）")")
     }
 }
 
@@ -1540,7 +1560,21 @@ struct SentinelBalancesSection: View {
                 ForEach(Array(cards.enumerated()), id: \.offset) { _, card in
                     routeCardView(card)
                 }
+                dispatchToggleFeedbackRow
             }
+        }
+    }
+
+    /// 点执行者胶囊的一句反馈（COR-9242）：确认 / 失败原因 / 别的原因灰点的解释。
+    /// 超过显示窗就不占位； warning 色与路由状态行的提醒色同源。
+    @ViewBuilder private var dispatchToggleFeedbackRow: some View {
+        if let feedback = store.dispatchToggleFeedback, feedback.isVisible(now: Date()) {
+            Text(feedback.text)
+                .font(SentinelTheme.Fonts.balanceMeta)
+                .foregroundStyle(SentinelTheme.Colors.warning)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityLabel(feedback.text)
         }
     }
 
@@ -1591,8 +1625,9 @@ struct SentinelBalancesSection: View {
 
     /// 机器分级候选：机器胶囊 tab（动态，含「全部」），选中哪台就展开哪台的执行者；
     /// 「全部」态每台只亮一个首选（第一个可用的）执行者，不铺满。
+    /// 执行者胶囊点击交给 store 处置（COR-9242 哨兵点灰）。
     private func machineGroupFlow(_ card: CortexRoutePreviewDisplay.RouteCard) -> some View {
-        RouteMachinePickerView(card: card)
+        RouteMachinePickerView(card: card, onChipTap: { store.handleRouteChipTap($0) })
     }
 
     /// 三机总览：图形卡（CPU / 内存 / swap 迷你条，槽位点阵，压力色点）。

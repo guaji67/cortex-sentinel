@@ -103,4 +103,142 @@ final class CortexRoutePreviewTests: XCTestCase {
         )
         XCTAssertEqual(CortexRoutePreviewDisplay.aggregatedNames(["Pro 执行者(Kimi K3 Max)"]), ["Kimi"])
     }
+
+    // MARK: - 哨兵点灰（COR-9242）：新字段解码、灰的口径、点了的处置
+
+    private static let executorID = "06ff0149-b857-48c1-bb06-82c2290ab129"
+
+    func testCandidateDecodesExecutorIDAndBlockedFields() throws {
+        let json = """
+        {"name":"Pro 执行者(CodeBuddy)","state":"available","basis":"免费",
+         "executor_id":"\(Self.executorID)",
+         "blocked_code":"ai_hold",
+         "blocked_text":"可用性清单 ai_hold kind=quota_cooldown until=2026-09-26 12:00"}
+        """
+        let wrapped = "{\"schema\":2,\"lanes\":[{\"label\":\"L\",\"branches\":[{\"condition\":\"c\",\"candidates\":[\(json)]}]}]}"
+        let payload = try JSONDecoder().decode(CortexRoutePreviewPayload.self, from: Data(wrapped.utf8))
+        let candidate = payload.lanes[0].branches![0].candidates![0]
+        XCTAssertEqual(candidate.executorID, Self.executorID)
+        XCTAssertEqual(candidate.blockedCode, "ai_hold")
+        XCTAssert(candidate.blockedText?.contains("quota_cooldown") == true)
+        // 旧输出（没有这些字段）也解得出。
+        let legacy = """
+        {"schema":2,"lanes":[{"label":"L","branches":[{"condition":"c","candidates":[{"name":"X","state":"available","basis":"免费"}]}]}]}
+        """
+        let legacyPayload = try JSONDecoder().decode(CortexRoutePreviewPayload.self, from: Data(legacy.utf8))
+        XCTAssertNil(legacyPayload.lanes[0].branches![0].candidates![0].executorID)
+        XCTAssertNil(legacyPayload.lanes[0].branches![0].candidates![0].blockedCode)
+    }
+
+    func testCandidateFieldsCarryIntoChipsAndGroups() throws {
+        let json = """
+        {"name":"Pro 执行者(CodeBuddy)","state":"available","basis":"免费",
+         "executor_id":"\(Self.executorID)","blocked_code":null,"blocked_text":null}
+        """
+        let wrapped = "{\"schema\":2,\"lanes\":[{\"label\":\"L\",\"branches\":[{\"condition\":\"c\",\"candidates\":[\(json)]}]}]}"
+        let payload = try JSONDecoder().decode(CortexRoutePreviewPayload.self, from: Data(wrapped.utf8))
+        let cards = CortexRoutePreviewDisplay.cards(payload)
+        XCTAssertEqual(cards.count, 1)
+        let chip = try XCTUnwrap(cards[0].chips.first)
+        XCTAssertEqual(chip.executorID, Self.executorID)
+        XCTAssertNil(chip.blockedCode)
+        XCTAssertFalse(chip.isBlocked)
+        let group = try XCTUnwrap(cards[0].machineGroups.first)
+        XCTAssertEqual(group.chips.first?.executorID, Self.executorID)
+    }
+
+    func testChipIsBlockedFollowsJudgmentAndLegacyFallback() {
+        // 新输出：灰只认 blocked_code（清单/标记/ai_hold/冷却都算），花名册 available
+        // 但被 ai_hold 拦的也灰——不再显示成绿。
+        XCTAssertTrue(CortexRoutePreviewDisplay.RouteChip(
+            text: "CodeBuddy", paused: false,
+            executorID: Self.executorID, blockedCode: "ai_hold", blockedText: "冷却"
+        ).isBlocked)
+        // 可派：blocked_code 为 nil 即绿。
+        XCTAssertFalse(CortexRoutePreviewDisplay.RouteChip(
+            text: "CodeBuddy", paused: false,
+            executorID: Self.executorID, blockedCode: nil, blockedText: nil
+        ).isBlocked)
+        // 旧输出（连 blocked_code 都没有）：退回花名册状态，行为不变。
+        XCTAssertTrue(CortexRoutePreviewDisplay.RouteChip(text: "CodeBuddy", paused: true).isBlocked)
+        XCTAssertFalse(CortexRoutePreviewDisplay.RouteChip(text: "CodeBuddy", paused: false).isBlocked)
+    }
+
+    func testActionGreenDotPauses() {
+        let chip = CortexRoutePreviewDisplay.RouteChip(
+            text: "CodeBuddy", paused: false,
+            executorID: Self.executorID, blockedCode: nil, blockedText: nil
+        )
+        XCTAssertEqual(
+            CortexRoutePreviewDisplay.action(for: chip),
+            .pauseBoardOnly(executorID: Self.executorID)
+        )
+    }
+
+    func testActionOwnMarkerGrayDotResumes() {
+        let chip = CortexRoutePreviewDisplay.RouteChip(
+            text: "CodeBuddy", paused: false,
+            executorID: Self.executorID,
+            blockedCode: "description_stop_phrase",
+            blockedText: "description 命中停派标记行「停派：他在哨兵上点灰（09-26 07:45 北京）」"
+        )
+        XCTAssertEqual(
+            CortexRoutePreviewDisplay.action(for: chip),
+            .resumeBoardOnly(executorID: Self.executorID)
+        )
+    }
+
+    func testActionOtherReasonGrayDotOnlyExplains() {
+        // ai_hold / 清单登记 / 名字标记 / 冷却：一律只显示原因，不发命令。
+        let samples: [(String, String, String?)] = [
+            ("ai_hold", "可用性清单 ai_hold kind=quota_cooldown until=2026-09-26 12:00", "quota_cooldown"),
+            ("roster_stopped_note", "可用性清单登记 status=paused（since=2026-09-25 18:44）", "status=paused"),
+            ("name_stop_phrase", "name 以「【停派】」开头", nil),
+            ("plan_cooldown", "连续被拒冷却中（kind=rejected，到北京 09:30）", nil),
+        ]
+        for (code, text, contains) in samples {
+            let chip = CortexRoutePreviewDisplay.RouteChip(
+                text: "CodeBuddy", paused: false,
+                executorID: Self.executorID, blockedCode: code, blockedText: text
+            )
+            guard case let .information(reason) = CortexRoutePreviewDisplay.action(for: chip) else {
+                XCTFail("\(code) 应该只显示原因")
+                continue
+            }
+            XCTAssertEqual(reason, text)
+            if let contains {
+                XCTAssert(reason.contains(contains), code)
+            }
+        }
+        // 别人写死的「停派：积分将尽」标记行也不是哨兵点的，点了只解释。
+        let foreign = CortexRoutePreviewDisplay.RouteChip(
+            text: "CodeBuddy", paused: false,
+            executorID: Self.executorID,
+            blockedCode: "description_stop_phrase",
+            blockedText: "description 命中停派标记行「停派：积分将尽」"
+        )
+        guard case let .information(reason) = CortexRoutePreviewDisplay.action(for: foreign) else {
+            return XCTFail("别人的停派标记不许发恢复命令")
+        }
+        XCTAssert(reason.contains("积分将尽"))
+    }
+
+    func testActionWithoutExecutorIDOnlyExplains() {
+        // 旧预案还没带 id：绿点与自己的灰点都只提示等刷新，不发命令。
+        let green = CortexRoutePreviewDisplay.RouteChip(
+            text: "CodeBuddy", paused: false, executorID: nil, blockedCode: nil, blockedText: nil
+        )
+        guard case .information = CortexRoutePreviewDisplay.action(for: green) else {
+            return XCTFail("没有 id 不许发命令")
+        }
+        let ownGray = CortexRoutePreviewDisplay.RouteChip(
+            text: "CodeBuddy", paused: false,
+            executorID: nil,
+            blockedCode: "description_stop_phrase",
+            blockedText: "description 命中停派标记行「停派：他在哨兵上点灰（09-26 07:45 北京）」"
+        )
+        guard case .information = CortexRoutePreviewDisplay.action(for: ownGray) else {
+            return XCTFail("没有 id 不许发恢复命令")
+        }
+    }
 }

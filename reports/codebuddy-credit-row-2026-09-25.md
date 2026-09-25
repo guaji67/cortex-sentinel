@@ -20,7 +20,7 @@
 
 ## PR
 
-PR 链接：见文末「出机器核验」一节（gh 命令输出里带 PR 号与 URL）。
+PR 链接：https://github.com/guaji67/cortex-sentinel/pull/53
 
 ## 验证真数字
 
@@ -96,10 +96,14 @@ $ pgrep -fl "codebuddy-credit-json|render-panel-png"
 
 ```
 $ git ls-remote --heads origin | awk '{print $2}' | grep -i 8647
-feat/codebuddy-credit-row
+（零命中：本线分支名 feat/codebuddy-credit-row 不含票号数字，按票号 grep 分支命中不了是预期。
+  换分支名本体再核：）
+
+$ git ls-remote --heads origin | awk '{print $2}' | grep -i codebuddy-credit-row
+refs/heads/feat/codebuddy-credit-row
 
 $ gh pr list --search "COR-8647 in:title" --state all --json number,url
-[{"number":<见 PR 链接>,"url":"https://github.com/guaji67/cortex-sentinel/pull/<PR号>"}]
+[{"number":53,"url":"https://github.com/guaji67/cortex-sentinel/pull/53"}]
 ```
 
-（推送与开 PR 后回填实际输出。）
+两条都核过：远端分支在（证有），PR #53 记录在（主判据）。东西已出机器。

@@ -66,6 +66,10 @@ GLM 钥匙自动识别多认 ZCode CLI 的两份配置（`~/.zcode/cli/config.js
 
 行首状态点：任一段 status 不是 ok 一律红（点名口径，压过通用档位），其余走余额区通用档位。悬停卡三行（5 小时窗 / 周窗 / 月窗），副标题带「重置为北京时间」，备注列只放「相对时间 · 钟点」——备注列放不下整句，「北京」两字挪进副标题后才不截（量宽实锤）。守卫：`OpenCodeGoUsageTests`（两种解析写法、status 非 ok、缺字段、钥匙三来源与 .env 解析、请求头 User-Agent + x-opencode-session、钥匙不落错误文本、重置文案、点档位）。
 
+## 钟点口径（2026-09-27 定）
+
+面板上给他看的钟点（悬停卡底部「HH:mm:ss 更新」、打包「起算 / 预计 / 上一炉」等 clockTime 的 14 处调用）一律北京时间：`SentinelTimeFormat.clockTime` 默认时区钉在 `OfficialQuotaPresentation.displayTimeZone`（Asia/Shanghai，共用同一份），不跟本机时区走。Pro 本机是东京，卡内重置时刻是北京时间、底部更新快一小时就是回归（COR-9618 评审发现）。要别的时区显式传参。守卫：`V31PolishTests.testClockTimeStaysBeijingWhenDeviceTimeZoneIsTokyo`。
+
 ## 状态点与排序（2026-09-11 定）
 
 余额区 GLM / Command Code 行首的点 = 额度状态，综合判定取最严重一档：5 小时窗剩余 ≤20% 黄、≤1% 红；周窗剩余 ≤10% 黄、≤1% 红；余额类（现金/月余）<10 黄、<1 红；stale 至少黄；没数据灰。Cursor / AIO / 官方不参与这套。套餐行任一同账号附加钥匙有状况（出错/过时/读不到额度/跟套餐读数对不上）也至少黄：原本绿变黄，已黄或红保持。守卫：`CommandCodeUsageTests.testProviderDotSignalThresholds`、`CortexPlanStatusTests.testPlanRowDotTurnsYellowWhenAdditionalKeyHasProblem`。

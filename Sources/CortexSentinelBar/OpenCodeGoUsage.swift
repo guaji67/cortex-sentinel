@@ -184,7 +184,7 @@ enum OpenCodeGoResetText {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "zh_CN")
         formatter.dateFormat = "M/d HH:mm"
-        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        formatter.timeZone = OfficialQuotaPresentation.displayTimeZone
         return formatter
     }()
 

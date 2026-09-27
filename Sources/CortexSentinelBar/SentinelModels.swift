@@ -1440,7 +1440,8 @@ struct OfficialQuotaRow: Equatable {
 }
 
 enum OfficialQuotaPresentation {
-    private static let displayTimeZone = TimeZone(identifier: "Asia/Shanghai")!
+    /// 面板显示时刻的统一时区：给他看的钟点一律北京时间，SentinelTimeFormat.clockTime 共用这一份。
+    static let displayTimeZone = TimeZone(identifier: "Asia/Shanghai")!
 
     static func rows(for balance: RelayBalance?) -> [OfficialQuotaRow] {
         guard balance?.scope == "official_weekly", let balance else {
@@ -1666,14 +1667,15 @@ enum SentinelTimeFormat {
         return formatter.string(from: date)
     }
 
+    /// 钟点一律北京时间（产品口径，不跟本机时区走）；要别的时区显式传参。
     static func clockTime(
         _ date: Date,
-        calendar: Calendar = .current
+        timeZone: TimeZone = OfficialQuotaPresentation.displayTimeZone
     ) -> String {
         let formatter = DateFormatter()
-        formatter.calendar = calendar
+        formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "zh_CN")
-        formatter.timeZone = calendar.timeZone
+        formatter.timeZone = timeZone
         formatter.dateFormat = "HH:mm:ss"
         return formatter.string(from: date)
     }

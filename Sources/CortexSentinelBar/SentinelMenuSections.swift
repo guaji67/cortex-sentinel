@@ -1028,6 +1028,8 @@ struct SentinelBalancesSection: View {
 
             gateRuntimeStatusRow
 
+            healthAutofollowRow
+
             // 机器总览在派工预案上面（Falcon 09-18 令整体对调）。
             telemetrySummarySection
 
@@ -1658,6 +1660,22 @@ struct SentinelBalancesSection: View {
     /// 其余态用面板现有提醒色。还没跑过任何一轮不占位。
     @ViewBuilder private var gateRuntimeStatusRow: some View {
         if let row = CortexGateRuntimeStatusDisplay.rowLine(store.gateRuntimeStatus, now: Date()) {
+            Text(row.text)
+                .font(SentinelTheme.Fonts.balanceMeta)
+                .foregroundStyle(row.isWarning
+                    ? SentinelTheme.Colors.warning
+                    : SentinelTheme.Colors.foreground)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityLabel(row.text)
+        }
+    }
+
+    /// 健康运行时自动跟主线的提醒行（COR-9769）：判据脚本只在有要紧事（上次
+    /// 自动更新失败 / 落后主线超一小时）时才给 health_autofollow，见到就亮提醒
+    /// 色；一切正常不占位。整句由显示层纯函数给（含「健康运行时：」前缀）。
+    @ViewBuilder private var healthAutofollowRow: some View {
+        if let row = CortexGateRuntimeStatusDisplay.healthRowLine(store.gateRuntimeStatus, now: Date()) {
             Text(row.text)
                 .font(SentinelTheme.Fonts.balanceMeta)
                 .foregroundStyle(row.isWarning

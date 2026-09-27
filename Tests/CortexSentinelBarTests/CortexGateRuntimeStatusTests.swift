@@ -469,7 +469,108 @@ final class CortexGateRuntimeStatusTests: XCTestCase {
         )
     }
 
+    // MARK: - 健康运行时自动跟主线（COR-9769）
+
+    /// health_autofollow 解出来字段一一对应；没有这个字段时整份照常解（老脚本
+    /// 兼容，宽松解码不炸）。
+    func testDecodeHealthAutofollow() throws {
+        let data = Data("""
+        {"schema": 1, "state": "ok", "text_zh": "路由已是最新",
+         "health_autofollow": {"schema": 1, "alert": true,
+           "text_zh": "健康运行时自动更新失败：venv 装依赖失败",
+           "last_result": "failed", "behind_count": 3,
+           "installed_sha": "cccccccccccccccccccccccccccccccccccccccc",
+           "origin_main_sha": "dddddddddddddddddddddddddddddddddddddddd",
+           "failure_reason": "venv 装依赖失败"}}
+        """.utf8)
+        let payload = try JSONDecoder().decode(CortexGateRuntimeStatusPayload.self, from: data)
+        let health = try XCTUnwrap(payload.healthAutofollow)
+        XCTAssertEqual(health.alert, true)
+        XCTAssertEqual(health.textZH, "健康运行时自动更新失败：venv 装依赖失败")
+        XCTAssertEqual(health.lastResult, "failed")
+        XCTAssertEqual(health.behindCount, 3)
+        XCTAssertEqual(health.installedSHA, "cccccccccccccccccccccccccccccccccccccccc")
+        XCTAssertEqual(health.originMainSHA, "dddddddddddddddddddddddddddddddddddddddd")
+        XCTAssertEqual(health.failureReason, "venv 装依赖失败")
+
+        // 老脚本不带 health_autofollow：解出来是 nil，别的一起照解。
+        let bare = try JSONDecoder().decode(
+            CortexGateRuntimeStatusPayload.self,
+            from: Data("{\"schema\": 1, \"state\": \"ok\", \"text_zh\": \"路由已是最新\"}".utf8)
+        )
+        XCTAssertNil(bare.healthAutofollow)
+        XCTAssertEqual(bare.textZH, "路由已是最新")
+    }
+
+    /// 健康提醒行：payload 带了就亮提醒色、text_zh 原样上屏。
+    func testHealthRowShowsWhenAlertPresent() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let fetchedAt = now.addingTimeInterval(-5 * 60)
+        let alertJSON = """
+        {"schema": 1, "state": "ok", "text_zh": "路由已是最新",
+         "health_autofollow": {"schema": 1, "alert": true,
+           "text_zh": "健康运行时落后主线 5 笔超过一小时还没追上", "behind_count": 5}}
+        """
+        let payload = try JSONDecoder().decode(
+            CortexGateRuntimeStatusPayload.self,
+            from: Data(alertJSON.utf8)
+        )
+        let row = CortexGateRuntimeStatusDisplay.healthRowLine(
+            state(payload: payload, fetchedAt: fetchedAt, failureText: nil),
+            now: now
+        )
+        XCTAssertEqual(
+            row?.text,
+            "健康运行时：健康运行时落后主线 5 笔超过一小时还没追上（\(CortexGateRuntimeStatusDisplay.clockText(fetchedAt))）"
+        )
+        XCTAssertEqual(row?.isWarning, true)
+    }
+
+    /// 健康提醒行：一切正常（没有 health_autofollow）或整轮读取失败或状态过时
+    /// 都不占位。
+    func testHealthRowHiddenWhenQuietStaleOrFailed() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let fetchedAt = now.addingTimeInterval(-5 * 60)
+        let quietPayload = try Self.decode(state: "ok", textZH: "路由已是最新")
+        XCTAssertNil(
+            CortexGateRuntimeStatusDisplay.healthRowLine(
+                state(payload: quietPayload, fetchedAt: fetchedAt, failureText: nil),
+                now: now
+            ),
+            "一切正常不占位"
+        )
+        let alertJSON = """
+        {"schema": 1, "state": "ok", "text_zh": "路由已是最新",
+         "health_autofollow": {"alert": true, "text_zh": "健康运行时自动更新失败：x"}}
+        """
+        let alertPayload = try JSONDecoder().decode(
+            CortexGateRuntimeStatusPayload.self,
+            from: Data(alertJSON.utf8)
+        )
+        // 整轮读取失败：健康行闭嘴（失败已在派工路由那行说）。
+        XCTAssertNil(
+            CortexGateRuntimeStatusDisplay.healthRowLine(
+                state(payload: alertPayload, fetchedAt: fetchedAt, failureText: "这次没读到"),
+                now: now
+            )
+        )
+        // 上一次成功超过 30 分钟：旧提醒不再显示。
+        XCTAssertNil(
+            CortexGateRuntimeStatusDisplay.healthRowLine(
+                state(
+                    payload: alertPayload,
+                    fetchedAt: now.addingTimeInterval(-CortexGateRuntimeStatusDisplay.reuseWindow - 1),
+                    failureText: nil
+                ),
+                now: now
+            )
+        )
+        // 还没跑过任何一轮：不占位。
+        XCTAssertNil(CortexGateRuntimeStatusDisplay.healthRowLine(nil, now: now))
+    }
+
     // MARK: - --dump-state
+
 
     /// dump-state 那行结论：格式同套餐状态那行。
     func testDumpStateText() throws {

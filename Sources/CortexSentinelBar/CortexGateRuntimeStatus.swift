@@ -22,6 +22,9 @@ struct CortexGateRuntimeStatusPayload: Decodable, Equatable, Sendable {
     let refreshFailed: String?
     let markerAgeSeconds: Int?
     let ensure: Ensure?
+    /// 健康运行时自动跟主线的提醒（COR-9769）。cortex 侧只在有要紧事（上次
+    /// 自动更新失败 / 落后主线超一小时）时才给这个字段；缺 = 一切正常，不占面板。
+    let healthAutofollow: HealthAutofollow?
 
     var stateIsOK: Bool { state == "ok" }
 
@@ -39,6 +42,7 @@ struct CortexGateRuntimeStatusPayload: Decodable, Equatable, Sendable {
         case refresh_failed
         case marker_age_seconds
         case ensure
+        case health_autofollow
     }
 
     init(from decoder: Decoder) throws {
@@ -56,6 +60,7 @@ struct CortexGateRuntimeStatusPayload: Decodable, Equatable, Sendable {
         refreshFailed = try container.decodeIfPresent(String.self, forKey: .refresh_failed)
         markerAgeSeconds = try container.decodeIfPresent(Int.self, forKey: .marker_age_seconds)
         ensure = try container.decodeIfPresent(Ensure.self, forKey: .ensure)
+        healthAutofollow = try container.decodeIfPresent(HealthAutofollow.self, forKey: .health_autofollow)
     }
 
     struct Ensure: Decodable, Equatable, Sendable {
@@ -72,6 +77,44 @@ struct CortexGateRuntimeStatusPayload: Decodable, Equatable, Sendable {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             action = try container.decodeIfPresent(String.self, forKey: .action)
             detail = try container.decodeIfPresent(String.self, forKey: .detail)
+        }
+    }
+
+    /// 健康运行时（~/Library/Application Support/Cortex/HealthRuntime，装回收器、
+    /// dev_server_reaper、失控测试守卫那份）自动跟主线的提醒。判据在 cortex 侧
+    /// 算好（scripts/health/health_runtime_autofollow.py），这里只解码显示。
+    struct HealthAutofollow: Decodable, Equatable, Sendable {
+        let schema: Int?
+        let alert: Bool?
+        /// 一句人话，面板原样上屏。
+        let textZH: String?
+        let lastResult: String?
+        let behindCount: Int?
+        let installedSHA: String?
+        let originMainSHA: String?
+        let failureReason: String?
+
+        enum CodingKeys: String, CodingKey {
+            case schema
+            case alert
+            case text_zh
+            case last_result
+            case behind_count
+            case installed_sha
+            case origin_main_sha
+            case failure_reason
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            schema = try container.decodeIfPresent(Int.self, forKey: .schema)
+            alert = try container.decodeIfPresent(Bool.self, forKey: .alert)
+            textZH = try container.decodeIfPresent(String.self, forKey: .text_zh)
+            lastResult = try container.decodeIfPresent(String.self, forKey: .last_result)
+            behindCount = try container.decodeIfPresent(Int.self, forKey: .behind_count)
+            installedSHA = try container.decodeIfPresent(String.self, forKey: .installed_sha)
+            originMainSHA = try container.decodeIfPresent(String.self, forKey: .origin_main_sha)
+            failureReason = try container.decodeIfPresent(String.self, forKey: .failure_reason)
         }
     }
 }
@@ -229,6 +272,33 @@ enum CortexGateRuntimeStatusDisplay {
         return RowLine(
             text: "派工路由：\(conclusion)（\(clockText(fetchedAt))）",
             isWarning: !isCalmState
+        )
+    }
+
+    /// 健康运行时自动跟主线的提醒行（COR-9769）。判据脚本只在有要紧事（上次
+    /// 自动更新失败 / 落后主线超一小时）时才给 health_autofollow，见到就亮提醒
+    /// 色；没给（一切正常 / 还没核对过）不占位，面板不为健康的后台件添行。
+    /// 最近一轮读取失败或上一份结果已过复用窗：这行跟着闭嘴（脚本整体的问题
+    /// 已由派工路由那行说）。nil = 不占位。
+    static func healthRowLine(
+        _ state: CortexGateRuntimeStatusDisplayState?,
+        now: Date
+    ) -> RowLine? {
+        guard let state, let fetchedAt = state.fetchedAt else {
+            return nil
+        }
+        if now.timeIntervalSince(fetchedAt) >= reuseWindow {
+            return nil
+        }
+        if let failureText = state.failureText, !failureText.isEmpty {
+            return nil
+        }
+        guard let health = state.payload?.healthAutofollow else {
+            return nil
+        }
+        return RowLine(
+            text: "健康运行时：\(health.textZH ?? "")（\(clockText(fetchedAt))）",
+            isWarning: true
         )
     }
 

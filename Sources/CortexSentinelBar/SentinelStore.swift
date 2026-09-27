@@ -1002,6 +1002,13 @@ final class SentinelStore {
                 failureText: reason
             )
         }
+        // 每换一份状态记一行（COR-9931 第 1 条）：成功失败都记，排查面板上的
+        // 冷却是几点取的数。只写套餐 id 与指纹，不写任何钥匙。
+        CortexPlanStatusLog.append(
+            at: self.now(),
+            state: glmPlanStatus,
+            outcome: outcome
+        )
     }
 
     /// 派工路由跟套餐状态同一层触发：每轮 GLM 用量刷完跑一次 cortex 侧脚本

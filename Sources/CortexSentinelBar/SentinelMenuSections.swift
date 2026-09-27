@@ -278,6 +278,8 @@ struct BalanceHoverLine {
     let value: String
     var note: String?
     var noteColor: Color?
+    /// 说明性长句才折行：默认一行，放不下照旧截断（标签/数值分列的老样子不破）。
+    var wraps: Bool = false
 }
 
 /// 详情卡内容：标题区（名字 + 来源/身份）、明细行、页脚（更新时间/异常）。
@@ -324,7 +326,8 @@ struct BalanceHoverDetail: View {
                                 .font(SentinelTheme.Fonts.subtitle)
                                 .foregroundStyle(SentinelTheme.Colors.foreground)
                                 .monospacedDigit()
-                                .lineLimit(1)
+                                .lineLimit(line.wraps ? nil : 1)
+                                .fixedSize(horizontal: false, vertical: line.wraps)
                                 .layoutPriority(1)
                             Spacer(minLength: SentinelTheme.Spacing.sm)
                             if let note = line.note {
@@ -2124,7 +2127,6 @@ struct SentinelBalancesSection: View {
         // 数据过时（超过复用窗没读到新的）时身份照用，数值不显。
         let planState = store.glmPlanStatus
         let plan = CortexPlanStatusDisplay.plan(forAccountKey: account.key, in: planState?.payload)
-        let planFreshness = CortexPlanStatusDisplay.freshness(planState, now: Date())
         let displayName = store.providerDisplayName(
             namespace: ProviderRenameNamespace.glm,
             id: account.key,
@@ -2196,10 +2198,13 @@ struct SentinelBalancesSection: View {
                         if let plan {
                             // 套餐行的第三列：在跑/冷却，不画横条（横条一律是时间
                             // 流逝，这列不是时间），也不加 .help（会和详情卡双弹）。
-                            // 数据过时后数值不可信，固定「在跑 —」不显示冷却。
-                            let columnText = planFreshness == .stale
-                                ? CortexPlanStatusDisplay.staleThirdColumnText
-                                : CortexPlanStatusDisplay.thirdColumnText(plan: plan, now: now)
+                            // 数据过时或最近一次取数失败沿用旧数时数值不可信，
+                            // 固定「在跑 —」不显示冷却（旧数判不了冷却）。
+                            let columnText = CortexPlanStatusDisplay.thirdColumnText(
+                                plan: plan,
+                                now: now,
+                                state: planState
+                            )
                             Text(columnText)
                                 .font(SentinelTheme.Fonts.balanceAmount)
                                 .foregroundStyle(SentinelTheme.Colors.foreground)
@@ -2357,8 +2362,8 @@ struct SentinelBalancesSection: View {
                 )
             ))
         }
-        // 套餐行追加派工状态；不是套餐的行一个字不变。
-        // 数据过时后只留在跑/现金/派工状态三行，执行者、派工、免费时段不显示。
+        // 套餐行追加取数与派工状态；不是套餐的行一个字不变。
+        // 数据过时后只留在跑/现金/取数三行，执行者、派工、免费时段不显示。
         if let plan {
             // 现金主钥匙行没有时用附加钥匙行的数（同账号现金是同一份）。
             let cash = CortexPlanStatusDisplay.planCashBalance(
@@ -2371,6 +2376,7 @@ struct SentinelBalancesSection: View {
                 lines.append(contentsOf: CortexPlanStatusDisplay.staleDetailLines(
                     plan: plan,
                     failureText: failureText,
+                    fetchedAt: planState?.fetchedAt,
                     cashBalance: cash
                 ))
             } else {
@@ -2380,6 +2386,12 @@ struct SentinelBalancesSection: View {
                     failureText: planState?.failureText,
                     fetchedAt: planState?.fetchedAt,
                     cashBalance: cash
+                ))
+                // 额度用满说明（COR-9931 第 3 条）：只把用量读数写清楚，
+                // 第三列不动，能不能派仍只看脚本给的 dispatchable / skip_code / cooldown_until。
+                lines.append(contentsOf: CortexPlanStatusDisplay.quotaExhaustedLines(
+                    account: account,
+                    freeWindowActive: planState?.payload?.freeWindow?.active
                 ))
             }
             // 套餐档案几行（COR-8595 T5）：到期 / 刷新 / 归属照登记原文，看板隐藏

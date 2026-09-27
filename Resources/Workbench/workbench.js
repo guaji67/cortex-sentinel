@@ -35,6 +35,10 @@ const FLIGHT = ['in_progress','in_review'];
 const BAND_ORDER = ['产品能力','共享底座','交付系统','待分诊'];
 const BAND_NOTES = {'产品能力':'按用户结果分工','共享底座':'供多个产品域共同使用','交付系统':'让改动安全到达用户机器','待分诊':'补信息后再分派'};
 const openFolds = new Set(); // 30 秒一刷会整页重画，记住哪些折叠被点开过，免得刷一次又合上
+let openDomain = '', domainShown = 20; // 首页当前展开的域卡与展开区里已列出的票数
+const liveTickets = () => tickets().filter(t=>activeStates.has(t.status));
+// 域编号不在登记表里的票并进待分诊，保证各卡张数加起来等于顶上的全部活票
+function domainRows(d,live=liveTickets()) {const known=new Set((data?.domains||[]).map(x=>x.id));return live.filter(t=>t.domain===d.id||(d.id==='X'&&!known.has(t.domain)));}
 const fmtN = n => Number(n||0).toLocaleString('zh-CN');
 const pct = (a,b) => b ? (a/b*100).toFixed(1)+'%' : '0%';
 function countStates(rows) {const c=Object.fromEntries(DASH_STATES.map(s=>[s,0]));for(const t of rows)if(t.status in c)c[t.status]++;return c;}
@@ -46,7 +50,8 @@ function domainCard(d,rows) {
   const c=countStates(rows), flight=FLIGHT.reduce((a,s)=>a+c[s],0), fn=(Array.isArray(d.functions)?d.functions:[]).filter(Boolean).slice(0,4);
   const breakdown=`<div class="card-breakdown">${DASH_STATES.map(s=>`<span><i class="s-${s}"></i>${esc(statusNames[s])}<b>${fmtN(c[s])}</b></span>`).join('')}</div>`;
   // 卡片整块可点，点开看这个域的票与边界；悬停时功能行换成分状态张数
-  return `<button type="button" class="domain-card" data-domain="${esc(d.id)}">`+
+  const on=d.id===openDomain;
+  return `<button type="button" class="domain-card${on?' on':''}" data-domain="${esc(d.id)}" aria-expanded="${on}">`+
     (d.id&&d.name?`<div class="card-top"><span class="domain-id">${esc(d.id)}</span></div>`:'')+
     `<h3>${esc(d.name||d.id)}</h3>`+(d.purpose?`<p class="card-purpose">${esc(d.purpose)}</p>`:'')+
     `<div class="card-swap${fn.length?' flip':''}">${fn.length?`<div class="card-functions">${fn.map(esc).join(' · ')}</div>`:''}${breakdown}</div>`+
@@ -64,13 +69,31 @@ function layoutBands() {
   const w=host.clientWidth, max=w>=1180?4:w>=860?3:w>=560?2:1;
   host.querySelectorAll('.cards').forEach(el=>{const n=Number(el.dataset.n)||1;el.style.gridTemplateColumns='repeat('+colsFor(n,max)+',minmax(0,1fr))';el.classList.toggle('solo',n===1&&w>=700);});
 }
-let bandObserver=null;
-function watchBands() {
-  const host=$('#bands');if(!host)return;layoutBands();
-  if(!('ResizeObserver' in window))return;
-  if(!bandObserver)bandObserver=new ResizeObserver(layoutBands);
-  bandObserver.disconnect();bandObserver.observe(host);
+// ---- 就地展开：点哪一格，详情就插在那一格所在行的正下方，占满整行，同行后面和下面的格整体往下挪 ----
+// 不用浮层和抽屉，免得挡住别的格、也免得详情落在页面最下面要往下滑才看得到。
+const gridCols = grid => Math.max(1,getComputedStyle(grid).gridTemplateColumns.split(/\s+/).filter(t=>/px$/.test(t)).length);
+function placeBelowRow(grid,item,panel) {
+  const items=[...grid.children].filter(el=>!el.classList.contains('row-detail')), i=items.indexOf(item);
+  if(i<0)return;
+  const cols=gridCols(grid), last=items[Math.min(items.length-1,(Math.floor(i/cols)+1)*cols-1)];
+  // 只跨有格子的那几列：自动铺满的网格里空列会收成零宽，跨进空列会把它们撑开、让这一行的格子变窄
+  panel.style.gridColumn='1 / span '+Math.min(cols,items.length);
+  if(last.nextElementSibling!==panel)last.after(panel);
 }
+// 宽度一变列数就变，展开区跟着挪回被点那格所在行的下面
+function reflowInline() {
+  document.querySelectorAll('.row-detail').forEach(panel=>{
+    const grid=panel.parentElement, item=grid&&[...grid.children].find(el=>el!==panel&&(el.dataset.block||el.dataset.domain)===panel.dataset.for);
+    if(item)placeBelowRow(grid,item,panel);
+  });
+}
+let gridObserver=null;
+function watchGrid(host) {
+  if(!host||!('ResizeObserver' in window))return;
+  if(!gridObserver)gridObserver=new ResizeObserver(()=>{layoutBands();reflowInline();});
+  gridObserver.disconnect();gridObserver.observe(host);
+}
+function watchBands() {const host=$('#bands');if(!host)return;layoutBands();watchGrid(host);}
 function fold(id,title,body) {return `<details class="fold" data-fold="${esc(id)}" ${openFolds.has(id)?'open':''}><summary>${title}<span class="s-c">（点开）</span><span class="s-o">（收起）</span></summary><div class="fold-body">${body}</div></details>`;}
 function keepFolds(root=document) {root.querySelectorAll('details[data-fold]').forEach(d=>d.ontoggle=()=>{if(d.open)openFolds.add(d.dataset.fold);else openFolds.delete(d.dataset.fold);});}
 function fleet() {
@@ -83,11 +106,10 @@ function fleet() {
   }).join('')}</div><p class="health-hint">读数直接来自哨兵。机器负载不代表交付成果；旧读数不代表机器仍在线。</p>${(native.lines||[]).filter(l=>l.active).length?`<details data-fold="lines" ${openFolds.has('lines')?'open':''}><summary class="subtle">${esc(native.host||'本机')} 的当前执行线 · ${(native.lines||[]).filter(l=>l.active).length}</summary><div class="compact-list">${(native.lines||[]).filter(l=>l.active).slice(0,40).map(l=>`<div class="status-line">${esc(l.id)} · ${esc(l.state)} · ${esc(l.model)} · ${time(l.updated_at)}</div>`).join('')}</div></details>`:''}`;
 }
 function overview() {
-  const live=tickets().filter(t=>activeStates.has(t.status)), total=live.length, c=countStates(live);
+  const live=liveTickets(), total=live.length, c=countStates(live);
   const domains=Array.isArray(data.domains)?data.domains:[], known=new Set(domains.map(d=>d.id));
   const hasX=known.has('X'), orphan=live.filter(t=>!known.has(t.domain)).length;
-  // 域编号不在登记表里的票并进待分诊，保证各卡张数加起来等于顶上的全部活票
-  const rowsOf=d=>live.filter(t=>t.domain===d.id||(d.id==='X'&&!known.has(t.domain)));
+  const rowsOf=d=>domainRows(d,live);
   const bandOf=d=>d.band||'未分层';
   const bandNames=[...BAND_ORDER,...domains.map(bandOf)].filter((b,i,all)=>all.indexOf(b)===i&&domains.some(d=>bandOf(d)===b));
   const groups=bandNames.map(name=>{const items=domains.filter(d=>bandOf(d)===name).map(d=>({d,rows:rowsOf(d)}));return {name,items,count:items.reduce((a,x)=>a+x.rows.length,0)};});
@@ -109,10 +131,12 @@ function overview() {
   const folds=`<div class="dash-folds">${fold('tracks',`已开工的板块 · ${tracks().length} 个`,rack)}${fold('fleet',`正在执行的环境 · ${machines?machines+' 台机器读数':'尚无读数'}`,fleet()+'<p class="health-hint">辅助信息，不作绩效。</p>')}</div>`;
   $('#main').innerHTML=`<div class="dash">${header}${kpiRow}<p class="notice">下图按职责组织现有能力与活跃票，点卡片看该域的票。票数只表示清单规模，不能用来判断模块健康。</p>${legendBar}${bands}<p class="source-foot">${esc(foot)}</p>${folds}</div>`;
   watchBands();keepFolds();
+  if(openDomain&&!domains.some(d=>d.id===openDomain))openDomain='';
+  if(openDomain)openDomainPanel(false);
   $('#sync').onclick=async()=>{try{await api('/api/refresh',{method:'POST',body:'{}'});notice('正在同步。完整快照回来前保留原来的数。');}catch(e){notice(e.message);}};
 }
 // ---- 板块图：照板块图模板的 Harness 版式 ----
-// 左侧行名 + 右侧块格；块上一枚五档进度签；点块在图下方展开详情；页顶一张「此刻」卡，页尾更新记录默认收起。
+// 左侧行名 + 右侧块格；块上一枚五档进度签；点块在那块所在行的正下方展开详情；页顶一张「此刻」卡，页尾更新记录默认收起。
 // 维护者给的颜色与标签原样显示，不自动算成验收；完整记录、AI 接手文本仍在原来的详情抽屉里。
 const TONE_ORDER = ['blue','teal','orange','gray','green','violet'];
 let selectedBlock = '';
@@ -123,7 +147,7 @@ function openBugs(id) {return problems().filter(p=>p.block_id===id&&p.classifica
 function blockButton(b,all) {
   const k=tone(b.color||b.source_color), lab=chipText(b), children=all.filter(e=>e.parent===b.id).length, open=openBugs(b.id);
   const note=[b.short_note,children?`${children} 个子块`:'',open?`${open} 个确认缺陷待验`:''].filter(Boolean);
-  return `<button type="button" class="blk${b.id===selectedBlock?' on':''}" data-block="${esc(b.id)}" aria-pressed="${b.id===selectedBlock}"><span class="t">${esc(b.title)}</span>${lab?`<span><span class="chip c-${k}">${esc(lab)}</span></span>`:''}${note.length?`<span class="m">${esc(note.join('　'))}</span>`:''}</button>`;
+  return `<button type="button" class="blk${b.id===selectedBlock?' on':''}" data-block="${esc(b.id)}" aria-expanded="${b.id===selectedBlock}"><span class="t">${esc(b.title)}</span>${lab?`<span><span class="chip c-${k}">${esc(lab)}</span></span>`:''}${note.length?`<span class="m">${esc(note.join('　'))}</span>`:''}</button>`;
 }
 function blockDetail(b,all) {
   if(!b)return '';
@@ -192,7 +216,8 @@ function modulePage() {
   const groupOrder=(source.groups||[]).map(g=>g.name), groups=new Map();
   visible.sort((a,b)=>{const ga=groupOrder.indexOf(a.group),gb=groupOrder.indexOf(b.group);return (ga<0?999:ga)-(gb<0?999:gb) || (a.order??999)-(b.order??999);});
   for(const block of visible){const group=block.group||'未分组';if(!groups.has(group))groups.set(group,[]);groups.get(group).push(block);}
-  if(!visible.some(b=>b.id===selectedBlock))selectedBlock=visible[0]?.id||'';
+  // 默认不展开；点过的块在重画后照旧展开，块不在当前这一层了就收起
+  if(selectedBlock&&!visible.some(b=>b.id===selectedBlock))selectedBlock='';
   const rows=[...groups].map(([name,blocks])=>`<div class="row"><div class="rowname">${esc(name)}</div><div class="cells">${blocks.map(b=>blockButton(b,all)).join('')}</div></div>`).join('');
   const ext=!search&&!parent?(source.external||[]).map(asText).filter(Boolean):[];
   const extRow=ext.length?`<div class="row ext"><div class="rowname">别的线<br>只管接缝</div><div class="cells">${ext.map(n=>`<div class="blk"><span class="m">${esc(n)}</span></div>`).join('')}</div></div>`:'';
@@ -208,18 +233,28 @@ function modulePage() {
     (parent?`<div class="breadcrumb"><button id="root-map">${esc(track.title)}</button> / ${esc(get(parent)?.title||parent)}</div>`:'')+
     (legendRows.length?`<div class="legend">${legendRows.map(([key,label])=>`<span><i class="dot" style="background:var(--${tone(key)})"></i>${esc(label)}</span>`).join('')}</div>`:'')+
     `<div class="map" id="map" aria-label="${esc(track.title)}结构图">${rows||'<p class="sub">这一层还没有拆分，或没有匹配内容。可以直接阅读板块正文。</p>'}${extRow}</div>`+
-    `<div class="detail" id="block-detail" aria-live="polite"${selectedBlock?'':' hidden'}>${blockDetail(get(selectedBlock),all)}</div>`+
     (relations.length?`<div class="seams">${relations.map(r=>`<button data-entity="${esc(r.id)}">${esc(get(r.from)?.title||r.from)}<span class="arrow">↔</span>${esc(get(r.to)?.title||r.to)} <span class="subtle">${r.certainty==='confirmed'?'':'待确认'}</span></button>`).join('')}</div>`:'')+
     `<h2>二、深入这块</h2><div class="module-rack"><button data-entity="${esc(track.id)}">板块正文与 AI 接手 <span>↗</span></button>${freeNotes.map(n=>`<button data-entity="${esc(n.id)}">${esc(n.title)}<span>笔记 ↗</span></button>`).join('')}<button id="module-problems">问题与交付 <span>${problems().filter(p=>p.track===currentModule).length} 条登记 ↗</span></button>${(source.sections||[]).length?'<button id="source-sections">研究、计划与依据 <span>完整原稿内容 ↗</span></button>':''}</div>`+
     `<div id="history-slot"></div></div>`;
   paintHistory(track,source);loadHistory(track,source);
-  const pick=id=>{selectedBlock=id;document.querySelectorAll('.board [data-block]').forEach(el=>{const on=el.dataset.block===id;el.classList.toggle('on',on);el.setAttribute('aria-pressed',String(on));});
-    const box=$('#block-detail');box.hidden=false;box.innerHTML=blockDetail(get(id),all);wireDetail();
-    // 手机上详情在图下方较远，点块后滚到详情，免得以为没反应
-    if(window.matchMedia?.('(max-width:680px)').matches&&box.getBoundingClientRect().top>window.innerHeight*0.55)box.scrollIntoView({behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'start'});};
-  const wireDetail=()=>{const box=$('#block-detail');bind(box);box.querySelectorAll('[data-drill]').forEach(b=>b.onclick=()=>{parent=b.dataset.drill;search='';selectedBlock='';modulePage();bind();});};
-  document.querySelectorAll('.board [data-block]').forEach(b=>b.onclick=()=>pick(b.dataset.block));
-  wireDetail();
+  // 再点同一块收起，点别的块切过去；同一时刻只展开一处
+  const setOn=id=>document.querySelectorAll('.board [data-block]').forEach(el=>{const on=el.dataset.block===id;el.classList.toggle('on',on);el.setAttribute('aria-expanded',String(on));});
+  const close=()=>{selectedBlock='';setOn('');document.querySelectorAll('.board .row-detail').forEach(p=>p.remove());};
+  const open=(id,byUser)=>{
+    const btn=[...document.querySelectorAll('.board [data-block]')].find(el=>el.dataset.block===id), b=get(id);
+    if(!btn||!b){close();return;}
+    selectedBlock=id;setOn(id);
+    document.querySelectorAll('.board .row-detail').forEach(p=>{if(p.parentElement!==btn.parentElement)p.remove();});
+    let panel=btn.parentElement.querySelector(':scope > .row-detail');
+    if(!panel){panel=document.createElement('div');panel.className='detail row-detail';panel.id='block-detail';panel.setAttribute('aria-live','polite');}
+    panel.dataset.for=id;panel.innerHTML=blockDetail(b,all);
+    placeBelowRow(btn.parentElement,btn,panel);
+    bind(panel);panel.querySelectorAll('[data-drill]').forEach(x=>x.onclick=()=>{parent=x.dataset.drill;search='';selectedBlock='';modulePage();bind();});
+    if(byUser)panel.scrollIntoView({block:'nearest',behavior:window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});
+  };
+  document.querySelectorAll('.board [data-block]').forEach(b=>b.onclick=()=>{if(selectedBlock===b.dataset.block)close();else open(b.dataset.block,true);});
+  if(selectedBlock)open(selectedBlock,false);
+  watchGrid($('#map'));
   $('#module-picker').onchange=e=>goModule(e.target.value);
   $('#map-search').oninput=e=>{const at=e.target.selectionStart;search=e.target.value;modulePage();bind();$('#map-search').focus();$('#map-search').setSelectionRange(at,at);};
   if($('#root-map'))$('#root-map').onclick=()=>{parent='';selectedBlock='';render();};
@@ -280,12 +315,48 @@ function detail(id) {
   $('#copy-handoff').onclick=async()=>{const text=`请先读取 cortex-governance-board Skill，再接手 ${e.title}。\n工作台记录 ${e.id}，修订 ${e.revision||0}。先核对最新来源，不以关票或合 PR 代替用户验收。保留跨板块影响，不受显示提纲限制。\n\n${JSON.stringify(e,null,2)}`;try{await navigator.clipboard.writeText(text);$('#copy-handoff').textContent='已复制';}catch{show('AI 接手文本','可选中复制',`<textarea readonly>${esc(text)}</textarea>`);}};
   if($('#drill'))$('#drill').onclick=()=>{$('#detail').close();currentModule=e.track;parent=e.id;search='';if(route()!=='modules')location.hash='modules';render();};
 }
-function domainDetail(id) {
-  const d=(data.domains||[]).find(d=>d.id===id);if(!d)return;
-  const related=tracks().filter(t=>(t.domains||[]).includes(id)), rows=tickets().filter(t=>t.domain===id&&activeStates.has(t.status));
-  const draft=data.drafts?.domains?.[id]||{};
-  show(d.name,`${id} / ${d.band||'责任域'}`,`<p>${esc(d.purpose)}</p><h3>边界</h3><p>${esc(d.boundary||'尚未记录')}</p><h3>已开工板块</h3><div class="module-rack">${related.map(t=>`<button data-track="${esc(t.id)}">${esc(t.title)} ↗</button>`).join('')||'<span class="subtle">尚未开图，不凭空补齐。</span>'}</div><h3>当前安排</h3><label class="field">负责人<input id="draft-owner" value="${esc(draft.owner||'')}"></label><label class="field">这轮要交付什么<textarea id="draft-goal">${esc(draft.goal||'')}</textarea></label>${info?.local&&data.connection?.mode==='host'?'<button id="save-draft">保存管理草稿</button>':'<p class="subtle">当前连接为浏览权限。</p>'}<h3>待处理工单 · ${rows.length}</h3><div class="compact-list">${rows.slice(0,15).map(t=>`<button data-ticket="${esc(t.key)}">${esc(t.key+' '+t.title)}</button>`).join('')}</div><h3>仓库入口</h3><div class="body-copy">${esc((d.docs||[]).join('\n'))}</div>`);
-  if($('#save-draft'))$('#save-draft').onclick=async()=>{try{const drafts=JSON.parse(JSON.stringify(data.drafts||{domains:{},tickets:{}}));drafts.domains[id]={owner:$('#draft-owner').value,goal:$('#draft-goal').value};await api('/api/drafts',{method:'PUT',body:JSON.stringify({base_revision:data.draft_revision,drafts})});$('#save-draft').textContent='已保存';await refresh(false);}catch(e){notice(e.message);}};
+const TICKET_RANK={blocked:0,in_review:1,in_progress:2,todo:3,backlog:4};
+function toggleDomain(id) {
+  if(openDomain===id){closeDomainPanel();return;}
+  openDomain=id;domainShown=20;openDomainPanel(true);
+}
+function closeDomainPanel() {
+  openDomain='';document.querySelectorAll('.dash .row-detail').forEach(p=>p.remove());
+  document.querySelectorAll('.dash .domain-card').forEach(c=>{c.classList.remove('on');c.setAttribute('aria-expanded','false');});
+}
+function domainPanelHtml(d) {
+  const rows=domainRows(d).sort((a,b)=>(TICKET_RANK[a.status]??9)-(TICKET_RANK[b.status]??9)||Number(String(b.key).replace(/\D/g,''))-Number(String(a.key).replace(/\D/g,'')));
+  const c=countStates(rows), related=tracks().filter(t=>(t.domains||[]).includes(d.id)), draft=data.drafts?.domains?.[d.id]||{};
+  const canSave=info?.local&&data.connection?.mode==='host', rest=rows.length-domainShown;
+  const list=rows.slice(0,domainShown).map(t=>`<button type="button" class="tk-row" data-ticket="${esc(t.key)}"><span class="tk-key">${esc(t.key)}</span><span class="tk-title">${esc(t.title)}</span><span class="tk-state"><i class="s-${esc(t.status)}"></i>${esc(statusNames[t.status]||t.status)}</span></button>`).join('');
+  return `<div class="dp-head"><div class="dp-title"><span class="domain-id">${esc(d.id)} · ${esc(d.band||'责任域')}</span><h3>${esc(d.name||d.id)} · ${fmtN(rows.length)} 张活票</h3>${d.purpose?`<p class="dp-purpose">${esc(d.purpose)}</p>`:''}</div><button type="button" class="pill-button" data-close-domain>收起</button></div>`+
+    `<div class="dp-counts">${DASH_STATES.map(s=>`<span><i class="s-${s}"></i>${esc(statusNames[s])}<b>${fmtN(c[s])}</b></span>`).join('')}</div>${dashBar(c,rows.length)}`+
+    `<p class="dp-order">按阻塞、待评审、进行中、待办、待规划排，同状态新票在前；点票号看这张票。</p>`+
+    `<div class="dp-list">${list||'<p class="dp-empty">这个域眼下没有活票。</p>'}</div>`+
+    (rest>0?`<button type="button" class="pill-button dp-more" data-more-domain>再列 ${fmtN(Math.min(20,rest))} 张（还有 ${fmtN(rest)} 张）</button>`:'')+
+    `<div class="dp-meta"><div><b>边界</b>${esc(d.boundary||'尚未记录')}</div><div><b>已开工板块</b>${related.map(t=>`<button type="button" class="chip-link" data-track="${esc(t.id)}">${esc(t.title)} ↗</button>`).join(' ')||'尚未开图，不凭空补齐。'}</div>${(d.docs||[]).length?`<div><b>仓库入口</b>${esc((d.docs||[]).join('；'))}</div>`:''}</div>`+
+    `<details class="dp-draft" data-fold="draft:${esc(d.id)}" ${openFolds.has('draft:'+d.id)?'open':''}><summary>负责人与这轮要交付什么（管理草稿）</summary><label class="field">负责人<input id="draft-owner" value="${esc(draft.owner||'')}"></label><label class="field">这轮要交付什么<textarea id="draft-goal">${esc(draft.goal||'')}</textarea></label>${canSave?'<button type="button" id="save-draft">保存管理草稿</button>':'<p class="dp-order">当前连接为浏览权限。</p>'}</details>`;
+}
+function openDomainPanel(byUser) {
+  const d=(data.domains||[]).find(x=>x.id===openDomain), card=[...document.querySelectorAll('.dash .domain-card')].find(el=>el.dataset.domain===openDomain);
+  if(!d||!card){openDomain='';return;}
+  document.querySelectorAll('.dash .row-detail').forEach(p=>{if(p.parentElement!==card.parentElement)p.remove();});
+  let panel=card.parentElement.querySelector(':scope > .row-detail');
+  if(!panel){panel=document.createElement('section');panel.className='domain-panel row-detail';panel.setAttribute('aria-live','polite');}
+  panel.dataset.for=d.id;panel.id='domain-panel';panel.setAttribute('aria-label',(d.name||d.id)+' 的活票');
+  document.querySelectorAll('.dash .domain-card').forEach(c=>{const on=c===card;c.classList.toggle('on',on);c.setAttribute('aria-expanded',String(on));});
+  panel.innerHTML=domainPanelHtml(d);
+  placeBelowRow(card.parentElement,card,panel);
+  wireDomainPanel(panel,d);
+  if(byUser)panel.scrollIntoView({block:'nearest',behavior:window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});
+}
+function wireDomainPanel(panel,d) {
+  bind(panel);keepFolds(panel);
+  panel.querySelector('[data-close-domain]').onclick=()=>{const card=[...document.querySelectorAll('.dash .domain-card')].find(el=>el.dataset.domain===d.id);closeDomainPanel();card?.focus();};
+  const more=panel.querySelector('[data-more-domain]');
+  if(more)more.onclick=()=>{domainShown+=20;panel.innerHTML=domainPanelHtml(d);wireDomainPanel(panel,d);};
+  const save=panel.querySelector('#save-draft');
+  if(save)save.onclick=async()=>{try{const drafts=JSON.parse(JSON.stringify(data.drafts||{domains:{},tickets:{}}));drafts.domains[d.id]={owner:panel.querySelector('#draft-owner').value,goal:panel.querySelector('#draft-goal').value};await api('/api/drafts',{method:'PUT',body:JSON.stringify({base_revision:data.draft_revision,drafts})});save.textContent='已保存';await refresh(false);}catch(e){notice(e.message);}};
 }
 function ticketDetail(key) {
   const ticket=tickets().find(t=>t.key===key)||{key,title:key};
@@ -296,7 +367,7 @@ function ticketDetail(key) {
 function bind(root=document) {
   root.querySelectorAll('[data-track]').forEach(b=>b.onclick=()=>{if($('#detail').open)$('#detail').close();goModule(b.dataset.track);});
   root.querySelectorAll('[data-entity]').forEach(b=>b.onclick=()=>detail(b.dataset.entity));
-  root.querySelectorAll('[data-domain]').forEach(b=>b.onclick=()=>domainDetail(b.dataset.domain));
+  root.querySelectorAll('[data-domain]').forEach(b=>b.onclick=()=>toggleDomain(b.dataset.domain));
   root.querySelectorAll('[data-ticket]').forEach(b=>b.onclick=()=>ticketDetail(b.dataset.ticket));
   root.querySelectorAll('[data-delivery]').forEach(b=>b.onclick=()=>{deliveryMode=b.dataset.delivery;phase='';page=0;search='';render();});
   root.querySelectorAll('[data-phase]').forEach(b=>b.onclick=()=>{phase=b.dataset.phase;page=0;render();});
@@ -330,7 +401,7 @@ async function refresh(repaint=true) {
   }finally{refreshing=false;}
 }
 $('#close-detail').onclick=()=>{$('#detail').close();selectedEntity=null;};
-if(!('ResizeObserver' in window))window.addEventListener('resize',layoutBands);
+if(!('ResizeObserver' in window))window.addEventListener('resize',()=>{layoutBands();reflowInline();});
 $('#wall').onclick=()=>{document.body.classList.toggle('wall');$('#wall').textContent=document.body.classList.contains('wall')?'退出大屏':'大屏';};
 window.addEventListener('hashchange',()=>{search='';page=0;render();});
 refresh();setInterval(()=>refresh(),30000);

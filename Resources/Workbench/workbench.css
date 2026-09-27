@@ -80,6 +80,34 @@ html[data-view=overview] footer{max-width:1672px;padding:10px 36px 20px}
 .dash .cards.solo .card-stats{grid-area:stats;display:block;align-self:end;text-align:right;white-space:nowrap;margin:0}
 .dash .cards.solo .card-stats span:last-child{display:block;margin:0}
 .dash .cards.solo .statusbar{grid-area:bar;margin-top:14px}
+/* 首页域卡就地展开：展开区是卡片网格里的一格，横跨整行，插在被点那张卡所在行的下面 */
+.row-detail{min-width:0;scroll-margin-top:64px;scroll-margin-bottom:16px}
+.dash .domain-card.on,.dash .domain-card.on:hover{border-color:var(--accent);box-shadow:0 0 0 1.5px var(--accent) inset}
+.dash .domain-panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px 20px}
+.dash .dp-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.dash .dp-title{min-width:0}
+.dash .dp-title h3{font-size:17px;line-height:1.4;margin-top:4px}
+.dash .dp-purpose{font-size:12px;color:var(--muted);line-height:1.8;margin-top:4px}
+.dash .dp-counts{display:flex;flex-wrap:wrap;gap:2px 12px;font-size:11px;color:var(--muted);margin:12px 0 7px}
+.dash .dp-counts span{white-space:nowrap}
+.dash .dp-counts b{color:var(--ink);font-weight:600;margin-left:3px;font-variant-numeric:tabular-nums}
+.dash .dp-counts i,.dash .tk-state i{height:7px;width:7px;display:inline-block;border-radius:2px;margin-right:5px}
+.dash .dp-order{font-size:11px;color:var(--muted);margin-top:12px}
+.dash .dp-list{display:grid;margin:6px 0 10px;border-top:1px solid var(--line)}
+.dash .tk-row{display:grid;grid-template-columns:92px minmax(0,1fr) auto;gap:12px;align-items:baseline;width:100%;text-align:left;padding:9px 2px;border:0;border-bottom:1px solid var(--line);border-radius:0;background:none;color:var(--ink);font-size:13px;line-height:1.55}
+.dash .tk-row:hover{background:#f7fafb;border-color:var(--line)}
+.dash .tk-key{font-size:11px;color:#728b98;font-variant-numeric:tabular-nums;white-space:nowrap}
+.dash .tk-title{min-width:0;overflow-wrap:anywhere}
+.dash .tk-state{font-size:11px;color:var(--muted);white-space:nowrap}
+.dash .dp-empty{font-size:12px;color:var(--muted);padding:12px 2px}
+.dash .dp-more{margin:2px 0 4px}
+.dash .dp-meta{display:grid;gap:6px;font-size:12px;color:var(--muted);line-height:1.8;margin-top:12px;padding-top:12px;border-top:1px solid var(--line);overflow-wrap:anywhere}
+.dash .dp-meta b{color:var(--ink);font-weight:600;margin-right:10px}
+.dash .chip-link{font-size:11px;padding:1px 9px;border-radius:999px;border:1px solid var(--line);background:var(--panel);color:var(--accent);margin:0 4px 4px 0}
+.dash .dp-draft{margin-top:10px;font-size:12px}
+.dash .dp-draft summary{cursor:pointer;color:var(--muted)}
+.dash .dp-draft input,.dash .dp-draft textarea{width:100%}
+@media(max-width:480px){.dash .domain-panel{padding:16px}.dash .dp-head{flex-wrap:wrap}.dash .tk-row{grid-template-columns:minmax(0,1fr) auto;gap:2px 12px}.dash .tk-key{grid-column:1/-1}}
 .dash .source-foot{font-size:11px;color:var(--muted);border-top:1px solid var(--line);margin-top:25px;padding-top:14px}
 .dash .empty{padding:60px 0;text-align:center;color:var(--muted);font-size:13px}
 /* 主体之下的两行折叠：样子照板块图模板的「更新记录」折叠盒，默认收起 */
@@ -141,6 +169,8 @@ html[data-view=modules] footer{max-width:1120px;padding:10px 20px 20px}
 .board .detail p{font-size:15px;white-space:pre-line}
 .board .detail ul{margin:8px 0 10px;padding-left:20px}
 .board .detail li{margin:6px 0;font-size:15px}
+/* 就地展开的块详情是块格网格里的一格，间距交给网格的 gap */
+.board .detail.row-detail{margin:0}
 .board .kv{display:grid;grid-template-columns:110px 1fr;gap:7px 14px;font-size:15px;margin-top:12px;border-top:1px solid var(--hair);padding-top:12px}
 .board .kv>div{min-width:0;overflow-wrap:anywhere}
 .board .kv div:nth-child(odd){color:var(--sub);font-size:13px;padding-top:2px}

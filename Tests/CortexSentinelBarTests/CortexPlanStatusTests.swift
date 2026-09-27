@@ -954,8 +954,13 @@ final class CortexPlanStatusTests: XCTestCase {
         XCTAssertTrue(allText.contains("读不到看板，在跑几条暂时不知道"))
         XCTAssertTrue(allText.contains("¥0.62"))
         XCTAssertTrue(allText.contains("套餐派工不花现金"))
-        // 最近一次失败的备注：读到的时刻 + 原因。
-        XCTAssertTrue(allText.contains("\(CortexPlanStatusDisplay.clockText(fetchedAt)) 读到的，这次没读到（cortex 仓里还没有这个脚本）"))
+        // 最近一次失败：取数那行写旧数 + 北京时间取数时刻 + 原因（COR-9931 第 2 条）。
+        let fetchedLine = try XCTUnwrap(lines.last { $0.label == "旧数" })
+        XCTAssertEqual(
+            fetchedLine.value,
+            "\(CortexPlanStatusDisplay.beijingClockText(fetchedAt)) 取的，这次没取到：cortex 仓里还没有这个脚本"
+        )
+        XCTAssertTrue(fetchedLine.wraps, "长句折行，卡里不截断")
 
         // 指纹、套餐 id、skip_code、错误 code 任何地方都不露。
         XCTAssertFalse(allText.contains(Self.sampleKey))
@@ -1011,7 +1016,7 @@ final class CortexPlanStatusTests: XCTestCase {
         XCTAssertEqual(CortexPlanStatusDisplay.freeWindowText("现在是免费时段（北京 23:00 到 09:00）"), "北京 23:00 到 09:00")
     }
 
-    /// 成功后 30 分钟内失败：数照用，详情卡末尾加「HH:MM 读到的，这次没读到（原因）」。
+    /// 成功后 30 分钟内失败：数照用，详情卡末尾写「旧数，HH:MM 取的，这次没取到：原因」。
     func testFreshFailureKeepsNumbersAndAddsNote() throws {
         let payload = try samplePayload()
         let now = Date()
@@ -1022,9 +1027,15 @@ final class CortexPlanStatusTests: XCTestCase {
         XCTAssertEqual(CortexPlanStatusDisplay.freshness(displayState, now: now), .fresh)
         let plan = CortexPlanStatusDisplay.plan(forAccountKey: CortexPlanStatusTests.sampleKey, in: displayState.payload)
         let account = account()
-        // 行名还是套餐名，第三列还是真数。
+        // 行名还是套餐名，第三列还是真数（没在冷却时照常报在跑）。
         XCTAssertEqual(CortexPlanStatusDisplay.rowTitleFallback(plan: plan, account: account), "Sample 套餐")
         XCTAssertEqual(CortexPlanStatusDisplay.thirdColumnText(plan: plan!, now: now), "在跑 2/5")
+        // 沿用旧数时第三列按过时态处理，判不了冷却。
+        XCTAssertTrue(CortexPlanStatusDisplay.usesOldNumbers(displayState, now: now))
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.thirdColumnText(plan: plan!, now: now, state: displayState),
+            "在跑 —"
+        )
 
         let lines = CortexPlanStatusDisplay.detailLines(
             plan: plan!,
@@ -1033,16 +1044,173 @@ final class CortexPlanStatusTests: XCTestCase {
             fetchedAt: fetchedAt,
             cashBalance: 0.62
         )
-        XCTAssertEqual(lines.last?.label, "派工状态")
-        XCTAssertEqual(lines.last?.value, "\(CortexPlanStatusDisplay.clockText(fetchedAt)) 读到的，这次没读到（\(failure)）")
+        XCTAssertEqual(lines.last?.label, "旧数")
+        XCTAssertEqual(
+            lines.last?.value,
+            "\(CortexPlanStatusDisplay.beijingClockText(fetchedAt)) 取的，这次没取到：\(failure)"
+        )
         let labels = lines.map(\.label)
         XCTAssertTrue(labels.contains("执行者 1"), "时新态执行者行还在")
         XCTAssertTrue(labels.contains("免费时段"))
         XCTAssertTrue(labels.contains("派工"))
     }
 
+    /// 取数成功：取数那行写「数取于 HH:MM」（北京时间，跟面板其余钟点同口径）。
+    func testFetchedAtLineOnSuccessUsesBeijingClock() throws {
+        let fetchedAt = Date(timeIntervalSince1970: 1_760_000_000)
+        let line = try XCTUnwrap(
+            CortexPlanStatusDisplay.fetchedAtLine(fetchedAt: fetchedAt, failureText: nil)
+        )
+        XCTAssertEqual(line.label, "数取于")
+        XCTAssertEqual(line.value, CortexPlanStatusDisplay.beijingClockText(fetchedAt))
+        XCTAssertFalse(line.wraps)
+        // 从没成功过（fetchedAt 缺）不出这一行。
+        XCTAssertNil(CortexPlanStatusDisplay.fetchedAtLine(fetchedAt: nil, failureText: "找不到 cortex 仓"))
+    }
+
+    /// 第三列：时新且没失败照显示冷却到；沿用旧数（30 分钟内）与过时态都出「在跑 —」。
+    func testThirdColumnHidesCooldownWhenNumbersAreOld() throws {
+        let now = Date()
+        let cooling = plan(cooldownUntil: now.addingTimeInterval(30 * 60))
+        let payload = try samplePayload()
+
+        let fresh = state(payload: payload, fetchedAt: now, failureText: nil)
+        XCTAssertTrue(
+            CortexPlanStatusDisplay.thirdColumnText(plan: cooling, now: now, state: fresh).hasPrefix("冷却"),
+            "时新态照常报冷却到"
+        )
+
+        let oldNumbers = state(
+            payload: payload,
+            fetchedAt: now.addingTimeInterval(-5 * 60),
+            failureText: "脚本清单缺一个文件"
+        )
+        XCTAssertEqual(CortexPlanStatusDisplay.freshness(oldNumbers, now: now), .fresh, "30 分钟内还判时新")
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.thirdColumnText(plan: cooling, now: now, state: oldNumbers),
+            CortexPlanStatusDisplay.staleThirdColumnText,
+            "旧数判不了冷却，跟过时态同一处理"
+        )
+        XCTAssertFalse(
+            CortexPlanStatusDisplay.thirdColumnText(plan: cooling, now: now, state: oldNumbers)
+                .contains("冷却")
+        )
+
+        let stale = state(
+            payload: payload,
+            fetchedAt: now.addingTimeInterval(-CortexPlanStatusDisplay.reuseWindow - 60),
+            failureText: "脚本清单缺一个文件"
+        )
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.thirdColumnText(plan: cooling, now: now, state: stale),
+            CortexPlanStatusDisplay.staleThirdColumnText
+        )
+    }
+
+    // MARK: - 额度用满（COR-9931 第 3 条，按改后票面）
+
+    /// 周额度剩 0：写「周额度用完，约 MM-DD HH 点重置，重置前不派」；
+    /// 免费时段开也不补「照派」（实读：周额度用满时免费时段也接不了单）。
+    func testWeeklyQuotaExhaustedLineIgnoresFreeWindow() throws {
+        let resetAt = isoDate("2026-10-01T07:00:00Z")!
+        let full = quotaAccount(
+            fiveHourPercent: 40,
+            weeklyPercent: 100,
+            weeklyResetAt: resetAt,
+            fiveHourResetAt: nil
+        )
+        for active in [true, false, nil] {
+            let lines = CortexPlanStatusDisplay.quotaExhaustedLines(
+                account: full,
+                freeWindowActive: active
+            )
+            XCTAssertEqual(lines.count, 1, "只有周额度那行")
+            XCTAssertEqual(lines[0].label, "周额度")
+            XCTAssertEqual(lines[0].value, "用完，约 10-01 15 点重置，重置前不派")
+            XCTAssertTrue(lines[0].wraps)
+            XCTAssertFalse(lines[0].value.contains("免费时段"), "免费时段照派那句作废了")
+        }
+    }
+
+    /// 5 小时额度剩 0：写恢复时刻；脚本报免费时段开才补「不受 5 小时限」。
+    func testFiveHourQuotaExhaustedLineFollowsFreeWindow() throws {
+        let fiveHourResetAt = isoDate("2026-09-27T06:30:00Z")!
+        let full = quotaAccount(
+            fiveHourPercent: 100,
+            weeklyPercent: 30,
+            weeklyResetAt: nil,
+            fiveHourResetAt: fiveHourResetAt
+        )
+        let withFree = CortexPlanStatusDisplay.quotaExhaustedLines(account: full, freeWindowActive: true)
+        XCTAssertEqual(withFree.count, 1)
+        XCTAssertEqual(withFree[0].label, "5 小时额度")
+        XCTAssertEqual(withFree[0].value, "用完，约 14:30 恢复，免费时段不受 5 小时限")
+
+        let withoutFree = CortexPlanStatusDisplay.quotaExhaustedLines(account: full, freeWindowActive: false)
+        XCTAssertEqual(withoutFree.count, 1)
+        XCTAssertEqual(withoutFree[0].value, "用完，约 14:30 恢复")
+
+        // 没读到免费时段（脚本没给这个键）也不硬写。
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.quotaExhaustedLines(account: full, freeWindowActive: nil)[0].value,
+            "用完，约 14:30 恢复"
+        )
+    }
+
+    /// 两个窗口都没剩余：两行都出，顺序周额度在前；还有剩余的窗口一行不出。
+    func testBothQuotaExhaustedAndPartialQuota() throws {
+        let both = quotaAccount(
+            fiveHourPercent: 100,
+            weeklyPercent: 100,
+            weeklyResetAt: isoDate("2026-10-01T07:00:00Z"),
+            fiveHourResetAt: isoDate("2026-09-27T22:30:00Z")
+        )
+        XCTAssertEqual(
+            CortexPlanStatusDisplay.quotaExhaustedLines(account: both, freeWindowActive: true).map(\.label),
+            ["周额度", "5 小时额度"]
+        )
+        let partial = quotaAccount(
+            fiveHourPercent: 99.9,
+            weeklyPercent: 12,
+            weeklyResetAt: nil,
+            fiveHourResetAt: nil
+        )
+        XCTAssertTrue(CortexPlanStatusDisplay.quotaExhaustedLines(account: partial, freeWindowActive: true).isEmpty)
+    }
+
+    /// 账号造数：订阅窗口给百分比与重置时刻（北京时间口径由显示层管）。
+    private func quotaAccount(
+        fiveHourPercent: Double?,
+        weeklyPercent: Double?,
+        weeklyResetAt: Date?,
+        fiveHourResetAt: Date?
+    ) -> GLMAccountUsage {
+        GLMAccountUsage(
+            key: "0123456789ab-key",
+            label: "ZCode",
+            level: "pro",
+            fiveHourWindow: fiveHourPercent.map {
+                GLMUsageWindow(totalPoints: 12000, usedPoints: 12000, percentUsed: $0, resetAt: fiveHourResetAt)
+            },
+            weeklyWindow: weeklyPercent.map {
+                GLMUsageWindow(totalPoints: 60000, usedPoints: 60000, percentUsed: $0, resetAt: weeklyResetAt)
+            },
+            cashBalance: nil,
+            totalSpendAmount: nil,
+            checkedAt: nil,
+            stale: false,
+            errorMessage: nil
+        )
+    }
+
+    private func isoDate(_ text: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: text)
+    }
+
     /// 超过 30 分钟失败：行名仍用套餐名，第三列「在跑 —」不显示冷却，状态点只看
-    /// 订阅窗口，详情卡只留在跑/现金/派工状态三行。
+    /// 订阅窗口，详情卡只留在跑/现金/取数三行。
     func testStaleFailureShowsIdentityOnly() throws {
         let payload = try samplePayload()
         let now = Date()
@@ -1071,12 +1239,17 @@ final class CortexPlanStatusTests: XCTestCase {
         let lines = CortexPlanStatusDisplay.staleDetailLines(
             plan: plan,
             failureText: "cortex 仓里还没有这个脚本",
+            fetchedAt: displayState.fetchedAt,
             cashBalance: 0.62
         )
-        XCTAssertEqual(lines.map(\.label), ["在跑", "现金余额", "派工状态"])
+        XCTAssertEqual(lines.map(\.label), ["在跑", "现金余额", "旧数"])
         XCTAssertEqual(lines[0].value, "— / 上限 5")
         XCTAssertEqual(lines[1].value, "¥0.62")
-        XCTAssertEqual(lines[2].value, "没读到（cortex 仓里还没有这个脚本）")
+        XCTAssertEqual(
+            lines[2].value,
+            "\(CortexPlanStatusDisplay.beijingClockText(try XCTUnwrap(displayState.fetchedAt))) 取的，"
+                + "这次没取到：cortex 仓里还没有这个脚本"
+        )
         let allText = lines.map { [$0.label, $0.value, $0.note ?? ""].joined(separator: " ") }.joined(separator: "\n")
         XCTAssertFalse(allText.contains("执行者 1"))
         XCTAssertFalse(allText.contains("免费时段"))

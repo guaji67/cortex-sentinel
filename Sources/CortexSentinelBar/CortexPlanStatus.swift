@@ -715,6 +715,20 @@ enum CortexPlanStatusDisplay {
         return plan.label
     }
 
+    /// 第三列（原现金那格）文案，带显示状态：数不可信（过时或沿用旧数）时
+    /// 判不了冷却，按过时态出「在跑 —」。
+    static func thirdColumnText(
+        plan: CortexPlanStatusPlan,
+        now: Date,
+        state: CortexPlanStatusDisplayState?,
+        columnWidth: CGFloat = 80
+    ) -> String {
+        guard !usesOldNumbers(state, now: now) else {
+            return staleThirdColumnText
+        }
+        return thirdColumnText(plan: plan, now: now, columnWidth: columnWidth)
+    }
+
     /// 第三列（原现金那格）文案：冷却中写「冷却到 HH:MM」（本机时间，
     /// 宽 80 放不下就改写「冷却 HH:MM」，以不出图截断为准）；
     /// 不在冷却按在跑写；读不到看板写「在跑 —」。
@@ -869,15 +883,94 @@ enum CortexPlanStatusDisplay {
                 note: "套餐派工不花现金"
             ))
         }
-        if let failureText, !failureText.isEmpty {
-            let readAt = fetchedAt.map { "\(clockText($0)) 读到的，" } ?? ""
-            lines.append(BalanceHoverLine(
-                label: "派工状态",
-                value: "\(readAt)这次没读到（\(failureText)）",
-                note: nil
-            ))
+        // 取数那行（COR-9931 第 2 条）：几点取的数，沿用旧数时把原因说出来。
+        if let fetchedLine = fetchedAtLine(fetchedAt: fetchedAt, failureText: failureText) {
+            lines.append(fetchedLine)
         }
         return lines
+    }
+
+    /// 悬停卡的取数行（COR-9931 第 2 条）：正常写「数取于 HH:MM」（北京时间）；
+    /// 取数失败沿用旧数写「旧数，HH:MM 取的，这次没取到：<原因人话>」，
+    /// 长句折行。fetchedAt 缺（开 App 以来一次都没成功过）不出这一行。
+    static func fetchedAtLine(
+        fetchedAt: Date?,
+        failureText: String?
+    ) -> BalanceHoverLine? {
+        guard let fetchedAt else {
+            return nil
+        }
+        let clock = beijingClockText(fetchedAt)
+        if let failureText, !failureText.isEmpty {
+            return BalanceHoverLine(
+                label: "旧数",
+                value: "\(clock) 取的，这次没取到：\(failureText)",
+                wraps: true
+            )
+        }
+        return BalanceHoverLine(label: "数取于", value: clock)
+    }
+
+    /// 数不可信：过时态，或最近一次取数失败、沿用上一份成功结果。两种情况
+    /// 第三列都按过时态处理（旧数判不了冷却），不显示「冷却到」。
+    static func usesOldNumbers(_ state: CortexPlanStatusDisplayState?, now: Date) -> Bool {
+        guard let state, state.payload != nil else {
+            return false
+        }
+        if freshness(state, now: now) == .stale {
+            return true
+        }
+        return state.failureText.map { !$0.isEmpty } ?? false
+    }
+
+    /// 额度用满的说明行（COR-9931 第 3 条）：只报用量读数与恢复时刻，
+    /// 第三列不改成冷却，能不能派仍只看脚本给的 dispatchable / skip_code / cooldown_until。
+    /// 周额度剩 0 写重置时刻与「重置前不派」（实读：周额度用满时免费时段也接不了单）；
+    /// 5 小时窗剩 0 写恢复时刻，脚本报免费时段开时补一句不受 5 小时限。
+    /// 免费时段判定只读脚本输出的 free_window.active，App 里不另写一份钟点。
+    static func quotaExhaustedLines(
+        account: GLMAccountUsage,
+        freeWindowActive: Bool?
+    ) -> [BalanceHoverLine] {
+        var lines: [BalanceHoverLine] = []
+        if let weekly = account.weeklyWindow, weekly.remainingPercentage == 0 {
+            let reset = weekly.resetAt.map { "约 \(quotaResetText($0))重置，" } ?? ""
+            lines.append(BalanceHoverLine(
+                label: "周额度",
+                value: "用完，\(reset)重置前不派",
+                wraps: true
+            ))
+        }
+        if let fiveHour = account.fiveHourWindow, fiveHour.remainingPercentage == 0 {
+            var value = "用完"
+            if let resetAt = fiveHour.resetAt {
+                value += "，约 \(beijingClockText(resetAt)) 恢复"
+            }
+            if freeWindowActive == true {
+                value += "，免费时段不受 5 小时限"
+            }
+            lines.append(BalanceHoverLine(label: "5 小时额度", value: value, wraps: true))
+        }
+        return lines
+    }
+
+    /// 取数时刻：钟点一律北京时间（面板其余钟点同口径，不跟本机时区走）。
+    static func beijingClockText(_ date: Date) -> String {
+        beijingText(date, format: "HH:mm")
+    }
+
+    /// 周额度重置时刻的面板口径：北京时间「MM-dd HH 点」。
+    static func quotaResetText(_ date: Date) -> String {
+        beijingText(date, format: "MM-dd HH '点'")
+    }
+
+    private static func beijingText(_ date: Date, format: String) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.timeZone = OfficialQuotaPresentation.displayTimeZone
+        formatter.dateFormat = format
+        return formatter.string(from: date)
     }
 
     /// 「在跑」行的 note：cortex 给了拆分才写，旧输出没有这些键就是 nil。
@@ -953,6 +1046,7 @@ enum CortexPlanStatusDisplay {
     static func staleDetailLines(
         plan: CortexPlanStatusPlan,
         failureText: String,
+        fetchedAt: Date?,
         cashBalance: Double?
     ) -> [BalanceHoverLine] {
         var lines: [BalanceHoverLine] = []
@@ -969,11 +1063,10 @@ enum CortexPlanStatusDisplay {
                 note: "套餐派工不花现金"
             ))
         }
-        lines.append(BalanceHoverLine(
-            label: "派工状态",
-            value: "没读到（\(failureText)）",
-            note: nil
-        ))
+        // 过时态也是沿用旧数：同一句取数文案（COR-9931 第 2 条）。
+        if let fetchedLine = fetchedAtLine(fetchedAt: fetchedAt, failureText: failureText) {
+            lines.append(fetchedLine)
+        }
         return lines
     }
 

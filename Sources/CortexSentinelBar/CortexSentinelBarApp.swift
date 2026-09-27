@@ -37,6 +37,10 @@ enum CortexSentinelBarMain {
     static let previewHoverRowArgument = "--preview-hover-row"
     /// 演示套餐状态的时新度：stale = 上次成功后超过复用窗没读到。
     static let demoPlanStatusStaleArgument = "--demo-plan-status-stale"
+    /// 演示套餐状态：复用窗内取数失败、沿用旧数（第三列不显示冷却到）。
+    static let demoPlanStatusOldArgument = "--demo-plan-status-old"
+    /// 演示套餐状态：订阅窗口额度用满（周与 5 小时都 0 剩余，免费时段开）。
+    static let demoPlanStatusQuotaZeroArgument = "--demo-plan-status-quota-zero"
     static let livePanelSettleSecondsArgument = "--settle-seconds"
 
     @MainActor
@@ -221,6 +225,8 @@ enum CortexSentinelBarMain {
                 to: outputPath,
                 demoBalances: arguments.contains(demoBalancesArgument),
                 demoPlanStatusStale: arguments.contains(demoPlanStatusStaleArgument),
+                demoPlanStatusOld: arguments.contains(demoPlanStatusOldArgument),
+                demoPlanStatusQuotaZero: arguments.contains(demoPlanStatusQuotaZeroArgument),
                 previewHoverCard: arguments.contains(previewHoverCardArgument),
                 previewHoverRow: previewHoverRowValue(arguments)
             )

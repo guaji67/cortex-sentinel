@@ -48,6 +48,15 @@ enum PackagingStablePreviewMode {
     case error
 }
 
+/// 套餐状态演示态（只进离屏出图）：normal 时新、stale 超复用窗、
+/// old 复用窗内失败沿用旧数、quotaZero 订阅窗口烧到 0 剩余。
+enum DemoPlanStatusMode {
+    case normal
+    case stale
+    case old
+    case quotaZero
+}
+
 /// 给 `--render-panel-png` 用的离屏会话：临时监视目录 + 不扫本机进程表。
 @MainActor
 final class PanelPreviewSession {
@@ -189,6 +198,8 @@ enum PanelPNGRenderer {
         to path: String,
         demoBalances: Bool = false,
         demoPlanStatusStale: Bool = false,
+        demoPlanStatusOld: Bool = false,
+        demoPlanStatusQuotaZero: Bool = false,
         previewHoverCard: Bool = false,
         previewHoverRow: String? = nil
     ) async throws {
@@ -197,6 +208,8 @@ enum PanelPNGRenderer {
             to: URL(fileURLWithPath: path),
             demoBalances: demoBalances,
             demoPlanStatusStale: demoPlanStatusStale,
+            demoPlanStatusOld: demoPlanStatusOld,
+            demoPlanStatusQuotaZero: demoPlanStatusQuotaZero,
             previewHoverCard: previewHoverCard,
             previewHoverRow: previewHoverRow
         )
@@ -208,6 +221,8 @@ enum PanelPNGRenderer {
         to url: URL,
         demoBalances: Bool = false,
         demoPlanStatusStale: Bool = false,
+        demoPlanStatusOld: Bool = false,
+        demoPlanStatusQuotaZero: Bool = false,
         previewHoverCard: Bool = false,
         previewHoverRow: String? = nil
     ) async throws {
@@ -217,7 +232,9 @@ enum PanelPNGRenderer {
         if demoBalances {
             DemoBalancesPreview.inject(
                 into: session.store,
-                planStatusStale: demoPlanStatusStale
+                planStatusStale: demoPlanStatusStale,
+                planStatusOld: demoPlanStatusOld,
+                planStatusQuotaZero: demoPlanStatusQuotaZero
             )
         }
 
@@ -253,8 +270,16 @@ enum PanelPNGRenderer {
 /// GLM 三行刻意摆出三种探测形态：订阅+余额都有、只有余额、只有订阅。
 @MainActor
 enum DemoBalancesPreview {
-    static func inject(into store: SentinelStore, planStatusStale: Bool = false) {
+    static func inject(
+        into store: SentinelStore,
+        planStatusStale: Bool = false,
+        planStatusOld: Bool = false,
+        planStatusQuotaZero: Bool = false
+    ) {
         let checked = Date()
+        let planMode: DemoPlanStatusMode = planStatusQuotaZero
+            ? .quotaZero
+            : planStatusStale ? .stale : planStatusOld ? .old : .normal
         // 附加钥匙出错演示态的开关：出图 CLI 没有专属旗标，用环境变量最小切换
         // （CORTEX_SENTINEL_DEMO_PROXY_ERROR=1，只进离屏渲染）。
         let proxyErrored = ProcessInfo.processInfo.environment["CORTEX_SENTINEL_DEMO_PROXY_ERROR"] == "1"
@@ -306,8 +331,13 @@ enum DemoBalancesPreview {
                     key: "demo-key-pro",
                     label: "pro",
                     level: "pro",
-                    fiveHourWindow: glmWindow(total: 12000, used: 2400, resetIn: 3600 * 2),
-                    weeklyWindow: glmWindow(total: 60000, used: 3000, resetIn: 3600 * 96),
+                    // 额度用满演示（COR-9931 第 3 条）：5 小时窗与周窗都烧到 0 剩余。
+                    fiveHourWindow: planMode == .quotaZero
+                        ? glmWindow(total: 12000, used: 12000, resetIn: 3600 * 2)
+                        : glmWindow(total: 12000, used: 2400, resetIn: 3600 * 2),
+                    weeklyWindow: planMode == .quotaZero
+                        ? glmWindow(total: 60000, used: 60000, resetIn: 3600 * 96)
+                        : glmWindow(total: 60000, used: 3000, resetIn: 3600 * 96),
                     cashBalance: 86.4,
                     totalSpendAmount: 113.6,
                     checkedAt: checked,
@@ -486,7 +516,7 @@ enum DemoBalancesPreview {
             codeBuddy: codeBuddy,
             aio: aio,
             inputStatus: demoInputStatus(checked: checked),
-            glmPlanStatus: demoPlanStatus(checked: checked, stale: planStatusStale)
+            glmPlanStatus: demoPlanStatus(checked: checked, mode: planMode)
         )
     }
 
@@ -494,7 +524,7 @@ enum DemoBalancesPreview {
     /// lite 不配（看非套餐行原样）。指纹用假钥匙现算，套餐名中性词。
     private static func demoPlanStatus(
         checked: Date,
-        stale: Bool = false
+        mode: DemoPlanStatusMode = .normal
     ) -> CortexPlanStatusDisplayState? {
         func planObject(
             key: String,
@@ -535,7 +565,9 @@ enum DemoBalancesPreview {
             "schema": 1,
             "generated_at": ISO8601DateFormatter().string(from: checked),
             "free_window": [
-                "active": false,
+                // 额度用满那张图摆免费时段开：周额度用满时免费时段也接不了单，
+                // 卡里只报读数、不写「照派」。
+                "active": mode == .quotaZero,
                 "start": "23:00",
                 "end": "09:00",
                 "text_zh": "现在是免费时段（北京 23:00 到 09:00）",
@@ -545,7 +577,8 @@ enum DemoBalancesPreview {
                     key: "demo-key-pro",
                     label: "Sample 套餐",
                     running: 2,
-                    cooldownMinutes: nil,
+                    // 旧数那张图带冷却：不带冷却看不出「第三列不显示冷却到」。
+                    cooldownMinutes: mode == .old ? 30 : nil,
                     alsoKeys: ["demo-key-pro-proxy"],
                     // 套餐档案演示（COR-8595 T5）：只进悬停卡，行上不出，出图加
                     // --preview-hover-row 看卡。值全是合成样例；第二个执行者
@@ -575,15 +608,25 @@ enum DemoBalancesPreview {
         else {
             return nil
         }
-        if stale {
+        switch mode {
+        case .stale:
             // 上次成功后超过复用窗没读到:身份留着(套餐名/上限照显示),数值判过时。
             return CortexPlanStatusDisplayState(
                 payload: payload,
                 fetchedAt: checked.addingTimeInterval(-CortexPlanStatusDisplay.reuseWindow - 10 * 60),
                 failureText: "脚本清单缺一个文件"
             )
+        case .old:
+            // 取数失败、沿用 2 分钟前那份成功结果（30 分钟复用窗内）：数照用，
+            // 第三列按过时态处理不显示冷却，卡里写「旧数」。
+            return CortexPlanStatusDisplayState(
+                payload: payload,
+                fetchedAt: checked.addingTimeInterval(-2 * 60),
+                failureText: "脚本清单缺一个文件"
+            )
+        case .normal, .quotaZero:
+            return CortexPlanStatusDisplayState(payload: payload, fetchedAt: checked, failureText: nil)
         }
-        return CortexPlanStatusDisplayState(payload: payload, fetchedAt: checked, failureText: nil)
     }
 
     /// Input 探针演示历史：三个模型 60 格，绝大多数绿，零星橙/红。

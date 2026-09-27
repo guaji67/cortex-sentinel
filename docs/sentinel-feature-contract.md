@@ -60,6 +60,12 @@ COR-7600 三态投影（`PackagingProgressReader.read(stableURL:legacyRoot:)`）
 
 GLM 钥匙自动识别多认 ZCode CLI 的两份配置（`~/.zcode/cli/config.json` 与 `config.<名>.json`，字段 `provider.bigmodel.options.apiKey`）。`--glm-usage-json` 是给程序读的接口，`percent_used` 是已用口径、直接取 `percentUsed`；面板显示照旧剩余口径，别按本段把接口改反。守卫：`GLMUsageTests.testUsageJSONKeepsUsedPercentageNotRemaining`。
 
+## OpenCode Go 行（2026-09-27 定）
+
+额度接口是 opencode.ai 未进文档的 `GET /zen/go/v1/usage`（拿钥匙就能查、只查用量不发模型请求），接口逻辑全收在 `OpenCodeGoUsage.swift`，接口一变只改这个文件。钥匙三个来源依次取：env `OPENCODE_GO_API_KEY` → `OPENCODE_API_KEY` → 数据根 `.env` 同名行（XCTest 不碰真数据根），一把都没有整行不占位。数字一律剩余口径（100 − 已用），缺字段显示「不知道」、首轮没回来「等待查询」、失败保留上一轮数字并标过期，任何情况绝不出现 0%。刷新跟随官方额度同一套时机。行名固定「OpenCode Go」，不参与改名和拖拽排序。
+
+行首状态点：任一段 status 不是 ok 一律红（点名口径，压过通用档位），其余走余额区通用档位。悬停卡三行（5 小时窗 / 周窗 / 月窗），副标题带「重置为北京时间」，备注列只放「相对时间 · 钟点」——备注列放不下整句，「北京」两字挪进副标题后才不截（量宽实锤）。守卫：`OpenCodeGoUsageTests`（两种解析写法、status 非 ok、缺字段、钥匙三来源与 .env 解析、请求头 User-Agent + x-opencode-session、钥匙不落错误文本、重置文案、点档位）。
+
 ## 状态点与排序（2026-09-11 定）
 
 余额区 GLM / Command Code 行首的点 = 额度状态，综合判定取最严重一档：5 小时窗剩余 ≤20% 黄、≤1% 红；周窗剩余 ≤10% 黄、≤1% 红；余额类（现金/月余）<10 黄、<1 红；stale 至少黄；没数据灰。Cursor / AIO / 官方不参与这套。套餐行任一同账号附加钥匙有状况（出错/过时/读不到额度/跟套餐读数对不上）也至少黄：原本绿变黄，已黄或红保持。守卫：`CommandCodeUsageTests.testProviderDotSignalThresholds`、`CortexPlanStatusTests.testPlanRowDotTurnsYellowWhenAdditionalKeyHasProblem`。

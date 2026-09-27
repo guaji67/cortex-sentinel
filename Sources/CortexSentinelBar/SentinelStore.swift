@@ -43,6 +43,9 @@ final class SentinelStore {
     private(set) var telemetrySummary: CortexTelemetrySummaryDisplayState?
     /// Command Code 订阅额度（5h / 周 / 月）；每把 key 一行，跟随官方额度同一套刷新时机。
     private(set) var commandCodeUsage: CommandCodeUsageSnapshot = .empty
+    /// OpenCode Go 订阅额度（5h / 周 / 月剩余）；跟随官方额度同一套刷新时机。
+    /// nil = 没识别到 key，面板整行不占位。
+    private(set) var openCodeGoUsage: OpenCodeGoUsageSnapshot?
     /// CodeBuddy 积分余额（三个号并排一行）；跟随官方额度同一套刷新时机。
     /// 现价（payBase1000）跟账号同轮抓，读不到时保留上一轮的。
     private(set) var codeBuddyCredit: CodeBuddyCreditSnapshot = .empty
@@ -118,6 +121,8 @@ final class SentinelStore {
     @ObservationIgnored private var glmKeyEntries: [GLMKeyEntry] = []
     @ObservationIgnored private var commandCodeFetchInFlight = false
     @ObservationIgnored private var lastCommandCodeAttemptAt: Date?
+    @ObservationIgnored private var openCodeGoFetchInFlight = false
+    @ObservationIgnored private var lastOpenCodeGoAttemptAt: Date?
     /// 当前生效的 Command Code key（自动识别 ∪ 用户添加 − 用户删除）。
     @ObservationIgnored private var commandCodeKeyEntries: [CommandCodeKeyEntry] = []
     @ObservationIgnored private var codeBuddyFetchInFlight = false
@@ -382,6 +387,7 @@ final class SentinelStore {
             self?.refreshCursorUsage()
             self?.refreshGLMUsage()
             self?.refreshCommandCodeUsage()
+            self?.refreshOpenCodeGoUsage()
             self?.refreshCodeBuddyCredit()
             self?.refreshUpdateCheck()
         }
@@ -553,6 +559,7 @@ final class SentinelStore {
         refreshCursorUsage()
         refreshGLMUsage()
         refreshCommandCodeUsage()
+        refreshOpenCodeGoUsage()
         refreshCodeBuddyCredit()
         refreshUpdateCheck()
     }
@@ -828,6 +835,7 @@ final class SentinelStore {
         refreshCursorUsage(bypassMinimumInterval: true)
         refreshGLMUsage(bypassMinimumInterval: true)
         refreshCommandCodeUsage(bypassMinimumInterval: true)
+        refreshOpenCodeGoUsage(bypassMinimumInterval: true)
         refreshCodeBuddyCredit(bypassMinimumInterval: true)
     }
 
@@ -836,6 +844,7 @@ final class SentinelStore {
         refreshCursorUsage()
         refreshGLMUsage()
         refreshCommandCodeUsage()
+        refreshOpenCodeGoUsage()
         refreshCodeBuddyCredit()
     }
 
@@ -1369,6 +1378,60 @@ final class SentinelStore {
     private func commandCodeKeysDidChange() {
         reloadCommandCodeKeys()
         refreshCommandCodeUsage(bypassMinimumInterval: true)
+    }
+
+    /// OpenCode Go 额度跟着官方额度走同一套时机（启动 / 定时 / 开面板 / 手动点刷新）。
+    /// key 三个来源依次认（env → env → 数据根 .env），一把都没有就保持 nil，
+    /// 面板整行不占位；读到 key 但还没回来先上「等待查询」。
+    private func refreshOpenCodeGoUsage(bypassMinimumInterval: Bool = false) {
+        let timestamp = self.now()
+        guard !openCodeGoFetchInFlight else {
+            return
+        }
+        if !bypassMinimumInterval, let lastOpenCodeGoAttemptAt {
+            let minimumInterval: TimeInterval
+            if isPanelPresented {
+                minimumInterval = SentinelSettings.balanceRecheckInterval(defaults: defaults).rawValue
+            } else {
+                minimumInterval = OpenCodeGoUsageConstants.automaticRefreshInterval
+            }
+            guard timestamp.timeIntervalSince(lastOpenCodeGoAttemptAt) >= minimumInterval else {
+                return
+            }
+        }
+        lastOpenCodeGoAttemptAt = timestamp
+        guard let key = OpenCodeGoKeyDetector.detect(
+            environment: environment,
+            envFileURL: OpenCodeGoKeyDetector.defaultEnvFileURL(environment: environment)
+        ) else {
+            publishOpenCodeGoUsage(nil)
+            return
+        }
+        if openCodeGoUsage == nil {
+            publishOpenCodeGoUsage(.waiting)
+        }
+        openCodeGoFetchInFlight = true
+        let client = OpenCodeGoUsageClient()
+
+        Task { @MainActor [weak self] in
+            let fresh = await client.fetch(key: key, now: timestamp)
+            guard let self else {
+                return
+            }
+            self.openCodeGoFetchInFlight = false
+            self.publishOpenCodeGoUsage(
+                OpenCodeGoUsageSnapshot.merged(previous: self.openCodeGoUsage, fresh: fresh, now: self.now())
+            )
+        }
+    }
+
+    private func publishOpenCodeGoUsage(_ snapshot: OpenCodeGoUsageSnapshot?) {
+        scrollPublishGate.publish(surface: .officialUsage) { [weak self] in
+            guard let self, self.openCodeGoUsage != snapshot else {
+                return
+            }
+            self.openCodeGoUsage = snapshot
+        }
     }
 
     /// CodeBuddy 积分跟着官方额度走同一套时机（启动 / 定时 / 开面板 / 手动点刷新）。

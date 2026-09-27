@@ -1013,6 +1013,9 @@ struct SentinelBalancesSection: View {
             commandCodeEntryRows
                 .zIndex(branchesWithHoverCard.contains("cc") ? 1 : 0)
 
+            openCodeGoRow
+                .zIndex(branchesWithHoverCard.contains("opencodego") ? 1 : 0)
+
             glmUsageRows
                 .zIndex(branchesWithHoverCard.contains("glm") ? 1 : 0)
 
@@ -1311,6 +1314,161 @@ struct SentinelBalancesSection: View {
             branchID: "cc",
             previewRowMatch: self.rowMatchesPreviewSelection(displayName)
         ))
+    }
+
+    /// OpenCode Go 额度：行名固定「OpenCode Go」（单订阅，不参与改名/拖拽），
+    /// 三列 5h / 周 / 月剩余百分比（= 100 − 已用），横条与 CC 行同一套时间流逝口径。
+    /// 没识别到 key（store 为 nil）整行不占位；读不到显示「不知道」，绝不当 0%。
+    @ViewBuilder private var openCodeGoRow: some View {
+        if let snapshot = store.openCodeGoUsage {
+            let now = Date()
+            let rollingRemaining = snapshot.rolling?.remainingPercentage
+            let weeklyRemaining = snapshot.weekly?.remainingPercentage
+            let monthlyRemaining = snapshot.monthly?.remainingPercentage
+            HStack(alignment: .center, spacing: SentinelTheme.Spacing.sm) {
+                Circle()
+                    .fill(Self.openCodeGoDotSignal(snapshot: snapshot))
+                    .frame(
+                        width: SentinelTheme.Metrics.balanceDot,
+                        height: SentinelTheme.Metrics.balanceDot
+                    )
+                Text("OpenCode Go")
+                    .font(SentinelTheme.Fonts.balanceName)
+                    .foregroundStyle(SentinelTheme.Colors.foreground)
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                Spacer(minLength: SentinelTheme.Spacing.xs)
+                VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xxs) {
+                    if let failureText = snapshot.rowStatusText {
+                        Text(failureText)
+                            .font(SentinelTheme.Fonts.balanceMeta)
+                            .foregroundStyle(SentinelTheme.Colors.secondaryForeground)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                    } else {
+                        HStack(alignment: .top, spacing: SentinelTheme.Metrics.usageSegmentGap) {
+                            if let rollingRemaining {
+                                quotaSegmentWithBar(
+                                    label: "5h",
+                                    valueText: cursorUsageRemainingText(rollingRemaining),
+                                    valueColor: cursorUsageRemainingColor(rollingRemaining),
+                                    columnWidth: SentinelTheme.Metrics.usageColWidth1,
+                                    barFraction: Self.timeElapsedFraction(
+                                        resetAt: snapshot.rolling?.resetAt,
+                                        windowLength: 5 * 3600,
+                                        now: now
+                                    )
+                                )
+                            }
+                            if let weeklyRemaining {
+                                quotaSegmentWithBar(
+                                    label: "周",
+                                    valueText: cursorUsageRemainingText(weeklyRemaining),
+                                    valueColor: cursorUsageRemainingColor(weeklyRemaining),
+                                    columnWidth: SentinelTheme.Metrics.usageColWidth2,
+                                    barFraction: Self.timeElapsedFraction(
+                                        resetAt: snapshot.weekly?.resetAt,
+                                        windowLength: 7 * 24 * 3600,
+                                        now: now
+                                    )
+                                )
+                            }
+                            if let monthlyRemaining {
+                                quotaSegmentWithBar(
+                                    label: "月",
+                                    valueText: cursorUsageRemainingText(monthlyRemaining),
+                                    valueColor: cursorUsageRemainingColor(monthlyRemaining),
+                                    columnWidth: SentinelTheme.Metrics.usageColWidth3,
+                                    barFraction: Self.periodElapsedFraction(
+                                        end: snapshot.monthly?.resetAt,
+                                        start: nil,
+                                        now: now
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+                .frame(
+                    width: SentinelTheme.Metrics.usageBlockWidth,
+                    alignment: .leading
+                )
+            }
+            .frame(height: SentinelTheme.Metrics.usageRowHeight)
+            .contentShape(Rectangle())
+            .modifier(HoverDetailCard(
+                makeContent: { self.openCodeGoDetailContent(snapshot) },
+                branchID: "opencodego",
+                previewRowMatch: self.rowMatchesPreviewSelection("OpenCode Go")
+            ))
+            .accessibilityIdentifier("opencode-go-row")
+        }
+    }
+
+    /// OpenCode Go 状态点：status 不是 ok 一律红（WO 点名的口径）；
+    /// 其余照余额区通用档位（5h ≤20% 黄 ≤1% 红、周/月 ≤10% 黄 ≤1% 红，
+    /// stale 至少黄，没数据灰）。
+    static func openCodeGoDotSignal(snapshot: OpenCodeGoUsageSnapshot) -> Color {
+        if snapshot.statusNotOK {
+            return SentinelTheme.Colors.danger
+        }
+        return providerDotSignal(
+            fiveHourRemaining: snapshot.rolling?.remainingPercentage,
+            weeklyRemaining: snapshot.weekly?.remainingPercentage,
+            balanceAmount: snapshot.monthly?.remainingPercentage,
+            stale: snapshot.stale,
+            hasDisplayableNumber: snapshot.hasDisplayableNumber
+        )
+    }
+
+    /// 悬停详情：三段各一行（剩余 + 相对重置时间与北京钟点），
+    /// 状态非 ok / 抓取失败 / 数据过期走 alert。
+    private func openCodeGoDetailContent(_ snapshot: OpenCodeGoUsageSnapshot) -> BalanceHoverContent {
+        let now = Date()
+        var lines: [BalanceHoverLine] = []
+        let windows: [(String, OpenCodeGoWindow?, TimeInterval)] = [
+            ("5 小时窗", snapshot.rolling, 5 * 3600),
+            ("周窗", snapshot.weekly, 7 * 24 * 3600),
+            ("月窗", snapshot.monthly, 30 * 24 * 3600),
+        ]
+        for (name, window, windowLength) in windows {
+            guard let window else {
+                continue
+            }
+            let value = window.remainingPercentage.map {
+                "剩余 \(Int($0.rounded()))%"
+            } ?? OpenCodeGoUsageConstants.unknownText
+            lines.append(BalanceHoverLine(
+                label: name,
+                value: value,
+                // 备注列宽度有限（卡 312、标签 76），「北京」提进副标题，
+                // 这里只留相对时间与钟点，整句才不截。
+                note: window.resetAt.map { OpenCodeGoResetText.resetNote(resetAt: $0, now: now) },
+                noteColor: Self.resetNoteColor(
+                    Self.timeElapsedFraction(resetAt: window.resetAt, windowLength: windowLength, now: now)
+                )
+            ))
+        }
+        var alert: String?
+        var alertColor: Color?
+        if snapshot.statusNotOK {
+            alert = "状态 \(snapshot.nonOKStatuses.joined(separator: "、"))"
+            alertColor = SentinelTheme.Colors.danger
+        } else if let errorMessage = snapshot.errorMessage {
+            alert = errorMessage
+            alertColor = SentinelTheme.Colors.danger
+        } else if snapshot.stale {
+            alert = "数据已过期"
+            alertColor = SentinelTheme.Colors.warning
+        }
+        return BalanceHoverContent(
+            title: "OpenCode Go",
+            subtitle: "OpenCode Go 订阅 · 重置为北京时间",
+            lines: lines,
+            footer: snapshot.checkedAt.map { "\(SentinelTimeFormat.clockTime($0)) 更新" },
+            alert: alert,
+            alertColor: alertColor
+        )
     }
 
     /// 无任何可显示数字时的右侧文案：优先报错；接口通了但什么都没有显示未知。

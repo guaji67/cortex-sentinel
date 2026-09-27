@@ -135,6 +135,29 @@ final class V31PolishTests: XCTestCase {
         )
     }
 
+    /// 本机时区设成东京（Pro 实际就是东京），clockTime 也必须按北京时间出：
+    /// 同一张卡里重置时刻是北京时间，底部「更新」快一小时就是两种时区。
+    func testClockTimeStaysBeijingWhenDeviceTimeZoneIsTokyo() {
+        let previousDefault = NSTimeZone.default
+        defer { NSTimeZone.default = previousDefault }
+        NSTimeZone.default = TimeZone(identifier: "Asia/Tokyo")!
+
+        // 1_786_100_000：北京 18:53:20、东京 19:53:20，差一小时能断出来。
+        XCTAssertEqual(
+            SentinelTimeFormat.clockTime(Date(timeIntervalSince1970: 1_786_100_000)),
+            "18:53:20",
+            "钟点钉在 Asia/Shanghai，不跟本机时区走"
+        )
+        XCTAssertEqual(
+            SentinelTimeFormat.clockTime(
+                Date(timeIntervalSince1970: 1_786_100_000),
+                timeZone: TimeZone(identifier: "Asia/Tokyo")!
+            ),
+            "19:53:20",
+            "显式传时区仍然生效（给测试和特殊调用留的口）"
+        )
+    }
+
     // MARK: - 最近完成截断 8 条
 
     func testSplitRecentDisplayCapsAtEight() {

@@ -2066,7 +2066,8 @@ final class SentinelStore {
         codeBuddy: CodeBuddyCreditSnapshot? = nil,
         aio: AIOSnapshot? = nil,
         inputStatus: InputStatusSnapshot? = nil,
-        glmPlanStatus: CortexPlanStatusDisplayState? = nil
+        glmPlanStatus: CortexPlanStatusDisplayState? = nil,
+        lanMachines: [CortexTelemetrySummaryPayload.Machine]? = nil
     ) {
         if let official {
             setOfficialUsageIfChanged(official)
@@ -2085,6 +2086,9 @@ final class SentinelStore {
         }
         if let glmPlanStatus {
             self.glmPlanStatus = glmPlanStatus
+        }
+        if let lanMachines {
+            self.lanMachines = lanMachines
         }
         if let aio {
             apply(

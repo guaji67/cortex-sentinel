@@ -36,6 +36,12 @@ struct CortexTelemetrySummaryPayload: Decodable, Equatable, Sendable {
         let devSlots: DevSlots?
         let linesByModel: [String: Int]?
         let ts: String?
+        /// 这台在跑的哨兵版本（CFBundleShortVersionString），LAN 上报时盖进载荷；
+        /// KV 老数据与没升级的旧哨兵没这键 → nil，面板版本行写「没读到」。
+        let sentinelVersion: String?
+        /// 这台哨兵的构建号（CFBundleVersion）：正式版是日期（如 20260924），
+        /// 开发构建是 dev 或 git 短哈希，版本行靠它分「正式版号 / 开发版 <哈希>」。
+        let sentinelBuild: String?
 
         enum CodingKeys: String, CodingKey {
             case machine
@@ -48,6 +54,8 @@ struct CortexTelemetrySummaryPayload: Decodable, Equatable, Sendable {
             case devSlots = "dev_slots"
             case linesByModel = "lines_by_model"
             case ts
+            case sentinelVersion = "sentinel_version"
+            case sentinelBuild = "sentinel_build"
         }
 
         init(from decoder: Decoder) throws {
@@ -62,6 +70,8 @@ struct CortexTelemetrySummaryPayload: Decodable, Equatable, Sendable {
             devSlots = try container.decodeIfPresent(DevSlots.self, forKey: .devSlots)
             linesByModel = try container.decodeIfPresent([String: Int].self, forKey: .linesByModel)
             ts = try container.decodeIfPresent(String.self, forKey: .ts)
+            sentinelVersion = try container.decodeIfPresent(String.self, forKey: .sentinelVersion)
+            sentinelBuild = try container.decodeIfPresent(String.self, forKey: .sentinelBuild)
         }
     }
 
@@ -348,7 +358,9 @@ enum CortexTelemetrySummaryDisplay {
 
 // MARK: - 局域网直连（Falcon 09-18 令：同网直连优先，Multica KV 兜底）
 
-/// 给本机局域网 server 的 payload：跑 cortex collect 纯采样。
+/// 给本机局域网 server 的 payload：跑 cortex collect 采样，再盖上本机哨兵版本
+/// （CFBundleShortVersionString + CFBundleVersion）。三台的版本行就吃这把钥匙：
+/// 各台哨兵报自己，别的台只管显示，读不到写「没读到」。
 enum CortexLanCollect {
     static func data(
         environment: [String: String],
@@ -390,7 +402,23 @@ enum CortexLanCollect {
         guard run.exitCode == 0, !run.standardOutput.isEmpty else {
             return nil
         }
-        return run.standardOutput
+        return injectingSentinelVersion(into: run.standardOutput)
+    }
+
+    /// 在 collect 采样 JSON 上盖本机哨兵版本两键。顶层不是对象（脚本换了形状）
+    /// 就原样返回——宁可面板写「没读到」，不发半截数据。版本号读不到时按缺省盖，
+    /// 与设置窗版本行同源（SentinelUpdateVersion.current / currentBuild）。
+    static func injectingSentinelVersion(
+        into data: Data,
+        shortVersion: String = SentinelUpdateVersion.current,
+        bundleVersion: String = SentinelUpdateVersion.currentBuild
+    ) -> Data {
+        guard var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return data
+        }
+        object["sentinel_version"] = shortVersion
+        object["sentinel_build"] = bundleVersion
+        return (try? JSONSerialization.data(withJSONObject: object)) ?? data
     }
 }
 
@@ -425,5 +453,80 @@ extension CortexTelemetrySummaryDisplay {
             merged.append(machine)
         }
         return merged
+    }
+}
+
+// MARK: - 哨兵版本行（三台各自在跑的哨兵版本，Falcon 09-27 令）
+
+extension CortexTelemetrySummaryDisplay {
+    /// 面板一行「哨兵版本」：Pro / mini2 / M1Max 逐台列出。
+    /// 正式版显示号（0.1.52），开发版显示「开发版」或「开发版 <哈希>」，
+    /// 读不到的机器写「没读到」——不写 0、不猜。三台没全读到或读到的不一致
+    /// → emphasized（面板标黄），落后于最新正式版的机器在行尾点名。
+    /// 数据来源就是机器总览那条合并后的机器行，没有第二个数据源。
+    static func sentinelVersionRow(
+        _ machines: [CortexTelemetrySummaryPayload.Machine]
+    ) -> (text: String, emphasized: Bool)? {
+        guard !machines.isEmpty else {
+            return nil
+        }
+        let tokens = ["Pro", "mini2", "M1Max"]
+        var versionTexts: [String: String] = [:]
+        for token in tokens {
+            // 同一台可能 KV、LAN 各有一条：优先拿报了版本的那条。
+            let rows = machines.filter { machineToken(of: $0) == token }
+            if let reported = rows.first(where: { $0.sentinelVersion != nil }) {
+                versionTexts[token] = sentinelVersionText(reported)
+            }
+        }
+        let slots = tokens.map { token in
+            "\(token) \(versionTexts[token] ?? "没读到")"
+        }
+        // 落后：报出来的机器里，文案能被更新的一台压过（开发版文案压不过正式版号，
+        // 正式版号压得过开发版；两边都是不同哈希的开发版比不出，不点名只标黄）。
+        let lagging = tokens.compactMap { token -> String? in
+            guard let mine = versionTexts[token] else { return nil }
+            let hasNewerPeer = tokens.contains { other in
+                guard other != token, let theirs = versionTexts[other] else { return false }
+                return versionTextIsNewer(theirs, than: mine)
+            }
+            return hasNewerPeer ? token : nil
+        }
+        let allRead = versionTexts.count == tokens.count
+        let allSame = Set(versionTexts.values).count == 1
+        let emphasized = !(allRead && allSame)
+        var text = "哨兵版本 " + slots.joined(separator: " · ")
+        if !lagging.isEmpty {
+            text += "（\(lagging.joined(separator: "、")) 落后）"
+        }
+        return (text, emphasized)
+    }
+
+    /// 一台机器的版本文案：正式版给号，开发版给「开发版」（构建号是哈希时带短哈希）。
+    /// 开发版判定与更新器共用 SentinelAppVersion.isDevelopmentBuild；「开发版」
+    /// 三个字沿用设置窗的 versionDevLabel。
+    static func sentinelVersionText(_ machine: CortexTelemetrySummaryPayload.Machine) -> String {
+        let shortVersion = machine.sentinelVersion ?? ""
+        let build = machine.sentinelBuild ?? ""
+        if SentinelAppVersion.isDevelopmentBuild(shortVersion: shortVersion, bundleVersion: build) {
+            if build == SentinelAppVersion.devBundleVersion || build.isEmpty {
+                return SentinelSettingsCopy.versionDevLabel
+            }
+            return "\(SentinelSettingsCopy.versionDevLabel) \(SentinelAppVersion.shortenedGitHash(build))"
+        }
+        return shortVersion
+    }
+
+    /// 两条版本文案比新旧：同文案不算；都能解析号走严格比大小；只有一边能解析
+    /// 就是正式版更新（另一边是开发版文案）；两边都解析不了比不出，不算。
+    static func versionTextIsNewer(_ candidate: String, than current: String) -> Bool {
+        if candidate == current {
+            return false
+        }
+        if SentinelUpdateVersion.parse(candidate) != nil,
+           SentinelUpdateVersion.parse(current) != nil {
+            return SentinelUpdateVersion.isNewer(candidate, than: current)
+        }
+        return SentinelUpdateVersion.parse(candidate) != nil
     }
 }

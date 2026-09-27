@@ -51,6 +51,9 @@ final class PanelPNGRendererTests: XCTestCase {
                 "pack-stable-running",
                 "pack-stable-idle",
                 "pack-stable-error",
+                "version-row-aligned",
+                "version-row-behind",
+                "version-row-unread",
             ]
         )
         XCTAssertNil(PanelPreviewFixture(rawValue: "unknown"))

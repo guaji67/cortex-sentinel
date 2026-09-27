@@ -5,6 +5,8 @@ import XCTest
 
 /// 哨兵自更新：版本比较、release 解析、sha 校验、安装流程编排（假 shell 不连网）。
 final class SentinelUpdaterTests: XCTestCase {
+    /// 正式版的构建号形状（build-release.sh 盖日期，如 20260924）。
+    private static let releaseBuild = "20260924"
     // MARK: 版本比较
 
     func testVersionParseAndCompare() {
@@ -19,6 +21,34 @@ final class SentinelUpdaterTests: XCTestCase {
         XCTAssertFalse(SentinelUpdateVersion.isNewer("0.1.7", than: "0.1.7"))
         XCTAssertFalse(SentinelUpdateVersion.isNewer("0.1.6", than: "0.1.7"))
         XCTAssertFalse(SentinelUpdateVersion.isNewer("dev", than: "0.1.7"))
+    }
+
+    /// 开发版认更新：当前包是开发构建时，任何合法正式版都算更新
+    /// （手装的开发版下一轮检查就升回正式版）。
+    func testDevBuildTreatsAnyReleaseAsUpdate() {
+        // Pro 实况：老开发包 1.0/dev 对 0.1.53 要更新。
+        XCTAssertTrue(SentinelUpdateVersion.shouldUpdate("0.1.53", current: "1.0", build: "dev"))
+        // 开发包构建号是 git 短哈希的同理。
+        XCTAssertTrue(SentinelUpdateVersion.shouldUpdate("0.1.53", current: "1.0", build: "adaf73cbcd51"))
+        // build-app.sh 新口径：开发构建短版本盖 0.0.0。
+        XCTAssertTrue(SentinelUpdateVersion.shouldUpdate("0.1.53", current: "0.0.0", build: "dev"))
+        XCTAssertTrue(SentinelUpdateVersion.shouldUpdate("0.1.53", current: "0.0.0", build: "abcdef123456"))
+    }
+
+    /// 正式版之间照旧严格比大小；日期形状的构建号不许当开发版——
+    /// 当了的话停在最新版每小时都会重复报「有更新」。
+    func testReleaseBuildComparesStrictly() {
+        XCTAssertTrue(SentinelUpdateVersion.shouldUpdate("0.1.53", current: "0.1.52", build: "20260924"))
+        XCTAssertFalse(SentinelUpdateVersion.shouldUpdate("0.1.53", current: "0.1.53", build: "20260924"))
+        XCTAssertFalse(SentinelUpdateVersion.shouldUpdate("0.1.52", current: "0.1.52", build: "20260924"))
+        XCTAssertFalse(SentinelUpdateVersion.shouldUpdate("0.1.52", current: "0.1.53", build: "20260924"))
+    }
+
+    /// 解析不了的候选（非 x.y.z 的 tag）一律不更，哪怕当前是开发版。
+    func testUnparseableCandidateNeverUpdates() {
+        XCTAssertFalse(SentinelUpdateVersion.shouldUpdate("dev-20260911", current: "1.0", build: "dev"))
+        XCTAssertFalse(SentinelUpdateVersion.shouldUpdate("dev", current: "0.1.53", build: "20260924"))
+        XCTAssertFalse(SentinelUpdateVersion.shouldUpdate("0.1", current: "1.0", build: "dev"))
     }
 
     // MARK: release 解析
@@ -44,7 +74,7 @@ final class SentinelUpdaterTests: XCTestCase {
 
     func testParseReleasePicksDMGAndShaAssets() throws {
         let info = try XCTUnwrap(
-            SentinelUpdateChecker.parse(data: makeReleasePayload(tag: "v0.1.8"), currentVersion: "0.1.7")
+            SentinelUpdateChecker.parse(data: makeReleasePayload(tag: "v0.1.8"), currentVersion: "0.1.7", currentBuild: Self.releaseBuild)
         )
         XCTAssertEqual(info.version, "0.1.8")
         XCTAssertEqual(info.notes, "更新说明")
@@ -55,23 +85,23 @@ final class SentinelUpdaterTests: XCTestCase {
 
     func testParseReleaseReturnsNilWhenNotNewer() throws {
         XCTAssertNil(
-            try SentinelUpdateChecker.parse(data: makeReleasePayload(tag: "v0.1.7"), currentVersion: "0.1.7")
+            try SentinelUpdateChecker.parse(data: makeReleasePayload(tag: "v0.1.7"), currentVersion: "0.1.7", currentBuild: Self.releaseBuild)
         )
         XCTAssertNil(
-            try SentinelUpdateChecker.parse(data: makeReleasePayload(tag: "v0.1.6"), currentVersion: "0.1.7")
+            try SentinelUpdateChecker.parse(data: makeReleasePayload(tag: "v0.1.6"), currentVersion: "0.1.7", currentBuild: Self.releaseBuild)
         )
         // tag 解析不了的（比如 dev build）当没有更新。
         XCTAssertNil(
             try SentinelUpdateChecker.parse(
                 data: Data(#"{"tag_name": "dev-20260911", "assets": []}"#.utf8),
-                currentVersion: "0.1.7"
+                currentVersion: "0.1.7", currentBuild: Self.releaseBuild
             )
         )
     }
 
     func testParseReleaseThrowsOnGarbage() {
         XCTAssertThrowsError(
-            try SentinelUpdateChecker.parse(data: Data("<html>".utf8), currentVersion: "0.1.7")
+            try SentinelUpdateChecker.parse(data: Data("<html>".utf8), currentVersion: "0.1.7", currentBuild: Self.releaseBuild)
         ) { error in
             XCTAssertEqual(error as? SentinelUpdateError, .invalidResponse)
         }
@@ -81,7 +111,7 @@ final class SentinelUpdaterTests: XCTestCase {
         XCTAssertNil(
             try SentinelUpdateChecker.parse(
                 data: Data(#"{"tag_name": "v0.1.8", "assets": [{"name": "wrong.dmg", "browser_download_url": "https://x/wrong.dmg"}]}"#.utf8),
-                currentVersion: "0.1.7"
+                currentVersion: "0.1.7", currentBuild: Self.releaseBuild
             )
         )
     }

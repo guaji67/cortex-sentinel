@@ -1,5 +1,6 @@
 #!/bin/bash
-# 把源码编成 .app。仓里的 Resources/Info.plist 不改；只戳构建产物里的 CFBundleVersion。
+# 把源码编成 .app。仓里的 Resources/Info.plist 不改；只戳构建产物里的
+# CFBundleVersion 和 CFBundleShortVersionString。
 # 单独跑默认写 dev；出 DMG 时传入这次的 commit 短哈希。
 
 set -euo pipefail
@@ -28,6 +29,10 @@ mkdir -p "$contents_dir/MacOS" "$contents_dir/Resources"
 cp "$package_dir/.build/release/CortexSentinelBar" "$contents_dir/MacOS/CortexSentinelBar"
 cp "$package_dir/Resources/Info.plist" "$contents_dir/Info.plist"
 plutil -replace CFBundleVersion -string "$bundle_version" "$contents_dir/Info.plist"
+# 开发构建短版本固定盖 0.0.0（仓里模板是 1.0，留着更新器没法把它跟正式版区分开）。
+# 面板照旧显示「开发版」（看 CFBundleVersion，不看这里）；正式版短版本由
+# build-release.sh 盖，不走本脚本。
+plutil -replace CFBundleShortVersionString -string "0.0.0" "$contents_dir/Info.plist"
 cp "$package_dir/Resources/AppIcon.icns" "$contents_dir/Resources/AppIcon.icns"
 cp "$package_dir/scripts/sentinel-ctl.sh" "$contents_dir/Resources/sentinel-ctl.sh"
 chmod 0755 "$contents_dir/Resources/sentinel-ctl.sh"

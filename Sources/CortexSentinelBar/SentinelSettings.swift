@@ -93,18 +93,38 @@ enum SentinelAppVersion {
 
     /// 出包写入的是 12 位短哈希；设置窗只显示 7 位。非哈希版本号原样留下。
     static func shortenedGitHash(_ bundleVersion: String) -> String {
-        guard bundleVersion.count > gitHashDisplayLength else {
+        guard isGitHashShaped(bundleVersion) else {
             return bundleVersion
         }
-        let isGitHash = bundleVersion.unicodeScalars.allSatisfy { scalar in
+        return String(bundleVersion.prefix(gitHashDisplayLength))
+    }
+
+    /// 构建号长得像 git 短哈希：纯 hex、长度到短哈希级。显示与开发版判定共用同一把尺。
+    static func isGitHashShaped(_ bundleVersion: String) -> Bool {
+        guard bundleVersion.count >= gitHashDisplayLength else {
+            return false
+        }
+        return bundleVersion.unicodeScalars.allSatisfy { scalar in
             (scalar.value >= 0x30 && scalar.value <= 0x39)
                 || (scalar.value >= 0x61 && scalar.value <= 0x66)
                 || (scalar.value >= 0x41 && scalar.value <= 0x46)
         }
-        guard isGitHash else {
-            return bundleVersion
+    }
+
+    /// 当前包是不是开发构建（更新器「认开发版」与面板版本行共用这一个判定）。
+    /// 先看短版本：正式版盖的是实打实的 x.y.z（build-release.sh），0.0.0
+    /// （build-app.sh 给开发构建盖的占位）和解析不了的老包 1.0 才是开发候选；
+    /// 再看构建号：`dev` 常量或 git 短哈希形状。两关都过才算开发构建——
+    /// 正式版的 CFBundleVersion 是日期（如 20260924），纯 hex 也长得像哈希，
+    /// 只看构建号会把正式版当开发版，停在最新版时会反复报「有更新」。
+    static func isDevelopmentBuild(shortVersion: String, bundleVersion: String) -> Bool {
+        if let parsed = SentinelUpdateVersion.parse(shortVersion) {
+            let isReleaseShapedShort = parsed != (0, 0, 0)
+            if isReleaseShapedShort {
+                return false
+            }
         }
-        return String(bundleVersion.prefix(gitHashDisplayLength))
+        return bundleVersion == devBundleVersion || isGitHashShaped(bundleVersion)
     }
 
     static func displayLine(bundle: Bundle = .main) -> String {

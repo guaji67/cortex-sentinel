@@ -1788,6 +1788,18 @@ struct SentinelBalancesSection: View {
                     machineCard(machine, tasksByMachine: payload?.multica?.tasksByMachine ?? [:],
                                 tasksByAgent: payload?.multica?.tasksByAgent ?? [])
                 }
+                // 哨兵版本行（Falcon 09-27 令）：三台版本不一致或读不全 → 标黄。
+                if let versionRow = CortexTelemetrySummaryDisplay.sentinelVersionRow(machines) {
+                    Text(versionRow.text)
+                        .font(SentinelTheme.Fonts.balanceMeta)
+                        .foregroundStyle(
+                            versionRow.emphasized
+                                ? SentinelTheme.Colors.warning
+                                : SentinelTheme.Colors.secondaryForeground
+                        )
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("sentinel-version-row")
+                }
             }
         } else if let state = store.telemetrySummary {
             let rows = CortexTelemetrySummaryDisplay.rows(state, now: Date())

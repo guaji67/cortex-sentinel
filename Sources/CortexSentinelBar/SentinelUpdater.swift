@@ -114,6 +114,20 @@ enum SentinelUpdateVersion {
         }
         return candidateVersion.patch > currentVersion.patch
     }
+
+    /// 算不算更新（候选 tag、当前短版本、当前构建号三件套）：
+    /// 候选解析不了的不更；当前包是开发构建（判定在 SentinelAppVersion，
+    /// 与设置窗版本行同一把尺）时任何一个合法正式版都算更新——开发版装上后
+    /// 下一轮检查就升回正式版；正式版之间照旧严格比大小。
+    static func shouldUpdate(_ candidate: String, current: String, build: String) -> Bool {
+        guard parse(candidate) != nil else {
+            return false
+        }
+        if SentinelAppVersion.isDevelopmentBuild(shortVersion: current, bundleVersion: build) {
+            return true
+        }
+        return isNewer(candidate, than: current)
+    }
 }
 
 // MARK: - 网络层
@@ -128,15 +142,18 @@ extension URLSession: SentinelUpdateLoading {}
 struct SentinelUpdateChecker: Sendable {
     private let endpoint: URL
     private let currentVersion: String
+    private let currentBuild: String
     private let loader: any SentinelUpdateLoading
 
     init(
         endpoint: URL = SentinelUpdateConstants.latestReleaseURL,
         currentVersion: String = SentinelUpdateVersion.current,
+        currentBuild: String = SentinelUpdateVersion.currentBuild,
         loader: any SentinelUpdateLoading = URLSession.shared
     ) {
         self.endpoint = endpoint
         self.currentVersion = currentVersion
+        self.currentBuild = currentBuild
         self.loader = loader
     }
 
@@ -156,15 +173,15 @@ struct SentinelUpdateChecker: Sendable {
         guard (200..<300).contains(httpResponse.statusCode) else {
             throw SentinelUpdateError.invalidStatus
         }
-        return try Self.parse(data: data, currentVersion: currentVersion)
+        return try Self.parse(data: data, currentVersion: currentVersion, currentBuild: currentBuild)
     }
 
-    static func parse(data: Data, currentVersion: String) throws -> SentinelUpdateInfo? {
+    static func parse(data: Data, currentVersion: String, currentBuild: String) throws -> SentinelUpdateInfo? {
         guard let release = try? JSONDecoder().decode(GitHubRelease.self, from: data) else {
             throw SentinelUpdateError.invalidResponse
         }
         guard let version = SentinelUpdateVersion.normalizedVersion(from: release.tagName),
-              SentinelUpdateVersion.isNewer(release.tagName, than: currentVersion),
+              SentinelUpdateVersion.shouldUpdate(release.tagName, current: currentVersion, build: currentBuild),
               let asset = release.asset(named: SentinelUpdateConstants.dmgAssetName(version: version))
         else {
             return nil
@@ -209,6 +226,12 @@ struct GitHubRelease: Decodable, Sendable {
 extension SentinelUpdateVersion {
     static var current: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
+    }
+
+    /// 当前包构建号（CFBundleVersion）。缺了按开发版处理，与设置窗版本行同口径。
+    static var currentBuild: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+            ?? SentinelAppVersion.devBundleVersion
     }
 }
 

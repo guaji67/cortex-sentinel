@@ -111,6 +111,16 @@ final class SentinelSettingsTests: XCTestCase {
             SentinelAppVersion.displayLine(shortVersion: "1.0", bundleVersion: "dev"),
             "版本 1.0（开发版）"
         )
+        // 开发版判定（更新器「认开发版」与面板哨兵版本行共用）：
+        // 短版本是正式号就不是开发版，哪怕构建号是日期形状的纯 hex；
+        // 短版本是 0.0.0 / 老包 1.0 这种占位，加上 dev 或 git 短哈希构建号才算开发版。
+        XCTAssertTrue(SentinelAppVersion.isDevelopmentBuild(shortVersion: "1.0", bundleVersion: "dev"))
+        XCTAssertTrue(SentinelAppVersion.isDevelopmentBuild(shortVersion: "1.0", bundleVersion: "adaf73cbcd51"))
+        XCTAssertTrue(SentinelAppVersion.isDevelopmentBuild(shortVersion: "1.0", bundleVersion: "ede0793"))
+        XCTAssertTrue(SentinelAppVersion.isDevelopmentBuild(shortVersion: "0.0.0", bundleVersion: "dev"))
+        XCTAssertTrue(SentinelAppVersion.isDevelopmentBuild(shortVersion: "0.0.0", bundleVersion: "abcdef123456"))
+        XCTAssertFalse(SentinelAppVersion.isDevelopmentBuild(shortVersion: "0.1.52", bundleVersion: "20260924"))
+        XCTAssertFalse(SentinelAppVersion.isDevelopmentBuild(shortVersion: "0.1.53", bundleVersion: "adaf73cbcd51"))
         XCTAssertEqual(SettingsPreviewFixture.watchLocked.rawValue, "watch-locked")
     }
 

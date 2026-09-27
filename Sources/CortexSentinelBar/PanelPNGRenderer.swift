@@ -24,6 +24,10 @@ enum PanelPreviewFixture: String, CaseIterable {
     case packStableRunning = "pack-stable-running"
     case packStableIdle = "pack-stable-idle"
     case packStableError = "pack-stable-error"
+    /// 哨兵版本行三态（COR-9755）：三台一致 / 一台落后 / 一台没读到。
+    case versionRowAligned = "version-row-aligned"
+    case versionRowBehind = "version-row-behind"
+    case versionRowUnread = "version-row-unread"
 }
 
 enum PanelPNGRenderError: Error {
@@ -120,11 +124,60 @@ enum PanelPreviewFactory {
         )
         await store.refreshStatuses()
         await store.refreshAIO(force: true, includeUsage: false)
+        switch fixture {
+        case .versionRowAligned, .versionRowBehind, .versionRowUnread:
+            store.injectPreviewData(
+                lanMachines: try previewSentinelVersionMachines(fixture: fixture)
+            )
+        default:
+            break
+        }
         return PanelPreviewSession(
             store: store,
             root: root,
             defaultsSuite: suite,
             defaults: defaults
+        )
+    }
+
+    /// 哨兵版本行三态出图的机器行：三台都在线，差别只在版本键
+    /// （走 LAN 上报同款载荷形状，解码进 Machine）。
+    private static func previewSentinelVersionMachines(
+        fixture: PanelPreviewFixture
+    ) throws -> [CortexTelemetrySummaryPayload.Machine] {
+        let versions: (pro: String, mini: String, m1max: String)
+        switch fixture {
+        case .versionRowBehind:
+            // 一台落后：Pro / mini2 已到 0.1.53，M1Max 还在 0.1.52。
+            versions = ("0.1.53", "0.1.53", "0.1.52")
+        case .versionRowUnread:
+            // 一台没读到：M1Max 的载荷还没带版本键（旧哨兵）。
+            return try decodeMachines(
+                """
+                [{"machine":"pro","cpu_pct":12.0,"mem_used_pct":41.0,"sentinel_version":"0.1.52","sentinel_build":"20260924"},
+                 {"machine":"mini2","cpu_pct":8.0,"mem_used_pct":33.0,"sentinel_version":"0.1.52","sentinel_build":"20260924"},
+                 {"machine":"m1max","cpu_pct":15.0,"mem_used_pct":52.0}]
+                """
+            )
+        default:
+            // 三台一致。
+            versions = ("0.1.52", "0.1.52", "0.1.52")
+        }
+        return try decodeMachines(
+            """
+            [{"machine":"pro","cpu_pct":12.0,"mem_used_pct":41.0,"sentinel_version":"\(versions.pro)","sentinel_build":"20260924"},
+             {"machine":"mini2","cpu_pct":8.0,"mem_used_pct":33.0,"sentinel_version":"\(versions.mini)","sentinel_build":"20260924"},
+             {"machine":"m1max","cpu_pct":15.0,"mem_used_pct":52.0,"sentinel_version":"\(versions.m1max)","sentinel_build":"20260924"}]
+            """
+        )
+    }
+
+    private static func decodeMachines(
+        _ json: String
+    ) throws -> [CortexTelemetrySummaryPayload.Machine] {
+        try JSONDecoder().decode(
+            [CortexTelemetrySummaryPayload.Machine].self,
+            from: Data(json.utf8)
         )
     }
 }
@@ -830,6 +883,17 @@ private enum PanelPreviewLayout {
             try writeHealthyBackgroundJobs(into: root, generatedAt: now)
         case .packaging, .packagingDeadPID, .packagingPIDReuse, .packagingStale,
              .packStableRunning, .packStableIdle, .packStableError:
+            try writeChannel(
+                into: root,
+                generatedAt: now,
+                grok: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0),
+                codex: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0),
+                codebuddy: ChannelJSON(status: "alive", evidence: "最近一次派工正常终态 done", running: 0)
+            )
+            try writeHealthyBackgroundJobs(into: root, generatedAt: now)
+        case .versionRowAligned, .versionRowBehind, .versionRowUnread:
+            // 哨兵版本行三态：底座跟 idle 一样（频道 + 后台任务），
+            // 机器行由 makeSession 按 fixture 注进 lanMachines。
             try writeChannel(
                 into: root,
                 generatedAt: now,

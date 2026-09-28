@@ -33,7 +33,7 @@ final class EmptyDiagnosticSectionTests: XCTestCase {
             ),
             InputStatusDisplayProbe(
                 probe: InputStatusProbe(
-                    model: "gpt-5.6-terra",
+                    model: "gpt-5.6-sol",
                     uptimePercentage: nil,
                     isOK: nil,
                     latencyMilliseconds: nil
@@ -42,7 +42,7 @@ final class EmptyDiagnosticSectionTests: XCTestCase {
             ),
             InputStatusDisplayProbe(
                 probe: InputStatusProbe(
-                    model: "gpt-5.5",
+                    model: "gpt-5.6-luna",
                     uptimePercentage: nil,
                     isOK: nil,
                     latencyMilliseconds: nil

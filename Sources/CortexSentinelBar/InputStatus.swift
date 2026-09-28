@@ -1,7 +1,10 @@
 import Foundation
 
 enum InputStatusConstants {
-    static let monitoredModels = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5"]
+    /// 监测名单（Falcon 09-28 令）：GPT 6 系列——Astra、6SOL、6 LUNA；
+    /// 旧三样（gpt-5.6-sol 之外的 terra / 5.5）全部下线。顺序即面板与
+    /// 状态栏的显示顺序，标识必须跟 status.input.im 接口的 model 字段一致。
+    static let monitoredModels = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-luna"]
     static let defaultEndpoint = URL(string: "https://status.input.im/api/status")!
     static let refreshInterval: TimeInterval = 60
     static let backgroundRefreshInterval: TimeInterval = 2 * 60

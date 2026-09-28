@@ -631,7 +631,7 @@ enum DemoBalancesPreview {
 
     /// Input 探针演示历史：三个模型 60 格，绝大多数绿，零星橙/红。
     private static func demoInputStatus(checked: Date) -> InputStatusSnapshot {
-        let models = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5"]
+        let models = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-luna"]
         var probes: [InputStatusProbe] = []
         for (index, model) in models.enumerated() {
             var history: [InputStatusHistoryPoint] = []

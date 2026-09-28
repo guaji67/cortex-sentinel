@@ -6,6 +6,12 @@ final class InputStatusTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_784_824_800)
 
     func testDisplayProbesMapModelsInFixedMenuBarOrder() throws {
+        // 名单本体也锁住（Falcon 09-28 令）：GPT 6 系列 Astra / 6SOL / 6 LUNA，
+        // 旧三样不再出现在监测名单里。
+        XCTAssertEqual(
+            InputStatusConstants.monitoredModels,
+            ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-luna"]
+        )
         let snapshot = try XCTUnwrap(
             InputStatusClient.decodeSnapshot(
                 Data(
@@ -14,14 +20,14 @@ final class InputStatusTests: XCTestCase {
                       "all_ok": false,
                       "services": [
                         {
-                          "model": "gpt-5.5",
-                          "uptime_pct": "99.8",
-                          "last": {"ok": true, "latency_ms": "88"}
-                        },
-                        {
                           "model": "gpt-5.6-sol",
                           "uptime_pct": 99.9,
                           "last": {"ok": false, "latency_ms": 120}
+                        },
+                        {
+                          "model": "gpt-6-astra",
+                          "uptime_pct": "99.8",
+                          "last": {"ok": true, "latency_ms": "88"}
                         }
                       ]
                     }
@@ -34,9 +40,10 @@ final class InputStatusTests: XCTestCase {
         let probes = snapshot.displayProbes(now: now)
 
         XCTAssertEqual(probes.map(\.probe.model), InputStatusConstants.monitoredModels)
-        XCTAssertEqual(probes.map(\.state), [.disconnected, .unknown, .connected])
-        XCTAssertEqual(probes[0].probe.latencyMilliseconds, 120)
-        XCTAssertEqual(probes[2].probe.uptimePercentage, 99.8)
+        XCTAssertEqual(probes.map(\.state), [.connected, .disconnected, .unknown])
+        XCTAssertEqual(probes[0].probe.latencyMilliseconds, 88)
+        XCTAssertEqual(probes[1].probe.latencyMilliseconds, 120)
+        XCTAssertEqual(probes[0].probe.uptimePercentage, 99.8)
         XCTAssertTrue(snapshot.hasWarning(now: now))
     }
 
@@ -48,9 +55,9 @@ final class InputStatusTests: XCTestCase {
                     {
                       "all_ok": true,
                       "services": [
+                        {"model": "gpt-6-astra", "last": {"ok": true}},
                         {"model": "gpt-5.6-sol", "last": {"ok": true}},
-                        {"model": "gpt-5.6-terra", "last": {"ok": true}},
-                        {"model": "gpt-5.5", "last": {"ok": true}}
+                        {"model": "gpt-5.6-luna", "last": {"ok": true}}
                       ]
                     }
                     """.utf8
@@ -134,7 +141,7 @@ final class InputStatusTests: XCTestCase {
 
         // 正常低延迟仍为绿
         let okProbe = InputStatusProbe(
-            model: "gpt-5.5",
+            model: "gpt-5.6-luna",
             uptimePercentage: 99,
             isOK: true,
             latencyMilliseconds: 400,
@@ -160,7 +167,7 @@ final class InputStatusTests: XCTestCase {
                     latencyMilliseconds: 80
                 ),
                 InputStatusProbe(
-                    model: "gpt-5.5",
+                    model: "gpt-6-astra",
                     uptimePercentage: 99.8,
                     isOK: false,
                     latencyMilliseconds: 120

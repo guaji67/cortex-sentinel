@@ -122,6 +122,15 @@ final class SentinelUpdateSwapScriptTests: XCTestCase {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
         process.arguments = ["-c", script]
+        // 照开机任务的环境跑：launchd 只给 PATH / HOME / USER / TMPDIR，不给 LANG / LC_*。
+        // 继承测试进程的语言环境会掩盖 ps 在 C 语言环境下把路径里的中文转义成 M-e… 的问题。
+        let inherited = ProcessInfo.processInfo.environment
+        process.environment = [
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "HOME": inherited["HOME"] ?? NSHomeDirectory(),
+            "USER": inherited["USER"] ?? NSUserName(),
+            "TMPDIR": inherited["TMPDIR"] ?? NSTemporaryDirectory(),
+        ]
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe

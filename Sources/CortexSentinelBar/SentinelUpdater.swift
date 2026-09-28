@@ -400,6 +400,9 @@ struct SentinelUpdateInstaller: Sendable {
         let previousPath = previousBackupPath(appsDirectory: appsDirectory)
         let expectedBinaryPath = expectedExecutablePath(appsDirectory: appsDirectory)
         return """
+        # launchd 不给 LANG / LC_*：C 语言环境下 ps 会把路径里的中文转义成 M-e…，
+        # 跟 EXPECTED_BIN 永远比不上，发起实例就停不掉。整段脚本钉 UTF-8。
+        export LC_ALL=en_US.UTF-8
         log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
         APP='\(appPath)'
         INCOMING='\(incomingPath)'

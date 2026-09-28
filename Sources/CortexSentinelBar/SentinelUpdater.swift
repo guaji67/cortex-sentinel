@@ -19,6 +19,8 @@ enum SentinelUpdateConstants {
     /// DMG 几 MB 到十几 MB，弱网下放宽。
     static let downloadTimeout: TimeInterval = 15 * 60
     static let versionTagPrefix = "v"
+    /// 安装位所在目录：换装的暂存、旧版挪存、正式位都在这同一卷上，rename 才原子。
+    static let applicationsDirectory = "/Applications"
     /// 资产命名与 build-release.sh 产物一致（GitHub 资产名用 ASCII，避开中文文件名的各种坑）。
     static func dmgAssetName(version: String) -> String { "Cortex.-\(version).dmg" }
     static func shaAssetName(version: String) -> String { "Cortex.-\(version).dmg.sha256" }
@@ -341,27 +343,225 @@ struct SentinelUpdateInstaller: Sendable {
         handedOff = try handOffToLaunchdInstaller(mountPoint: mountPoint, appPath: appPath)
     }
 
+    // MARK: - 换装脚本
+
+    /// 换装脚本调用的外部命令。测试注入替身：false/true 当必败/必成，
+    /// mv 包一层让第二个换名失败，launchctl 用 stub 回固定 pid。
+    struct SwapScriptTools: Sendable {
+        var ditto = "/usr/bin/ditto"
+        var codesign = "/usr/bin/codesign"
+        var spctl = "/usr/sbin/spctl"
+        var mv = "/bin/mv"
+        var launchctl = "/bin/launchctl"
+    }
+
+    /// 同卷暂存路径，每次换装开头先清掉上次的残留。
+    static func incomingStagingPath(appsDirectory: String) -> String {
+        appsDirectory + "/.Cortex哨兵.app.incoming"
+    }
+
+    /// 旧版挪存路径：换名时旧版先挪到这儿，新版起来才删，留着兜底回滚。
+    static func previousBackupPath(appsDirectory: String) -> String {
+        appsDirectory + "/.Cortex哨兵.app.previous"
+    }
+
+    /// 安装位可执行文件路径：停发起实例前先核它的可执行文件是不是这里，
+    /// 不是就不动它（pid 可能被复用，杀错人比停不掉更糟）。
+    static func expectedExecutablePath(appsDirectory: String) -> String {
+        appsDirectory + "/Cortex哨兵.app/Contents/MacOS/CortexSentinelBar"
+    }
+
+    /// 生成换装脚本。路径、命令、超时全部可注入，单测拿临时目录代替 /Applications 真跑。
+    ///
+    /// 流程：卸主任务 → 清上次残留 → 停发起实例（bootout 只停开机任务名下的，
+    /// 停不到的老实例按 pid 补刀：核可执行文件路径是安装位才发 TERM，超时不退再
+    /// KILL；路径不对就不动它、记一行）→ ditto 暂存 → codesign + spctl 验签
+    /// （不过删暂存、留旧版、拉回主任务、exit 非零）→ 旧版 mv 到 .previous、
+    /// 暂存 mv 上正式位（同卷 rename，原子；第二个 mv 失败把 .previous 挪回来）
+    /// → 拉主任务 → 核新版 pid 已换且在开机任务名下（不符记日志、.previous 留着）
+    /// → 删 .previous。每步 echo，launchd 的 StandardOutPath 把 stdout 落进
+    /// update-job.log。
+    static func makeSwapScript(
+        appsDirectory: String,
+        newAppPath: String,
+        mountPoint: String,
+        mainJobPlistPath: String,
+        updateJobPlistPath: String,
+        mainJobLabel: String,
+        updateJobLabel: String,
+        uid: UInt32,
+        initiatingPid: Int32,
+        tools: SwapScriptTools = SwapScriptTools(),
+        stopTimeoutSeconds: Int = 15,
+        postCheckTimeoutSeconds: Int = 15
+    ) -> String {
+        let appPath = appsDirectory + "/Cortex哨兵.app"
+        let incomingPath = incomingStagingPath(appsDirectory: appsDirectory)
+        let previousPath = previousBackupPath(appsDirectory: appsDirectory)
+        let expectedBinaryPath = expectedExecutablePath(appsDirectory: appsDirectory)
+        return """
+        log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
+        APP='\(appPath)'
+        INCOMING='\(incomingPath)'
+        PREVIOUS='\(previousPath)'
+        EXPECTED_BIN='\(expectedBinaryPath)'
+        INIT_PID=\(initiatingPid)
+
+        start_main() {
+          if [ -f '\(mainJobPlistPath)' ]; then
+            \(tools.launchctl) bootstrap gui/\(uid) '\(mainJobPlistPath)' >/dev/null 2>&1 || true
+            log "main job bootstrapped from plist"
+          else
+            /usr/bin/open '\(appPath)' >/dev/null 2>&1 || true
+            log "app opened directly, no main job plist"
+          fi
+        }
+
+        finish() {
+          /usr/bin/hdiutil detach '\(mountPoint)' >/dev/null 2>&1 || true
+          rm -f '\(updateJobPlistPath)' >/dev/null 2>&1 || true
+          \(tools.launchctl) bootout gui/\(uid)/\(updateJobLabel) >/dev/null 2>&1 || true
+          exit "$1"
+        }
+
+        stop_initiating_instance() {
+          kill -TERM "$INIT_PID" 2>/dev/null || true
+          waited=0
+          while [ "$waited" -lt \(stopTimeoutSeconds) ]; do
+            st="$(ps -o stat= -p "$INIT_PID" 2>/dev/null)"
+            if [ -z "$st" ] || case "$st" in Z*) true ;; *) false ;; esac; then
+              return 0
+            fi
+            sleep 1
+            waited=$((waited + 1))
+          done
+          kill -KILL "$INIT_PID" 2>/dev/null || true
+        }
+
+        log "step1 bootout main job \(mainJobLabel)"
+        \(tools.launchctl) bootout gui/\(uid)/\(mainJobLabel) >/dev/null 2>&1 || true
+
+        rm -rf "$INCOMING" "$PREVIOUS" 2>/dev/null || log "step2 leftover cleanup failed, continue anyway"
+        log "step2 leftover staging and previous cleared"
+
+        if kill -0 "$INIT_PID" 2>/dev/null; then
+          RUNNING="$(ps -p "$INIT_PID" -o comm= 2>/dev/null)"
+          if [ -z "$RUNNING" ]; then
+            log "step3 initiating pid $INIT_PID gone between checks"
+          elif [ "$RUNNING" = "$EXPECTED_BIN" ]; then
+            log "step3 stopping initiating instance pid=$INIT_PID from $RUNNING"
+            stop_initiating_instance
+            log "step3 initiating instance stopped"
+          else
+            log "step3 initiating pid $INIT_PID runs from '$RUNNING' not the installed app, leave it alone"
+          fi
+        else
+          log "step3 initiating pid $INIT_PID already stopped by main job bootout"
+        fi
+
+        \(tools.ditto) '\(newAppPath)' "$INCOMING"
+        rc=$?
+        if [ "$rc" -ne 0 ]; then
+          log "step4 ditto staging failed rc=$rc, keep current version"
+          rm -rf "$INCOMING" 2>/dev/null || true
+          start_main
+          finish "$rc"
+        fi
+        log "step4 new app staged at $INCOMING"
+
+        \(tools.codesign) --verify --deep --strict "$INCOMING"
+        rc=$?
+        if [ "$rc" -ne 0 ]; then
+          log "step5 codesign verify failed rc=$rc, keep current version"
+          rm -rf "$INCOMING" 2>/dev/null || true
+          start_main
+          finish "$rc"
+        fi
+        \(tools.spctl) -a -t exec "$INCOMING"
+        rc=$?
+        if [ "$rc" -ne 0 ]; then
+          log "step5 spctl rejected staged app rc=$rc, keep current version"
+          rm -rf "$INCOMING" 2>/dev/null || true
+          start_main
+          finish "$rc"
+        fi
+        log "step5 staged app passed codesign and spctl"
+
+        if [ -d "$APP" ]; then
+          \(tools.mv) "$APP" "$PREVIOUS" || {
+            log "step6 could not move old app aside, keep current version"
+            start_main
+            finish 1
+          }
+          log "step6 old app moved to $PREVIOUS"
+        fi
+        \(tools.mv) "$INCOMING" "$APP"
+        rc=$?
+        if [ "$rc" -ne 0 ]; then
+          log "step6 rename staged app into place failed rc=$rc, rolling back"
+          rm -rf "$INCOMING" 2>/dev/null || true
+          if [ -d "$PREVIOUS" ]; then
+            if \(tools.mv) "$PREVIOUS" "$APP"; then
+              log "step6 old app restored from previous"
+            else
+              log "step6 FAILED to restore old app from previous"
+            fi
+          fi
+          start_main
+          finish 1
+        fi
+        log "step6 staged app moved into place by atomic rename"
+
+        start_main
+        log "step7 main job started with new version"
+
+        new_pid=""
+        waited=0
+        while [ "$waited" -lt \(postCheckTimeoutSeconds) ]; do
+          if [ -f '\(mainJobPlistPath)' ]; then
+            new_pid="$(
+              \(tools.launchctl) print gui/\(uid)/\(mainJobLabel) 2>/dev/null |
+                grep -E '^[[:space:]]*pid = ' | head -1 | grep -oE '[0-9]+' | head -1
+            )"
+          else
+            new_pid="$(/usr/bin/pgrep -f "$EXPECTED_BIN" 2>/dev/null | head -1)"
+          fi
+          if [ -n "$new_pid" ]; then
+            break
+          fi
+          sleep 1
+          waited=$((waited + 1))
+        done
+        if [ -n "$new_pid" ] && [ "$new_pid" != "$INIT_PID" ]; then
+          log "step8 postcheck ok: new pid=$new_pid under main job, old pid was $INIT_PID"
+          rm -rf "$PREVIOUS" 2>/dev/null || true
+          log "step9 previous backup removed"
+        else
+          log "step8 postcheck FAILED: new_pid='$new_pid' old_pid=$INIT_PID, keeping previous backup for rollback"
+        fi
+
+        finish 0
+        """
+    }
+
     /// 写一次性换装任务的 plist 并 bootstrap。任务自带收尾：
     /// 失败补拉主任务、卸载 DMG、删自己的 plist、bootout 自己。
+    /// 换装全程走暂存 + 验签 + 原子换名（makeSwapScript），不再先删再拷；
+    /// 发起更新的就是本实例，把自己的 pid 一并传进脚本，
+    /// bootout 停不到的在跑老实例由脚本按 pid 补停。
     private func handOffToLaunchdInstaller(mountPoint: String, appPath: String) throws -> Bool {
         let uid = getuid()
-        // DMG 里不再带安装脚本：卸主任务 → 换 app → 主任务在就挂回（顺带拉起新版），
-        // 没有主任务（用户关了自启）就直接 open 一次，这轮更新照常用。
-        let script = """
-        launchctl bootout gui/\(uid)/\(Self.mainJobLabel) >/dev/null 2>&1 || true
-        rm -rf '/Applications/Cortex哨兵.app'
-        /usr/bin/ditto '\(appPath)' '/Applications/Cortex哨兵.app'
-        rc=$?
-        if [ -f '\(mainJobPlistPath)' ]; then
-          launchctl bootstrap gui/\(uid) '\(mainJobPlistPath)' >/dev/null 2>&1 || true
-        else
-          /usr/bin/open '/Applications/Cortex哨兵.app' >/dev/null 2>&1 || true
-        fi
-        /usr/bin/hdiutil detach '\(mountPoint)' >/dev/null 2>&1 || true
-        rm -f '\(updateJobPlistURL.path)'
-        launchctl bootout gui/\(uid)/\(Self.updateJobLabel) >/dev/null 2>&1 || true
-        exit $rc
-        """
+        let script = Self.makeSwapScript(
+            appsDirectory: SentinelUpdateConstants.applicationsDirectory,
+            newAppPath: appPath,
+            mountPoint: mountPoint,
+            mainJobPlistPath: mainJobPlistPath,
+            updateJobPlistPath: updateJobPlistURL.path,
+            mainJobLabel: Self.mainJobLabel,
+            updateJobLabel: Self.updateJobLabel,
+            uid: uid,
+            initiatingPid: ProcessInfo.processInfo.processIdentifier
+        )
         let plist: [String: Any] = [
             "Label": Self.updateJobLabel,
             "ProgramArguments": ["/bin/bash", "-c", script],

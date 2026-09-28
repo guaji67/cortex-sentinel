@@ -201,8 +201,8 @@ final class SentinelUpdaterTests: XCTestCase {
         })
         // 移交成功后 DMG 保持挂载（任务自己卸），这里不许 detach。
         XCTAssertFalse(shell.invocations.contains { $0.arguments.first == "detach" })
-        // 任务 plist 内联换装：卸主任务 → ditto 换 app → 主任务在就挂回（顺带拉起），
-        // 没有主任务就直接 open；DMG 里不再带安装脚本。
+        // 任务 plist 内联换装：卸主任务 → 停发起实例 → ditto 暂存 → 验签 →
+        // 原子换名 → 拉主任务（没有主任务就直接 open）；DMG 里不再带安装脚本。
         let plistData = try Data(contentsOf: plistURL)
         let plist = try PropertyListSerialization.propertyList(from: plistData, format: nil) as! [String: Any]
         let arguments = try XCTUnwrap(plist["ProgramArguments"] as? [String])
@@ -210,8 +210,20 @@ final class SentinelUpdaterTests: XCTestCase {
         let script = try XCTUnwrap(arguments.last)
         XCTAssertFalse(script.contains("install-app.sh"))
         XCTAssertTrue(script.contains("bootout gui/"))
-        XCTAssertTrue(script.contains("rm -rf '/Applications/Cortex哨兵.app'"))
-        XCTAssertTrue(script.contains("ditto '/Volumes/Cortex 哨兵/Cortex哨兵.app' '/Applications/Cortex哨兵.app'"))
+        // 不许再先删再拷：旧版 rm 没了，走暂存 + 验签 + 原子换名。
+        XCTAssertFalse(script.contains("rm -rf '/Applications/Cortex哨兵.app'"))
+        XCTAssertTrue(script.contains("rm -rf \"$INCOMING\" \"$PREVIOUS\""))
+        // 脚本开头定义暂存 / 挪存 / 安装位路径，ditto 落到暂存位而不是直接盖正式位。
+        XCTAssertTrue(script.contains("INCOMING='/Applications/.Cortex哨兵.app.incoming'"))
+        XCTAssertTrue(script.contains("PREVIOUS='/Applications/.Cortex哨兵.app.previous'"))
+        XCTAssertTrue(script.contains("EXPECTED_BIN='/Applications/Cortex哨兵.app/Contents/MacOS/CortexSentinelBar'"))
+        XCTAssertTrue(script.contains("ditto '/Volumes/Cortex 哨兵/Cortex哨兵.app' \"$INCOMING\""))
+        XCTAssertTrue(script.contains("codesign --verify --deep --strict \"$INCOMING\""))
+        XCTAssertTrue(script.contains("spctl -a -t exec \"$INCOMING\""))
+        XCTAssertTrue(script.contains("mv \"$APP\" \"$PREVIOUS\""))
+        XCTAssertTrue(script.contains("mv \"$INCOMING\" \"$APP\""))
+        // 发起更新的就是本实例，把自己的 pid 传进脚本让脚本补停。
+        XCTAssertTrue(script.contains("INIT_PID=\(ProcessInfo.processInfo.processIdentifier)"))
         XCTAssertTrue(script.contains("bootstrap"))
         XCTAssertTrue(script.contains("open '/Applications/Cortex哨兵.app'"))
         XCTAssertTrue(script.contains("detach"))

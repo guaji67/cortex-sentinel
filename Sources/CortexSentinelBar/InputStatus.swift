@@ -112,6 +112,22 @@ enum InputStatusPresentation {
         }
     }
 
+    /// 面板显示名（Falcon 09-28 令）：拉数仍按接口真实标识（sol/luna 接口上
+    /// 至今挂着 gpt-5.6 前缀，只有 astra 是 gpt-6；等接口改名了动
+    /// monitoredModels，这里不动），上屏换成 GPT 6 系列的叫法。
+    static func displayName(forModel model: String) -> String {
+        switch model {
+        case "gpt-6-astra":
+            return "Astra"
+        case "gpt-5.6-sol":
+            return "GPT 6 SOL"
+        case "gpt-5.6-luna":
+            return "GPT 6 LUNA"
+        default:
+            return model
+        }
+    }
+
     /// 金标准 UsageMonitor MenuBarView.uptimeColor：nil 灰、>=95 绿、>=80 橙、<80 红。
     static func uptimeSeverity(_ percentage: Double?) -> SentinelSeverity {
         guard let percentage else {

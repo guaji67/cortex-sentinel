@@ -886,7 +886,7 @@ struct SentinelServiceSection: View {
         let tone = InputStatusPresentation.indicatorTone(for: display)
         return VStack(alignment: .leading, spacing: SentinelTheme.Spacing.xs) {
             HStack(alignment: .firstTextBaseline, spacing: SentinelTheme.Spacing.sm) {
-                Text(display.probe.model)
+                Text(InputStatusPresentation.displayName(forModel: display.probe.model))
                     .font(SentinelTheme.Fonts.serviceModel)
                     .foregroundStyle(SentinelTheme.Colors.foreground)
 
@@ -956,7 +956,7 @@ struct SentinelServiceSection: View {
     }
 
     private func latencyHelpText(_ display: InputStatusDisplayProbe) -> String {
-        var parts = ["\(display.probe.model)：\(display.state.displayName)"]
+        var parts = ["\(InputStatusPresentation.displayName(forModel: display.probe.model))：\(display.state.displayName)"]
         if let latency = display.probe.latencyMilliseconds {
             parts.append("最近一次 \(latency) 毫秒")
         }

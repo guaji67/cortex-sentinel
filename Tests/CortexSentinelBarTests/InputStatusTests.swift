@@ -120,6 +120,16 @@ final class InputStatusTests: XCTestCase {
         XCTAssertEqual(InputStatusConstants.panelRefreshThreshold, 30)
     }
 
+    func testPanelShowsGPT6SeriesDisplayNames() {
+        // Falcon 09-28 令：上屏叫 GPT 6 系列；拉数仍按接口真实标识（sol/luna
+        // 接口上还挂 gpt-5.6 前缀），显示名与监测标识分层。
+        XCTAssertEqual(InputStatusPresentation.displayName(forModel: "gpt-6-astra"), "Astra")
+        XCTAssertEqual(InputStatusPresentation.displayName(forModel: "gpt-5.6-sol"), "GPT 6 SOL")
+        XCTAssertEqual(InputStatusPresentation.displayName(forModel: "gpt-5.6-luna"), "GPT 6 LUNA")
+        // 名单外的标识原样显示，不吞。
+        XCTAssertEqual(InputStatusPresentation.displayName(forModel: "gpt-5.5"), "gpt-5.5")
+    }
+
     func testStatusBarDotSharesSlowToneWithPanel() {
         // v3.2 第 1 点：高延迟(>=3000ms)时，状态栏点与面板点必须同为橙(slow)，
         // 不再出现「面板橙、状态栏绿」——两处都走 indicatorTone。

@@ -92,11 +92,22 @@ struct CortexRoutePreviewPayload: Decodable, Equatable, Sendable {
                 let name: String?
                 let state: String?
                 let basis: String?
+                /// 执行者完整 UUID（COR-9242 起带）：点灰/恢复要拿它调
+                /// executor_availability pause/resume --board-only；旧输出没有。
+                let executorID: String?
+                /// 拦截原因码（与 dispatch_executor_guard 的 BLOCK_* 闭集同名）；
+                /// nil = 按派工器同一份判定当前可派。
+                let blockedCode: String?
+                /// 拦截原因一句话，cortex 侧判定原语给的原样。
+                let blockedText: String?
 
                 enum CodingKeys: String, CodingKey {
                     case name
                     case state
                     case basis
+                    case executorID = "executor_id"
+                    case blockedCode = "blocked_code"
+                    case blockedText = "blocked_text"
                 }
 
                 init(from decoder: Decoder) throws {
@@ -104,6 +115,9 @@ struct CortexRoutePreviewPayload: Decodable, Equatable, Sendable {
                     name = try container.decodeIfPresent(String.self, forKey: .name)
                     state = try container.decodeIfPresent(String.self, forKey: .state)
                     basis = try container.decodeIfPresent(String.self, forKey: .basis)
+                    executorID = try container.decodeIfPresent(String.self, forKey: .executorID)
+                    blockedCode = try container.decodeIfPresent(String.self, forKey: .blockedCode)
+                    blockedText = try container.decodeIfPresent(String.self, forKey: .blockedText)
                 }
             }
         }
@@ -319,7 +333,35 @@ enum CortexRoutePreviewDisplay {
 
     struct RouteChip: Equatable, Sendable {
         let text: String
+        /// 花名册状态原文（state=paused 只是灰的其中一种原因）。
         let paused: Bool
+        /// 执行者完整 UUID（payload v2 起带；没有 = 点不动，只提示刷新）。
+        let executorID: String?
+        /// 拦截原因码；nil = 按派工器同一份判定当前可派（绿）。
+        let blockedCode: String?
+        /// 拦截原因一句话。
+        let blockedText: String?
+
+        init(
+            text: String,
+            paused: Bool,
+            executorID: String? = nil,
+            blockedCode: String? = nil,
+            blockedText: String? = nil
+        ) {
+            self.text = text
+            self.paused = paused
+            self.executorID = executorID
+            self.blockedCode = blockedCode
+            self.blockedText = blockedText
+        }
+
+        /// 灰不灰：预案的 blocked_code（与派工器同一份判定——清单 paused、说明/名字
+        /// 停派标记、ai_hold、被拒冷却都算）或花名册 paused 任一命中。旧输出连
+        /// blocked_code 都没有时退回花名册状态，行为不变。
+        var isBlocked: Bool {
+            blockedCode != nil || paused
+        }
     }
 
     struct RouteCard: Equatable, Sendable {
@@ -367,7 +409,10 @@ enum CortexRoutePreviewDisplay {
             byMachine[machine, default: []].append(
                 RouteChip(
                     text: shortName(candidate.name),
-                    paused: candidate.state == "paused"
+                    paused: candidate.state == "paused",
+                    executorID: candidate.executorID,
+                    blockedCode: candidate.blockedCode,
+                    blockedText: candidate.blockedText
                 )
             )
         }
@@ -414,7 +459,10 @@ enum CortexRoutePreviewDisplay {
                     let chips = candidates.map { candidate in
                         RouteChip(
                             text: shortName(candidate.name),
-                            paused: candidate.state == "paused"
+                            paused: candidate.state == "paused",
+                            executorID: candidate.executorID,
+                            blockedCode: candidate.blockedCode,
+                            blockedText: candidate.blockedText
                         )
                     }
                     cards.append(RouteCard(
@@ -429,5 +477,40 @@ enum CortexRoutePreviewDisplay {
             }
         }
         return cards
+    }
+
+    // MARK: 点胶囊的处置（COR-9242 哨兵点灰）
+
+    /// 点执行者胶囊该做什么：绿点停派、自己点灰的灰点恢复、别的原因只显示。
+    enum DispatchDotAction: Equatable, Sendable {
+        /// 绿点（当前可派）：调 executor_availability pause --board-only。
+        case pauseBoardOnly(executorID: String)
+        /// 灰点且灰因只是「他在哨兵上点灰」标记：调 resume --board-only 变回绿。
+        case resumeBoardOnly(executorID: String)
+        /// 别的原因的灰点（或预案太旧没有 id）：只把原因显示出来，不动。
+        case information(String)
+    }
+
+    /// 点了给什么：纯判定，视图与 store 共用。
+    /// 「他在哨兵上点灰」这半句是 cortex 仓 executor_availability.py
+    /// BOARD_ONLY_MARKER_PREFIX 的固定前缀（跨仓字面契约，两边改要同一个票改）；
+    /// resume --board-only 只删这一类行，别的停派标记它本来就不动，所以灰因
+    /// 不是它就绝不发恢复命令。
+    static func action(for chip: RouteChip) -> DispatchDotAction {
+        if !chip.isBlocked {
+            guard let id = chip.executorID, !id.isEmpty else {
+                return .information("预案还没带上执行者 id，等下一轮刷新再点")
+            }
+            return .pauseBoardOnly(executorID: id)
+        }
+        let ownMarker = chip.blockedCode == "description_stop_phrase"
+            && (chip.blockedText?.contains("他在哨兵上点灰") ?? false)
+        if ownMarker {
+            guard let id = chip.executorID, !id.isEmpty else {
+                return .information("预案还没带上执行者 id，等下一轮刷新再点")
+            }
+            return .resumeBoardOnly(executorID: id)
+        }
+        return .information(chip.blockedText ?? "当前不可派（预案没给原因）")
     }
 }

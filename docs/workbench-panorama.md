@@ -33,3 +33,5 @@ python3 -m unittest discover -s backend/tests -p test_workbench_native.py -v
 ```
 
 实机验收另放本机数据目录：从安装后的哨兵打开全景，记录三个域与独立 CLI 查询的计数一致率；登记测试板块、确认自动出现、撤下；取现成无标签票确认在未归类。截图不提交。
+
+本仓合入入口：`bash scripts/land_pr.sh <PR号> --head <本轮验证过的完整SHA>`。只认哨兵 origin，核当前 PR 头、目标主线和已有检查，再绑定该头 squash 合入；核不到不合。合后 fetch 并用 merge-base 核合并 SHA 已进 origin/main。不增加远端、不直推、不跳检查。

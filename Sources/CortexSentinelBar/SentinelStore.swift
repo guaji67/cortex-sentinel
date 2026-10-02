@@ -2074,7 +2074,8 @@ final class SentinelStore {
         aio: AIOSnapshot? = nil,
         inputStatus: InputStatusSnapshot? = nil,
         glmPlanStatus: CortexPlanStatusDisplayState? = nil,
-        lanMachines: [CortexTelemetrySummaryPayload.Machine]? = nil
+        lanMachines: [CortexTelemetrySummaryPayload.Machine]? = nil,
+        telemetryPayload: CortexTelemetrySummaryPayload? = nil
     ) {
         if let official {
             setOfficialUsageIfChanged(official)
@@ -2096,6 +2097,11 @@ final class SentinelStore {
         }
         if let lanMachines {
             self.lanMachines = lanMachines
+        }
+        if let telemetryPayload {
+            self.telemetrySummary = CortexTelemetrySummaryDisplayState(
+                payload: telemetryPayload, fetchedAt: Date(), failureText: nil, failureAt: nil
+            )
         }
         if let aio {
             apply(

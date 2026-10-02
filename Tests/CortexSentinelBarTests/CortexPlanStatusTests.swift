@@ -185,7 +185,7 @@ final class CortexPlanStatusTests: XCTestCase {
         XCTAssertEqual(CortexPlanStatusDisplay.thirdColumnText(plan: running, now: now), "在跑 2/5")
 
         let unknown = plan(running: nil)
-        XCTAssertEqual(CortexPlanStatusDisplay.thirdColumnText(plan: unknown, now: now), "在跑 —")
+        XCTAssertEqual(CortexPlanStatusDisplay.thirdColumnText(plan: unknown, now: now), "读不到")
     }
 
     // MARK: - 状态点
@@ -954,8 +954,8 @@ final class CortexPlanStatusTests: XCTestCase {
         XCTAssertTrue(allText.contains("读不到看板，在跑几条暂时不知道"))
         XCTAssertTrue(allText.contains("¥0.62"))
         XCTAssertTrue(allText.contains("套餐派工不花现金"))
-        // 最近一次失败：取数那行写旧数 + 北京时间取数时刻 + 原因（COR-9931 第 2 条）。
-        let fetchedLine = try XCTUnwrap(lines.last { $0.label == "旧数" })
+        // 最近一次失败：取数那行写「读不到」+ 北京时间取数时刻 + 原因（COR-9931 第 2 条）。
+        let fetchedLine = try XCTUnwrap(lines.last { $0.label == "读不到" })
         XCTAssertEqual(
             fetchedLine.value,
             "\(CortexPlanStatusDisplay.beijingClockText(fetchedAt)) 取的，这次没取到：cortex 仓里还没有这个脚本"
@@ -1016,41 +1016,42 @@ final class CortexPlanStatusTests: XCTestCase {
         XCTAssertEqual(CortexPlanStatusDisplay.freeWindowText("现在是免费时段（北京 23:00 到 09:00）"), "北京 23:00 到 09:00")
     }
 
-    /// 成功后 30 分钟内失败：数照用，详情卡末尾写「旧数，HH:MM 取的，这次没取到：原因」。
-    func testFreshFailureKeepsNumbersAndAddsNote() throws {
+    /// 成功后取数失败：旧数立即不可信，第三列写「读不到」，详情卡末尾写
+    /// 「读不到，HH:MM 取的，这次没取到：原因」。
+    func testFailureImmediatelyHidesNumbersAndAddsReadLine() throws {
         let payload = try samplePayload()
         let now = Date()
         let fetchedAt = now.addingTimeInterval(-5 * 60)
         let failure = "cortex 仓里还没有这个脚本"
         let displayState = state(payload: payload, fetchedAt: fetchedAt, failureText: failure)
 
-        XCTAssertEqual(CortexPlanStatusDisplay.freshness(displayState, now: now), .fresh)
-        let plan = CortexPlanStatusDisplay.plan(forAccountKey: CortexPlanStatusTests.sampleKey, in: displayState.payload)
+        XCTAssertEqual(CortexPlanStatusDisplay.freshness(displayState, now: now), .stale)
+        let plan = try XCTUnwrap(
+            CortexPlanStatusDisplay.plan(forAccountKey: CortexPlanStatusTests.sampleKey, in: displayState.payload)
+        )
         let account = account()
-        // 行名还是套餐名，第三列还是真数（没在冷却时照常报在跑）。
+        // 行名还是套餐名；第三列按过时态写「读不到」，判不了冷却。
         XCTAssertEqual(CortexPlanStatusDisplay.rowTitleFallback(plan: plan, account: account), "Sample 套餐")
-        XCTAssertEqual(CortexPlanStatusDisplay.thirdColumnText(plan: plan!, now: now), "在跑 2/5")
-        // 沿用旧数时第三列按过时态处理，判不了冷却。
         XCTAssertTrue(CortexPlanStatusDisplay.usesOldNumbers(displayState, now: now))
         XCTAssertEqual(
-            CortexPlanStatusDisplay.thirdColumnText(plan: plan!, now: now, state: displayState),
-            "在跑 —"
+            CortexPlanStatusDisplay.thirdColumnText(plan: plan, now: now, state: displayState),
+            "读不到"
         )
 
         let lines = CortexPlanStatusDisplay.detailLines(
-            plan: plan!,
+            plan: plan,
             payload: payload,
             failureText: failure,
             fetchedAt: fetchedAt,
             cashBalance: 0.62
         )
-        XCTAssertEqual(lines.last?.label, "旧数")
+        XCTAssertEqual(lines.last?.label, "读不到")
         XCTAssertEqual(
             lines.last?.value,
             "\(CortexPlanStatusDisplay.beijingClockText(fetchedAt)) 取的，这次没取到：\(failure)"
         )
         let labels = lines.map(\.label)
-        XCTAssertTrue(labels.contains("执行者 1"), "时新态执行者行还在")
+        XCTAssertTrue(labels.contains("执行者 1"), "执行者行还在")
         XCTAssertTrue(labels.contains("免费时段"))
         XCTAssertTrue(labels.contains("派工"))
     }
@@ -1068,7 +1069,7 @@ final class CortexPlanStatusTests: XCTestCase {
         XCTAssertNil(CortexPlanStatusDisplay.fetchedAtLine(fetchedAt: nil, failureText: "找不到 cortex 仓"))
     }
 
-    /// 第三列：时新且没失败照显示冷却到；沿用旧数（30 分钟内）与过时态都出「在跑 —」。
+    /// 第三列：时新且没失败照显示冷却到；取数失败与过时态都出「读不到」。
     func testThirdColumnHidesCooldownWhenNumbersAreOld() throws {
         let now = Date()
         let cooling = plan(cooldownUntil: now.addingTimeInterval(30 * 60))
@@ -1085,7 +1086,7 @@ final class CortexPlanStatusTests: XCTestCase {
             fetchedAt: now.addingTimeInterval(-5 * 60),
             failureText: "脚本清单缺一个文件"
         )
-        XCTAssertEqual(CortexPlanStatusDisplay.freshness(oldNumbers, now: now), .fresh, "30 分钟内还判时新")
+        XCTAssertEqual(CortexPlanStatusDisplay.freshness(oldNumbers, now: now), .stale, "取数失败立即判过时")
         XCTAssertEqual(
             CortexPlanStatusDisplay.thirdColumnText(plan: cooling, now: now, state: oldNumbers),
             CortexPlanStatusDisplay.staleThirdColumnText,
@@ -1209,8 +1210,8 @@ final class CortexPlanStatusTests: XCTestCase {
         return formatter.date(from: text)
     }
 
-    /// 超过 30 分钟失败：行名仍用套餐名，第三列「在跑 —」不显示冷却，状态点只看
-    /// 订阅窗口，详情卡只留在跑/现金/取数三行。
+    /// 取数失败且成功读数早已过窗：行名仍用套餐名，第三列「读不到」不显示冷却，
+    /// 状态点只看订阅窗口，详情卡只留在跑/现金/取数三行。
     func testStaleFailureShowsIdentityOnly() throws {
         let payload = try samplePayload()
         let now = Date()
@@ -1224,7 +1225,7 @@ final class CortexPlanStatusTests: XCTestCase {
         let plan = try XCTUnwrap(CortexPlanStatusDisplay.plan(forAccountKey: CortexPlanStatusTests.sampleKey, in: displayState.payload))
         let accountRow = account()
         XCTAssertEqual(CortexPlanStatusDisplay.rowTitleFallback(plan: plan, account: accountRow), "Sample 套餐")
-        XCTAssertEqual(CortexPlanStatusDisplay.staleThirdColumnText, "在跑 —")
+        XCTAssertEqual(CortexPlanStatusDisplay.staleThirdColumnText, "读不到")
 
         // 现金 0.5 但窗口好 → 绿（过时态同样不看现金）。
         XCTAssertEqual(
@@ -1242,8 +1243,8 @@ final class CortexPlanStatusTests: XCTestCase {
             fetchedAt: displayState.fetchedAt,
             cashBalance: 0.62
         )
-        XCTAssertEqual(lines.map(\.label), ["在跑", "现金余额", "旧数"])
-        XCTAssertEqual(lines[0].value, "— / 上限 5")
+        XCTAssertEqual(lines.map(\.label), ["在跑", "现金余额", "读不到"])
+        XCTAssertEqual(lines[0].value, "读不到")
         XCTAssertEqual(lines[1].value, "¥0.62")
         XCTAssertEqual(
             lines[2].value,
@@ -1297,20 +1298,31 @@ final class CortexPlanStatusTests: XCTestCase {
         XCTAssertFalse(dumpSuccess.contains("plan-a"))
     }
 
-    /// 过时边界：跨过 30 分钟自然从 fresh 变 stale。
+    /// 过时边界：成功读数跨过 60 秒复用窗自然从 fresh 变 stale；
+    /// 取数失败立即 stale；只有 payload 没有取数时刻按没读数（absent）。
     func testFreshnessBoundary() throws {
         let payload = try samplePayload()
         let now = Date()
         XCTAssertEqual(CortexPlanStatusDisplay.freshness(nil, now: now), .absent)
         XCTAssertEqual(
             CortexPlanStatusDisplay.freshness(state(payload: payload, fetchedAt: nil, failureText: nil), now: now),
-            .fresh,
-            "成功过但没有失败记录 → 时新"
+            .absent,
+            "有 payload 但没有取数时刻 → 没读数"
         )
-        let recent = state(payload: payload, fetchedAt: now.addingTimeInterval(-CortexPlanStatusDisplay.reuseWindow + 60), failureText: "x")
-        XCTAssertEqual(CortexPlanStatusDisplay.freshness(recent, now: now), .fresh)
-        let old = state(payload: payload, fetchedAt: now.addingTimeInterval(-CortexPlanStatusDisplay.reuseWindow - 1), failureText: "x")
-        XCTAssertEqual(CortexPlanStatusDisplay.freshness(old, now: now), .stale)
+        let recentSuccess = state(
+            payload: payload,
+            fetchedAt: now.addingTimeInterval(-CortexPlanStatusDisplay.reuseWindow + 1),
+            failureText: nil
+        )
+        XCTAssertEqual(CortexPlanStatusDisplay.freshness(recentSuccess, now: now), .fresh, "复用窗内没失败 → 时新")
+        let expiredSuccess = state(
+            payload: payload,
+            fetchedAt: now.addingTimeInterval(-CortexPlanStatusDisplay.reuseWindow),
+            failureText: nil
+        )
+        XCTAssertEqual(CortexPlanStatusDisplay.freshness(expiredSuccess, now: now), .stale, "跨过 60 秒窗 → 过时")
+        let failedNow = state(payload: payload, fetchedAt: now, failureText: "x")
+        XCTAssertEqual(CortexPlanStatusDisplay.freshness(failedNow, now: now), .stale, "取数失败立即过时，不沿用旧数")
     }
 
     // MARK: - 取数流程

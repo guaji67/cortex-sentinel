@@ -15,6 +15,7 @@ struct CortexPlanStatusPayload: Decodable, Equatable, Sendable {
     let freeWindow: FreeWindow?
     let plans: [CortexPlanStatusPlan]
     let errors: [Notice]
+    let dispatchPolicy: DispatchPolicy?
 
     enum CodingKeys: String, CodingKey {
         case schema
@@ -22,6 +23,7 @@ struct CortexPlanStatusPayload: Decodable, Equatable, Sendable {
         case free_window
         case plans
         case errors
+        case dispatch_policy
     }
 
     init(from decoder: Decoder) throws {
@@ -31,10 +33,24 @@ struct CortexPlanStatusPayload: Decodable, Equatable, Sendable {
         freeWindow = try container.decodeIfPresent(FreeWindow.self, forKey: .free_window)
         plans = try container.decodeIfPresent([CortexPlanStatusPlan].self, forKey: .plans) ?? []
         errors = try container.decodeIfPresent([Notice].self, forKey: .errors) ?? []
+        dispatchPolicy = try container.decodeIfPresent(DispatchPolicy.self, forKey: .dispatch_policy)
     }
 
     var generatedAt: Date? {
         generatedAtText.flatMap(CortexPlanStatusDate.parse)
+    }
+
+    struct DispatchPolicy: Decodable, Equatable, Sendable {
+        let readAt: String?
+        let priorityAccount: String?
+        let priorityMode: String?
+        let error: String?
+        enum CodingKeys: String, CodingKey {
+            case readAt = "read_at"
+            case priorityAccount = "priority_account"
+            case priorityMode = "priority_mode"
+            case error
+        }
     }
 
     struct FreeWindow: Decodable, Equatable, Sendable {
@@ -81,6 +97,7 @@ struct CortexPlanStatusPlan: Decodable, Equatable, Sendable {
     let label: String
     let keySHA12: String
     let maxParallel: Int?
+    let readError: String?
     /// 读不到看板时是 nil（此时派工判据也是 nil）。
     let running: Int?
     let executors: [Executor]
@@ -123,6 +140,7 @@ struct CortexPlanStatusPlan: Decodable, Equatable, Sendable {
         case label
         case key_sha12
         case max_parallel
+        case read_error
         case running
         case executors
         case dispatchable
@@ -145,6 +163,7 @@ struct CortexPlanStatusPlan: Decodable, Equatable, Sendable {
         label = try container.decodeIfPresent(String.self, forKey: .label) ?? ""
         keySHA12 = try container.decodeIfPresent(String.self, forKey: .key_sha12) ?? ""
         maxParallel = try container.decodeIfPresent(Int.self, forKey: .max_parallel)
+        readError = try container.decodeIfPresent(String.self, forKey: .read_error)
         running = try container.decodeIfPresent(Int.self, forKey: .running)
         executors = try container.decodeIfPresent([Executor].self, forKey: .executors) ?? []
         dispatchable = try container.decodeIfPresent(Bool.self, forKey: .dispatchable)
@@ -212,6 +231,8 @@ struct CortexPlanStatusPlan: Decodable, Equatable, Sendable {
     struct Executor: Decodable, Equatable, Sendable {
         let name: String
         let running: Int?
+        let maxConcurrentTasks: Int?
+        let readError: String?
         /// 在不在看板默认名单：隐藏 / 归档 = false；看板整表没取到 = null。
         let onBoard: Bool?
         /// 不在名单的原因：archived / not_listed；可见或未知 = null。
@@ -220,6 +241,8 @@ struct CortexPlanStatusPlan: Decodable, Equatable, Sendable {
         enum CodingKeys: String, CodingKey {
             case name
             case running
+            case max_concurrent_tasks
+            case read_error
             case on_board
             case off_board_reason
         }
@@ -228,6 +251,8 @@ struct CortexPlanStatusPlan: Decodable, Equatable, Sendable {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
             running = try container.decodeIfPresent(Int.self, forKey: .running)
+            maxConcurrentTasks = try container.decodeIfPresent(Int.self, forKey: .max_concurrent_tasks)
+            readError = try container.decodeIfPresent(String.self, forKey: .read_error)
             onBoard = try container.decodeIfPresent(Bool.self, forKey: .on_board)
             offBoardReason = try container.decodeIfPresent(String.self, forKey: .off_board_reason)
         }
@@ -526,11 +551,12 @@ enum CortexPlanStatusFetcher {
 // MARK: - 显示规则（纯函数，便于测试）
 
 enum CortexPlanStatusDisplay {
-    /// 失败后沿用上一份成功结果的窗口；过了这个窗数就判过时。
-    static let reuseWindow: TimeInterval = 30 * 60
+    /// 成功读数的复用窗；过了这个窗数就判过时。
+    static let reuseWindow: TimeInterval = 60
 
     /// 取数结果的时新度。store 只存「最近一次成功的整份 + 最近一次失败的原因」，
-    /// 过时与否由这里按时间判，跨过 30 分钟边界自然切换。
+    /// 过时与否由这里按时间判，成功读数跨过 60 秒边界自然切换；最近一次取数
+    /// 失败时旧数立即不可信，不沿用。
     enum Freshness {
         /// 正常显示（可能带着「这次没读到」的卡内备注）。
         case fresh
@@ -548,12 +574,12 @@ enum CortexPlanStatusDisplay {
         guard let state, state.payload != nil else {
             return .absent
         }
-        if let failureText = state.failureText, !failureText.isEmpty,
-           let fetchedAt = state.fetchedAt,
-           now.timeIntervalSince(fetchedAt) >= reuseWindow {
+        if let failureText = state.failureText, !failureText.isEmpty {
             return .stale
         }
-        return .fresh
+        guard let fetchedAt = state.fetchedAt else { return .absent }
+        let age = now.timeIntervalSince(fetchedAt)
+        return age >= 0 && age < reuseWindow ? .fresh : .stale
     }
 
     /// 钥匙指纹对上哪个套餐，这一行就是那个套餐的行。过时态的整份 payload
@@ -731,12 +757,13 @@ enum CortexPlanStatusDisplay {
 
     /// 第三列（原现金那格）文案：冷却中写「冷却到 HH:MM」（本机时间，
     /// 宽 80 放不下就改写「冷却 HH:MM」，以不出图截断为准）；
-    /// 不在冷却按在跑写；读不到看板写「在跑 —」。
+    /// 不在冷却按在跑写；读不到数按过时态写「读不到」。
     static func thirdColumnText(
         plan: CortexPlanStatusPlan,
         now: Date,
         columnWidth: CGFloat = 80
     ) -> String {
+        if plan.readError != nil { return "读不到" }
         if plan.isCoolingDown(now: now) {
             let time = clockText(plan.cooldownUntil ?? now)
             let long = "冷却到 \(time)"
@@ -753,7 +780,7 @@ enum CortexPlanStatusDisplay {
     }
 
     /// 过时态第三列：数已经不可信，固定「在跑 —」，不显示冷却。
-    static let staleThirdColumnText = "在跑 —"
+    static let staleThirdColumnText = "读不到"
 
     /// 第三列字号同款（Theme.Metrics 13 semibold monospaced）量宽，只挑文案不排版。
     private static func measuredWidth(_ text: String) -> CGFloat {
@@ -839,23 +866,25 @@ enum CortexPlanStatusDisplay {
         now: Date = Date()
     ) -> [BalanceHoverLine] {
         var lines: [BalanceHoverLine] = []
-        let runningText = plan.running.map { "\($0) 条" } ?? "—"
-        let capText = plan.maxParallel.map(String.init) ?? "—"
+        let runningText = plan.running.map { "\($0) 条" } ?? "读不到"
+        let capText = plan.maxParallel.map(String.init) ?? "读不到"
         lines.append(BalanceHoverLine(
             label: "在跑",
             value: "\(runningText) / 上限 \(capText)",
-            note: runningSplitNote(plan)
+            note: plan.readError ?? runningSplitNote(plan)
         ))
         for executor in plan.executors {
             lines.append(BalanceHoverLine(
                 label: executor.name,
-                value: executor.running.map { "\($0) 条" } ?? "—",
-                note: nil
+                value: "\(executor.running.map(String.init) ?? "读不到") / \(executor.maxConcurrentTasks.map(String.init) ?? "读不到")",
+                note: executor.readError
             ))
         }
         lines.append(contentsOf: planLineRows(plan))
         // 冷却中写到几点，跟行上「冷却 HH:MM」一致；不冷却才看 cortex 的拦人理由。
-        if plan.isCoolingDown(now: now), let until = plan.cooldownUntil {
+        if let error = plan.readError {
+            lines.append(BalanceHoverLine(label: "派工", value: error, note: nil))
+        } else if plan.isCoolingDown(now: now), let until = plan.cooldownUntil {
             lines.append(BalanceHoverLine(
                 label: "派工",
                 value: "冷却到 \(clockText(until))，暂不派工",
@@ -864,9 +893,17 @@ enum CortexPlanStatusDisplay {
         } else {
             lines.append(BalanceHoverLine(
                 label: "派工",
-                value: plan.skipTextZH ?? "可以派",
+                value: plan.skipTextZH ?? (plan.dispatchable == nil ? "读不到" : "可以派"),
                 note: nil
             ))
+        }
+        if let policy = payload?.dispatchPolicy {
+            if let error = policy.error {
+                lines.append(BalanceHoverLine(label: "口径", value: error, note: nil))
+            } else if policy.priorityAccount == plan.id {
+                let mode = policy.priorityMode == "burn" ? "尽快用完" : "按配速"
+                lines.append(BalanceHoverLine(label: "优先号", value: mode, note: nil))
+            }
         }
         if let freeWindow = payload?.freeWindow, let text = freeWindow.textZH {
             lines.append(BalanceHoverLine(label: "免费时段", value: freeWindowText(text), note: nil))
@@ -903,7 +940,7 @@ enum CortexPlanStatusDisplay {
         let clock = beijingClockText(fetchedAt)
         if let failureText, !failureText.isEmpty {
             return BalanceHoverLine(
-                label: "旧数",
+                label: "读不到",
                 value: "\(clock) 取的，这次没取到：\(failureText)",
                 wraps: true
             )
@@ -1050,10 +1087,9 @@ enum CortexPlanStatusDisplay {
         cashBalance: Double?
     ) -> [BalanceHoverLine] {
         var lines: [BalanceHoverLine] = []
-        let capText = plan.maxParallel.map(String.init) ?? "—"
         lines.append(BalanceHoverLine(
             label: "在跑",
-            value: "— / 上限 \(capText)",
+            value: "读不到",
             note: nil
         ))
         if let cash = cashBalance {

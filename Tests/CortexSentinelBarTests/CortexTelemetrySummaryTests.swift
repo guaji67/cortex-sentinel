@@ -36,16 +36,18 @@ final class CortexTelemetrySummaryTests: XCTestCase {
         let payload = try JSONDecoder().decode(CortexTelemetrySummaryPayload.self, from: Self.payloadJSON())
         let rows = CortexTelemetrySummaryDisplay.rows(Self.state(payload: payload, failure: nil), now: Date())
         XCTAssertEqual(rows.count, 5)
-        XCTAssertEqual(rows[0], "三机总览（Multica 在跑 3）")
+        XCTAssertEqual(rows[0], "三机总览（Multica 在跑读不到）")
         XCTAssertEqual(rows[1], "Pro CPU 34% · 内存占 66% · 压力正常 · swap 12.30G/48.00G")
         XCTAssert(rows[1].contains("内存占 66%"))
         XCTAssert(rows[1].contains("压力正常"))
         XCTAssert(rows[1].contains("swap 12.30G/48.00G"))
         XCTAssert(rows[2].contains("槽 2/5"))
-        XCTAssertEqual(rows[2], "Pro 槽 2/5 · 本机线 3（CodeBuddy×2·ZCode）")
+        // 读数只认 running_lines 标量；模型分桶不再相加当本机线数。
+        XCTAssertEqual(rows[2], "Pro 槽 2/5 · 本机线 读不到（08:00 读的）")
+        XCTAssertFalse(rows[2].contains("CodeBuddy×2"))
         XCTAssert(rows[3].hasPrefix("mini2 CPU 9%"))
         XCTAssert(rows[4].contains("槽 0/2"))
-        XCTAssert(rows[4].contains("本机线 0"))
+        XCTAssert(rows[4].contains("本机线 读不到（08:01 读的）"))
     }
 
     func testFailureKeepsSingleLine() {
@@ -84,7 +86,7 @@ final class CortexTelemetrySummaryTests: XCTestCase {
     }
 
     func testMissingTaskKeysDecodeAsNilAndEmpty() throws {
-        // 旧脚本兼容：没 tasks_* 键给 nil/空，文本行退回 working 个数。
+        // 旧脚本兼容：没 tasks_* 键给 nil/空，标题写「在跑读不到」，不用 working 人数兜底。
         let payload = try JSONDecoder().decode(
             CortexTelemetrySummaryPayload.self,
             from: Data("{\"schema\":2,\"machines\":[{\"machine\":\"pro\",\"load\":1.0,\"ts\":\"2026-09-18T00:00:00+00:00\"}],\"multica\":{\"working\":7,\"idle\":2}}".utf8)
@@ -93,7 +95,7 @@ final class CortexTelemetrySummaryTests: XCTestCase {
         XCTAssertTrue(payload.multica?.tasksByMachine.isEmpty ?? true)
         XCTAssertTrue(payload.multica?.tasksByAgent.isEmpty ?? true)
         let rows = CortexTelemetrySummaryDisplay.rows(Self.state(payload: payload, failure: nil), now: Date())
-        XCTAssertEqual(rows[0], "三机总览（Multica 在跑 7）")
+        XCTAssertEqual(rows[0], "三机总览（Multica 在跑读不到）")
     }
 
     func testShortModelAndMachineToken() {

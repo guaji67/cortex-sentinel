@@ -13,6 +13,12 @@ struct CortexSubprocessResult: Sendable {
 struct CortexProcessSubprocessRunner: CortexSubprocessRunning {
     func run(executablePath: String, arguments: [String], workingDirectory: URL?, environment: [String:String]?, stdin: Data?, timeout: TimeInterval) async -> CortexSubprocessResult { fatalError("不得调用真实上游") }
 }
+final class TestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = Date()
+    func now() -> Date { lock.lock(); defer { lock.unlock() }; return value }
+    func advance(_ seconds: TimeInterval) { lock.lock(); defer { lock.unlock() }; value = value.addingTimeInterval(seconds) }
+}
 actor FakeRunner: CortexSubprocessRunning {
     let mode: String
     var calls = 0
@@ -68,6 +74,24 @@ actor FakeRunner: CortexSubprocessRunning {
             }
             checked += 1
         }
+        let clock = TestClock(), runner = FakeRunner("good")
+        let sync = WorkbenchMultica(url: root.appendingPathComponent("expired-detail.json"), executable: "/usr/bin/true", runner: runner, clock: { clock.now() })
+        await sync.refresh(force: true)
+        let beforeDetail = await runner.calls
+        clock.advance(200)
+        let detail = try await sync.detail("COR-OLD")
+        precondition((detail["issue"] as? BoardObject)?["status"] as? String == "done")
+        let afterDetail = await runner.calls
+        precondition(afterDetail == beforeDetail + 1)
+        // 按需读取不能把来源同步的节流窗口重置或提前放开。
+        await sync.refresh()
+        let afterThrottled = await runner.calls
+        precondition(afterThrottled == afterDetail)
+        clock.advance(200)
+        await sync.refresh()
+        let afterRefresh = await runner.calls
+        precondition(afterRefresh > afterDetail)
+        checked += 1
         print("bounded_sync_cases_passed=\(checked)")
     }
 }

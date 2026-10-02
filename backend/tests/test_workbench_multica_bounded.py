@@ -17,4 +17,4 @@ class BoundedMultica(unittest.TestCase):
                             "-o", binary], check=True, capture_output=True, timeout=120)
             result = subprocess.run([binary], capture_output=True, text=True, timeout=20)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("bounded_sync_cases_passed=4", result.stdout)
+            self.assertIn("bounded_sync_cases_passed=5", result.stdout)

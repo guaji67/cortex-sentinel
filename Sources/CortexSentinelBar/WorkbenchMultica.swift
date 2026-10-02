@@ -11,23 +11,27 @@ actor WorkbenchMultica {
     private var deadline = Date.distantFuture
     private var callsRemaining = 64
     private let runner: any CortexSubprocessRunning
-    init(url: URL, executable: String, runner: any CortexSubprocessRunning = CortexProcessSubprocessRunner()) {
-        self.url = url; self.executable = executable; self.runner = runner
+    private let clock: @Sendable () -> Date
+    private var timeRemaining: TimeInterval { deadline.timeIntervalSince(clock()) }
+    init(url: URL, executable: String, runner: any CortexSubprocessRunning = CortexProcessSubprocessRunner(), clock: @escaping @Sendable () -> Date = { Date() }) {
+        self.url = url; self.executable = executable; self.runner = runner; self.clock = clock
     }
     func status() -> BoardObject { ["syncing": busy, "error": errorText] }
-    private func call(_ args: [String]) async throws -> Any {
-        guard callsRemaining > 0, deadline.timeIntervalSinceNow > 0 else { throw WorkbenchError(503, "本轮查询达到上限，保留上一份完整快照") }
-        callsRemaining -= 1
+    private func call(_ args: [String], syncing: Bool = true) async throws -> Any {
+        // 点票号是独立的有界查询，不沿用已经过期的同步预算，也不消耗正在同步的名额。
+        let remaining = syncing ? timeRemaining : 45
+        guard (!syncing || callsRemaining > 0), remaining > 0 else { throw WorkbenchError(503, "本轮查询达到上限，保留上一份完整快照") }
+        if syncing { callsRemaining -= 1 }
         var environment = executionEnvironment()
         environment["MULTICA_HTTP_TIMEOUT"] = "45"
         let out = await runner.run(executablePath: executable, arguments: args + ["--output", "json"],
-                                   workingDirectory: nil, environment: environment, stdin: nil, timeout: min(45, deadline.timeIntervalSinceNow))
+                                   workingDirectory: nil, environment: environment, stdin: nil, timeout: min(45, remaining))
         guard out.exitCode == 0 else { throw WorkbenchError(503, "Multica 没有返回有效快照；请检查本机登录与连接") }
         return try JSONSerialization.jsonObject(with: out.standardOutput)
     }
     func refresh(force: Bool = false) async {
-        guard !busy, force || Date().timeIntervalSince(lastAttempt) > 300 else { return }
-        busy = true; lastAttempt = Date(); deadline = Date().addingTimeInterval(180); callsRemaining = 64; defer { busy = false }
+        guard !busy, force || clock().timeIntervalSince(lastAttempt) > 300 else { return }
+        busy = true; lastAttempt = clock(); deadline = clock().addingTimeInterval(180); callsRemaining = 64; defer { busy = false }
         do {
             guard FileManager.default.isExecutableFile(atPath: executable) else { throw WorkbenchError(503, "本机未配置 Multica CLI；已保存的资料仍可查看") }
             var cache = (try? WorkbenchJSON.read(url)) ?? [:]
@@ -68,7 +72,7 @@ actor WorkbenchMultica {
             for row in old {
                 guard let key = row["key"] as? String, seen[key] == nil else { continue }
                 if active.contains(row["status"] as? String ?? "") || row["status"] as? String == "unresolved" {
-                    if unresolved < 12, deadline.timeIntervalSinceNow > 30, callsRemaining > 4,
+                    if unresolved < 12, timeRemaining > 30, callsRemaining > 4,
                        let response = try? await call(["issue", "get", key]) as? BoardObject,
                        response["status"] is String {
                         seen[key] = normalize(response.merging(["identifier": key], uniquingKeysWith: { first, _ in first }), previous: row, labelCodes: labelCodes)
@@ -116,11 +120,11 @@ actor WorkbenchMultica {
         return environment
     }
     private func recentMerges() async throws -> BoardObject {
-        guard deadline.timeIntervalSinceNow > 0 else { throw WorkbenchError(503, "查询预算已用完") }
+        guard timeRemaining > 0 else { throw WorkbenchError(503, "查询预算已用完") }
         let environment = executionEnvironment()
         let cutoff = WorkbenchJSON.timestamp().prefix(10)
         // 只读最近一批主线 PR，不扫描仓库提交史，不获取 PR 正文。
-        let out = await runner.run(executablePath: "/usr/bin/env", arguments: ["gh", "pr", "list", "--repo", "guaji67/cortex", "--state", "merged", "--base", "main", "--limit", "100", "--json", "number,title,mergedAt,mergeCommit,url,baseRefName"], workingDirectory: nil, environment: environment, stdin: nil, timeout: min(30,deadline.timeIntervalSinceNow))
+        let out = await runner.run(executablePath: "/usr/bin/env", arguments: ["gh", "pr", "list", "--repo", "guaji67/cortex", "--state", "merged", "--base", "main", "--limit", "100", "--json", "number,title,mergedAt,mergeCommit,url,baseRefName"], workingDirectory: nil, environment: environment, stdin: nil, timeout: min(30,timeRemaining))
         guard out.exitCode == 0, let rows = try JSONSerialization.jsonObject(with: out.standardOutput) as? [BoardObject] else { throw WorkbenchError(503,"合入记录读取失败") }
         let pattern = try NSRegularExpression(pattern: "COR-[0-9]+", options: .caseInsensitive)
         let lower = Date().addingTimeInterval(-7 * 86400)
@@ -138,7 +142,7 @@ actor WorkbenchMultica {
     func detail(_ key: String) async throws -> BoardObject {
         guard WorkbenchJSON.validID(key) else { throw WorkbenchError("票号不合法") }
         // Issue detail is on demand, without modifying comments, assignments, or issue state.
-        let value = try await call(["issue", "get", key])
+        let value = try await call(["issue", "get", key], syncing: false)
         return ["key": key, "issue": value]
     }
 }

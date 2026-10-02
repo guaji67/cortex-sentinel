@@ -207,7 +207,7 @@ final class WorkbenchRuntime: @unchecked Sendable {
         let path = request.path.components(separatedBy: "?")[0]
         let host = request.headers["host"]?.lowercased().split(separator: ":").first.map(String.init) ?? ""
         guard Self.validHub("http://" + host) else { throw WorkbenchError(403, "不接受此主机名") }
-        let staticFiles = ["/": "index.html", "/index.html": "index.html", "/workbench.js": "workbench.js", "/ai-management.js": "ai-management.js", "/workbench.css": "workbench.css"]
+        let staticFiles = ["/": "index.html", "/index.html": "index.html", "/workbench.js": "workbench.js", "/panorama.js": "panorama.js", "/ai-management.js": "ai-management.js", "/workbench.css": "workbench.css"]
         if request.method == "GET", let file = staticFiles[path] {
             return WorkbenchResponse(contentType: file.hasSuffix(".js") ? "text/javascript; charset=utf-8" : file.hasSuffix(".css") ? "text/css; charset=utf-8" : "text/html; charset=utf-8",
                                      data: try Data(contentsOf: assets.appendingPathComponent(file)))

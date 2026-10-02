@@ -38,24 +38,21 @@ const openFolds = new Set(); // 30 秒一刷会整页重画，记住哪些折叠
 let openDomain = '', domainShown = 20; // 首页当前展开的域卡与展开区里已列出的票数
 const liveTickets = () => tickets().filter(t=>activeStates.has(t.status));
 // 域编号不在登记表里的票并进待分诊，保证各卡张数加起来等于顶上的全部活票
-function domainRows(d,live=liveTickets()) {const known=new Set((data?.domains||[]).map(x=>x.id));return live.filter(t=>t.domain===d.id||(d.id==='X'&&!known.has(t.domain)));}
+function panoramaModel() { return CortexPanorama.build(data || {}); }
+function domainRows(d) { return panoramaModel().cards.find(c=>c.id===d.id)?.rows || []; }
 const fmtN = n => Number(n||0).toLocaleString('zh-CN');
 const pct = (a,b) => b ? (a/b*100).toFixed(1)+'%' : '0%';
 function countStates(rows) {const c=Object.fromEntries(DASH_STATES.map(s=>[s,0]));for(const t of rows)if(t.status in c)c[t.status]++;return c;}
 function dashBar(c,sum) {
-  const base=sum||1;
-  return `<div class="statusbar" role="img" aria-label="${esc(DASH_STATES.map(s=>statusNames[s]+' '+c[s]).join('，'))}">${DASH_STATES.map(s=>c[s]>0?`<span class="s-${s}" style="width:${(100*c[s]/base).toFixed(3)}%" title="${esc(statusNames[s]+' '+c[s])}"></span>`:'').join('')}</div>`;
+  return `<div class="statusbar" role="img" aria-label="${esc(DASH_STATES.map(s=>statusNames[s]+' '+pct(c[s],sum)).join('，'))}">${DASH_STATES.map(s=>c[s]>0?`<span class="s-${s}" style="width:${(100*c[s]/(sum||1)).toFixed(3)}%" title="${esc(statusNames[s]+' '+pct(c[s],sum))}"></span>`:'').join('')}</div>`;
 }
-function domainCard(d,rows) {
-  const c=countStates(rows), flight=FLIGHT.reduce((a,s)=>a+c[s],0), fn=(Array.isArray(d.functions)?d.functions:[]).filter(Boolean).slice(0,4);
-  const breakdown=`<div class="card-breakdown">${DASH_STATES.map(s=>`<span><i class="s-${s}"></i>${esc(statusNames[s])}<b>${fmtN(c[s])}</b></span>`).join('')}</div>`;
-  // 卡片整块可点，点开看这个域的票与边界；悬停时功能行换成分状态张数
+function panoramaCard(d, total) {
   const on=d.id===openDomain;
-  return `<button type="button" class="domain-card${on?' on':''}" data-domain="${esc(d.id)}" aria-expanded="${on}">`+
-    (d.id&&d.name?`<div class="card-top"><span class="domain-id">${esc(d.id)}</span></div>`:'')+
-    `<h3>${esc(d.name||d.id)}</h3>`+(d.purpose?`<p class="card-purpose">${esc(d.purpose)}</p>`:'')+
-    `<div class="card-swap${fn.length?' flip':''}">${fn.length?`<div class="card-functions">${fn.map(esc).join(' · ')}</div>`:''}${breakdown}</div>`+
-    `<div class="card-stats"><strong>${fmtN(rows.length)}</strong> 张<span>${fmtN(flight)} ${FLIGHT.map(s=>statusNames[s]).join(' / ')}</span></div>${dashBar(c,rows.length)}</button>`;
+  const action=d.track?`data-track="${esc(d.track)}"`:`data-domain="${esc(d.id)}"`;
+  const latest=d.merged[0];
+  return `<button type="button" class="domain-card panorama-card${on?' on':''}" ${action} data-panorama-id="${esc(d.id)}" data-total="${d.rows.length}" data-running="${d.states.in_progress}" data-blocked="${d.states.blocked}" aria-expanded="${on}">`+
+    `<h3>${esc(d.name)}</h3><div class="panorama-facts"><p><span>现在</span>${esc(d.doing)}</p><p><span>卡住</span>${esc(d.blocker)}</p><p><span>负责</span>${esc(d.owners.join('、')||'未登记负责人')}</p><p><span>最近合入</span>${latest?esc(latest.title):'当前查询范围内暂无记录'}</p></div>`+
+    `<div class="panorama-ratios"><span>进行中 <b>${d.runningShare}</b></span><span>阻塞 <b>${d.blockedShare}</b></span><span>活票占比 <b>${d.share}</b></span></div>${dashBar(d.states,d.rows.length)}</button>`;
 }
 // 每个分层按卡数取列数：放得下就一行排完，放不下挑空位最少的列数
 function colsFor(n,max) {
@@ -106,34 +103,18 @@ function fleet() {
   }).join('')}</div><p class="health-hint">读数直接来自哨兵。机器负载不代表交付成果；旧读数不代表机器仍在线。</p>${(native.lines||[]).filter(l=>l.active).length?`<details data-fold="lines" ${openFolds.has('lines')?'open':''}><summary class="subtle">${esc(native.host||'本机')} 的当前执行线 · ${(native.lines||[]).filter(l=>l.active).length}</summary><div class="compact-list">${(native.lines||[]).filter(l=>l.active).slice(0,40).map(l=>`<div class="status-line">${esc(l.id)} · ${esc(l.state)} · ${esc(l.model)} · ${time(l.updated_at)}</div>`).join('')}</div></details>`:''}`;
 }
 function overview() {
-  const live=liveTickets(), total=live.length, c=countStates(live);
-  const domains=Array.isArray(data.domains)?data.domains:[], known=new Set(domains.map(d=>d.id));
-  const hasX=known.has('X'), orphan=live.filter(t=>!known.has(t.domain)).length;
-  const rowsOf=d=>domainRows(d,live);
-  const bandOf=d=>d.band||'未分层';
-  const bandNames=[...BAND_ORDER,...domains.map(bandOf)].filter((b,i,all)=>all.indexOf(b)===i&&domains.some(d=>bandOf(d)===b));
-  const groups=bandNames.map(name=>{const items=domains.filter(d=>bandOf(d)===name).map(d=>({d,rows:rowsOf(d)}));return {name,items,count:items.reduce((a,x)=>a+x.rows.length,0)};});
-  const kpis=[
-    ['全部活票',total,'含修复、研究、验收、需求与记录'],
-    ['待规划',c.backlog,`占活票 ${pct(c.backlog,total)}；仅是库存状态`],
-    ['进行中 + 待评审',c.in_progress+c.in_review,`${fmtN(c.in_progress)} + ${fmtN(c.in_review)}；不等同于 ${fmtN(c.in_progress+c.in_review)} 条在跑`],
-    ['待办 + 阻塞',c.todo+c.blocked,`${fmtN(c.todo)} + ${fmtN(c.blocked)}；还需要确认负责人和出口`]];
-  const src=live.reduce((a,t)=>{const k=t.domain_src==='label'?'label':t.domain_src==='none'?'none':'other';a[k]++;return a;},{label:0,none:0,other:0});
-  const foot=`原状态不变。按 Multica 域标签归属 ${fmtN(src.label)} 张；没有域标签的沿用早先快照的建议分流 ${fmtN(src.other)} 张，仍无归属的 ${fmtN(src.none)} 张计入待分诊${orphan?`；另有 ${fmtN(orphan)} 张的域编号不在登记表里，${hasX?'也计入待分诊':'未计入任何卡片'}`:''}。责任人、真运行状态、已部署版本及验收时间不由票单提供，本页均不臆填。`;
-  const header=`<header class="header"><div class="header-main"><div class="eyebrow"><span class="brand"><span class="brand-icon" aria-hidden="true">C</span>CORTEX</span><span class="sep" aria-hidden="true"></span><span>PROJECT OWNERSHIP</span></div><h1>Cortex 开发全景</h1><p class="header-sub">${esc(['票单快照 '+fullTime(data.synced_at),'来源 Multica 活票（哨兵同步）',tracks().length+' 个已开工板块'].join(' · '))}</p></div>`+
-    `<div class="header-side"><span class="pill">${fmtN(total)} 张活票</span><button id="sync" type="button" class="pill-button">刷新来源</button></div></header>`;
-  const kpiRow=`<section class="kpis" style="--kc:4">${kpis.map(([label,value,note])=>`<div class="kpi"><div class="kpi-label">${esc(label)}</div><div class="kpi-number">${fmtN(value)}</div><div class="kpi-note">${esc(note)}</div></div>`).join('')}</section>`;
-  const legendBar=`<div class="legendbar"><div class="legend" role="list">${DASH_STATES.map(s=>`<span role="listitem"><i class="s-${s}"></i>${esc(statusNames[s])}<b>${fmtN(c[s])}</b></span>`).join('')}</div><span class="scope-note">${domains.length} 个责任域 · ${groups.length} 个分层</span></div>`;
-  const bands=groups.length?`<div class="bands" id="bands">${groups.map((g,i)=>`<section class="band"><div class="band-head"><h2><span class="band-index">${String(i+1).padStart(2,'0')}</span>${esc(g.name)}</h2><small>${esc([fmtN(g.count)+' 张活票',BAND_NOTES[g.name]||''].filter(Boolean).join(' · '))}</small></div><div class="cards" data-n="${g.items.length}">${g.items.map(x=>domainCard(x.d,x.rows)).join('')}</div></section>`).join('')}</div>`:'<p class="empty">还没有登记产品责任域。AI 可先登记板块；不用先把所有模块规划齐。</p>';
-  // 主体之下只留两行默认收起的折叠；其余后加的功能走顶栏链接
-  const rack=`<div class="module-rack">${tracks().map(t=>`<button data-track="${esc(t.id)}"><b>${esc(t.title)}</b><span>${entities().filter(e=>e.track===t.id&&e.kind==='area'&&!e.archived).length} 块 · ${time(data.sources?.[t.id]?.observed_at||t.updated_at)}</span><span>↗</span></button>`).join('')||'<p class="empty">还没有登记。探索可以从一段自由正文开始。</p>'}</div>`;
-  const machines=(data.sentinel?.machines||[]).length;
-  const folds=`<div class="dash-folds">${fold('tracks',`已开工的板块 · ${tracks().length} 个`,rack)}${fold('fleet',`正在执行的环境 · ${machines?machines+' 台机器读数':'尚无读数'}`,fleet()+'<p class="health-hint">辅助信息，不作绩效。</p>')}</div>`;
-  $('#main').innerHTML=`<div class="dash">${header}${kpiRow}<p class="notice">下图按职责组织现有能力与活跃票，点卡片看该域的票。票数只表示清单规模，不能用来判断模块健康。</p>${legendBar}${bands}<p class="source-foot">${esc(foot)}</p>${folds}</div>`;
-  watchBands();keepFolds();
+  const model=panoramaModel(), live=model.live, total=live.length, c=countStates(live), domains=model.cards;
+  const bandNames=[...BAND_ORDER,...domains.map(d=>d.band||'未分层')].filter((b,i,a)=>a.indexOf(b)===i&&domains.some(d=>(d.band||'未分层')===b));
+  const header=`<header class="header"><div class="header-main"><span class="eyebrow">CORTEX · 全部开发板块</span><h1>Cortex 开发全景图</h1><p class="header-sub">票单快照 ${esc(fullTime(data.synced_at))} · 只读 Multica · 板块登记来自工作台</p></div><div class="header-side"><button id="sync" type="button" class="pill-button">刷新来源</button></div></header>`;
+  const kpis=[['进行中占比',pct(c.in_progress,total),'按票面状态，不冒充实际运行'],['阻塞占比',pct(c.blocked,total),'按票面阻塞，具体卡点见各格'],['待规划占比',pct(c.backlog,total),'含问题、研究、需求和记录'],['缺标签占比',pct(domains.find(d=>d.id==='__unclassified__').rows.length,total),'不沿用旧分流，提醒补标签']];
+  const kpiRow=`<section class="kpis" style="--kc:4">${kpis.map(([label,value,note])=>`<div class="kpi"><div class="kpi-label">${esc(label)}</div><div class="kpi-number">${esc(value)}</div><div class="kpi-note">${esc(note)}</div></div>`).join('')}</section>`;
+  const bands=`<div class="bands" id="bands">${bandNames.map(name=>{const rows=domains.filter(d=>(d.band||'未分层')===name);return `<section class="band"><div class="band-head"><h2>${esc(name)}</h2><small>${esc(BAND_NOTES[name]||'按标签自动归入')}</small></div><div class="cards" data-n="${rows.length}">${rows.map(d=>panoramaCard(d,total)).join('')}</div></section>`;}).join('')}`+
+    `<section class="band"><div class="band-head"><h2>已登记板块与家族</h2><small>可跨责任域，不能与上面的占比相加</small></div><div class="cards" data-n="${model.trackCards.length||1}">${model.trackCards.map(d=>panoramaCard(d,total)).join('')||'<p class="empty">还没有登记板块。</p>'}</div></section></div>`;
+  $('#main').innerHTML=`<div class="dash">${header}${kpiRow}<p class="notice">看每块正在做什么、卡在哪、谁负责。点击责任域展开票单，点击已登记板块进入它自己的板块图。读数只显示百分比。</p>${bands}<p class="source-foot">比例按本格活票计算，活票占比按全部活票计算。负责人只取 track 登记；没有登记就写未知。近期合入只取 GitHub 已合到主线的记录，不把关票当合入，也不当装机验收。${esc(data.merges?.error||'')} 页面自动读取快照，来源同步有查询上限；失败保留上一份完整数据。</p></div>`;
+  watchBands();
   if(openDomain&&!domains.some(d=>d.id===openDomain))openDomain='';
   if(openDomain)openDomainPanel(false);
-  $('#sync').onclick=async()=>{try{await api('/api/refresh',{method:'POST',body:'{}'});notice('正在同步。完整快照回来前保留原来的数。');}catch(e){notice(e.message);}};
+  $('#sync').onclick=async()=>{try{await api('/api/refresh',{method:'POST',body:'{}'});notice('正在同步，保留上一份完整快照。');}catch(e){notice(e.message);}};
 }
 // ---- 板块图：照板块图模板的 Harness 版式 ----
 // 左侧行名 + 右侧块格；块上一枚五档进度签；点块在那块所在行的正下方展开详情；页顶一张「此刻」卡，页尾更新记录默认收起。
@@ -325,20 +306,18 @@ function closeDomainPanel() {
   document.querySelectorAll('.dash .domain-card').forEach(c=>{c.classList.remove('on');c.setAttribute('aria-expanded','false');});
 }
 function domainPanelHtml(d) {
-  const rows=domainRows(d).sort((a,b)=>(TICKET_RANK[a.status]??9)-(TICKET_RANK[b.status]??9)||Number(String(b.key).replace(/\D/g,''))-Number(String(a.key).replace(/\D/g,'')));
-  const c=countStates(rows), related=tracks().filter(t=>(t.domains||[]).includes(d.id)), draft=data.drafts?.domains?.[d.id]||{};
-  const canSave=info?.local&&data.connection?.mode==='host', rest=rows.length-domainShown;
-  const list=rows.slice(0,domainShown).map(t=>`<button type="button" class="tk-row" data-ticket="${esc(t.key)}"><span class="tk-key">${esc(t.key)}</span><span class="tk-title">${esc(t.title)}</span><span class="tk-state"><i class="s-${esc(t.status)}"></i>${esc(statusNames[t.status]||t.status)}</span></button>`).join('');
-  return `<div class="dp-head"><div class="dp-title"><span class="domain-id">${esc(d.id)} · ${esc(d.band||'责任域')}</span><h3>${esc(d.name||d.id)} · ${fmtN(rows.length)} 张活票</h3>${d.purpose?`<p class="dp-purpose">${esc(d.purpose)}</p>`:''}</div><button type="button" class="pill-button" data-close-domain>收起</button></div>`+
-    `<div class="dp-counts">${DASH_STATES.map(s=>`<span><i class="s-${s}"></i>${esc(statusNames[s])}<b>${fmtN(c[s])}</b></span>`).join('')}</div>${dashBar(c,rows.length)}`+
-    `<p class="dp-order">按阻塞、待评审、进行中、待办、待规划排，同状态新票在前；点票号看这张票。</p>`+
-    `<div class="dp-list">${list||'<p class="dp-empty">这个域眼下没有活票。</p>'}</div>`+
-    (rest>0?`<button type="button" class="pill-button dp-more" data-more-domain>再列 ${fmtN(Math.min(20,rest))} 张（还有 ${fmtN(rest)} 张）</button>`:'')+
-    `<div class="dp-meta"><div><b>边界</b>${esc(d.boundary||'尚未记录')}</div><div><b>已开工板块</b>${related.map(t=>`<button type="button" class="chip-link" data-track="${esc(t.id)}">${esc(t.title)} ↗</button>`).join(' ')||'尚未开图，不凭空补齐。'}</div>${(d.docs||[]).length?`<div><b>仓库入口</b>${esc((d.docs||[]).join('；'))}</div>`:''}</div>`+
-    `<details class="dp-draft" data-fold="draft:${esc(d.id)}" ${openFolds.has('draft:'+d.id)?'open':''}><summary>负责人与这轮要交付什么（管理草稿）</summary><label class="field">负责人<input id="draft-owner" value="${esc(draft.owner||'')}"></label><label class="field">这轮要交付什么<textarea id="draft-goal">${esc(draft.goal||'')}</textarea></label>${canSave?'<button type="button" id="save-draft">保存管理草稿</button>':'<p class="dp-order">当前连接为浏览权限。</p>'}</details>`;
+  const card=panoramaModel().cards.find(x=>x.id===d.id), rows=[...card.rows].sort((a,b)=>(TICKET_RANK[a.status]??9)-(TICKET_RANK[b.status]??9)||String(b.updated||'').localeCompare(String(a.updated||'')));
+  const c=card.states, rest=rows.length-domainShown;
+  const list=rows.slice(0,domainShown).map(t=>`<button type="button" class="tk-row" data-ticket="${esc(t.key)}"><span class="tk-key">${esc(t.key)}</span><span class="tk-title">${esc(t.title)}</span><span class="tk-state">${esc(statusNames[t.status]||t.status)}</span></button>`).join('');
+  return `<div class="dp-head"><div class="dp-title"><h3>${esc(d.name)}</h3><p class="dp-purpose">${esc(d.purpose||'')}</p></div><button type="button" class="pill-button" data-close-domain>收起</button></div>`+
+    `<div class="dp-counts">${DASH_STATES.map(s=>`<span>${esc(statusNames[s])}<b>${pct(c[s],rows.length)}</b></span>`).join('')}</div>${dashBar(c,rows.length)}`+
+    `<div class="dp-meta"><div>负责人：${esc(card.owners.join('、')||'未登记负责人')}</div><div>板块入口：${card.related.map(t=>`<button class="chip-link" data-track="${esc(t.id)}">${esc(t.title)} ↗</button>`).join(' ')||'尚未关联板块图'}</div></div>`+
+    `<p class="dp-order">先列阻塞和进行中的票；原状态不改，点票号按需读详情。</p><div class="dp-list">${list||'<p class="dp-empty">当前快照没有活票。</p>'}</div>`+
+    (rest>0?'<button type="button" class="pill-button dp-more" data-more-domain>继续看票单</button>':'')+
+    `<div class="dp-meta">最近合入：${card.merged.slice(0,3).map(m=>`<a href="${esc(m.url)}" target="_blank" rel="noopener">${esc(m.title)}</a> · ${esc(time(m.merged_at))}`).join('<br>')||'当前查询范围内暂无记录'}<br>负责人和家族选择通过签名客户端 register-track 维护，继续使用同一份 track 登记。</div>`;
 }
 function openDomainPanel(byUser) {
-  const d=(data.domains||[]).find(x=>x.id===openDomain), card=[...document.querySelectorAll('.dash .domain-card')].find(el=>el.dataset.domain===openDomain);
+  const d=panoramaModel().cards.find(x=>x.id===openDomain), card=[...document.querySelectorAll('.dash .domain-card')].find(el=>el.dataset.domain===openDomain);
   if(!d||!card){openDomain='';return;}
   document.querySelectorAll('.dash .row-detail').forEach(p=>{if(p.parentElement!==card.parentElement)p.remove();});
   let panel=card.parentElement.querySelector(':scope > .row-detail');

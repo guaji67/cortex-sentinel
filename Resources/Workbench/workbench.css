@@ -193,3 +193,12 @@ html[data-view=modules] footer{max-width:1120px;padding:10px 20px 20px}
 @media(max-width:680px){html[data-view=modules] main{padding:24px 16px 72px}html[data-view=modules] .mast-in,html[data-view=modules] footer{padding-left:16px;padding-right:16px}
   .board .row{grid-template-columns:1fr}.board .rowname{justify-content:flex-start;text-align:left}.board .kv{grid-template-columns:1fr}.board .detail{padding:16px}.board h1{font-size:27px}}
 @media(prefers-reduced-motion:reduce){.board .blk:hover{transform:none}}
+
+/* 全景按相同卡片展示事实，长票名只在本格截断，详情保留全文。 */
+.dash .panorama-card{min-height:270px;gap:10px}
+.dash .panorama-facts{display:grid;gap:7px;flex:1;margin:10px 0}
+.dash .panorama-facts p{font-size:12px;line-height:1.6;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.dash .panorama-facts p span{color:var(--muted);margin-right:8px}
+.dash .panorama-ratios{display:flex;flex-wrap:wrap;gap:6px 12px;font-size:11px;color:var(--muted)}
+.dash .panorama-ratios b{margin-left:4px;color:var(--ink)}
+.dash .cards.solo .panorama-card{display:flex;min-height:240px}

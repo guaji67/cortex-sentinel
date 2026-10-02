@@ -115,7 +115,7 @@ final class WorkbenchLedger: @unchecked Sendable {
         for field in ["owner", "machine", "parent", "group", "status_label", "color", "blocker", "next_action", "state", "classification", "from", "to", "certainty"] {
             if let value = next[field], !(value is String) { throw WorkbenchError("\(field) 应为文本；自由扩展字段不受此约束") }
         }
-        for field in ["references", "ticket_ids", "domains"] {
+        for field in ["references", "ticket_ids", "domains", "ticket_labels"] {
             if let value = next[field], !(value is [String]) { throw WorkbenchError("\(field) 应为文本列表") }
         }
         if let notes = next["notes"], !(notes is [Any]) { throw WorkbenchError("notes 应为列表，长正文可用 body") }

@@ -24,6 +24,7 @@ class CheckedHead(unittest.TestCase):
                 land.checked_pr({**self.row(), **patch}, 1, 'a'*40)
 
     def test_failed_pending_and_missing_checks_rejected(self):
-        for checks in [None, [{'status':'IN_PROGRESS'}], [{'status':'COMPLETED','conclusion':'FAILURE'}]]:
+        for checks in [None, [{'status':'IN_PROGRESS'}], [{'status':'COMPLETED','conclusion':'FAILURE'}],
+                       [{'status':'COMPLETED','conclusion':'SKIPPED'}], [{'status':'COMPLETED','conclusion':'NEUTRAL'}]]:
             with self.subTest(checks=checks), self.assertRaises(ValueError):
                 land.checked_pr({**self.row(),'statusCheckRollup':checks}, 1, 'a'*40)

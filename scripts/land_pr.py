@@ -29,7 +29,7 @@ def checked_pr(row, number, head):
     if not isinstance(checks, list):
         raise ValueError('检查结果没读到')
     for check in checks:
-        if check.get('status') == 'COMPLETED' and check.get('conclusion') in ['SUCCESS', 'NEUTRAL', 'SKIPPED']:
+        if check.get('status') == 'COMPLETED' and check.get('conclusion') == 'SUCCESS':
             continue
         if check.get('state') == 'SUCCESS':
             continue

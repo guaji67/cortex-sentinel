@@ -35,6 +35,7 @@ struct CortexTelemetrySummaryPayload: Decodable, Equatable, Sendable {
         let swap: Swap?
         let devSlots: DevSlots?
         let linesByModel: [String: Int]?
+        let runningLines: Int?
         let ts: String?
         /// 这台在跑的哨兵版本（CFBundleShortVersionString），LAN 上报时盖进载荷；
         /// KV 老数据与没升级的旧哨兵没这键 → nil，面板版本行写「没读到」。
@@ -53,6 +54,7 @@ struct CortexTelemetrySummaryPayload: Decodable, Equatable, Sendable {
             case swap
             case devSlots = "dev_slots"
             case linesByModel = "lines_by_model"
+            case runningLines = "running_lines"
             case ts
             case sentinelVersion = "sentinel_version"
             case sentinelBuild = "sentinel_build"
@@ -69,6 +71,7 @@ struct CortexTelemetrySummaryPayload: Decodable, Equatable, Sendable {
             swap = try container.decodeIfPresent(Swap.self, forKey: .swap)
             devSlots = try container.decodeIfPresent(DevSlots.self, forKey: .devSlots)
             linesByModel = try container.decodeIfPresent([String: Int].self, forKey: .linesByModel)
+            runningLines = try container.decodeIfPresent(Int.self, forKey: .runningLines)
             ts = try container.decodeIfPresent(String.self, forKey: .ts)
             sentinelVersion = try container.decodeIfPresent(String.self, forKey: .sentinelVersion)
             sentinelBuild = try container.decodeIfPresent(String.self, forKey: .sentinelBuild)
@@ -128,7 +131,7 @@ struct CortexTelemetrySummaryPayload: Decodable, Equatable, Sendable {
         struct AgentTasks: Decodable, Equatable, Sendable {
             let name: String
             let machine: String?
-            let tasks: Int
+            let tasks: Int?
             let items: [TaskItem]
 
             struct TaskItem: Decodable, Equatable, Sendable {
@@ -148,7 +151,7 @@ struct CortexTelemetrySummaryPayload: Decodable, Equatable, Sendable {
                 case name, machine, tasks, items
             }
 
-            init(name: String, machine: String?, tasks: Int, items: [TaskItem] = []) {
+            init(name: String, machine: String?, tasks: Int?, items: [TaskItem] = []) {
                 self.name = name
                 self.machine = machine
                 self.tasks = tasks
@@ -159,7 +162,7 @@ struct CortexTelemetrySummaryPayload: Decodable, Equatable, Sendable {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
                 name = try container.decode(String.self, forKey: .name)
                 machine = try container.decodeIfPresent(String.self, forKey: .machine)
-                tasks = try container.decode(Int.self, forKey: .tasks)
+                tasks = try container.decodeIfPresent(Int.self, forKey: .tasks)
                 items = try container.decodeIfPresent([TaskItem].self, forKey: .items) ?? []
             }
         }
@@ -209,7 +212,7 @@ enum CortexTelemetrySummaryOutcome: Equatable, Sendable {
 enum CortexTelemetrySummaryConstants {
     /// KV 汇总的独立后台轮：各机哨兵 10 分钟写一轮 KV，拉得再勤也看不到新数据，
     /// 后台跟这个拍子对齐；开面板那轮仍跟 GLM 用量同一拍触发。
-    static let automaticRefreshInterval: TimeInterval = 10 * 60
+    static let automaticRefreshInterval: TimeInterval = 20
 }
 
 enum CortexTelemetrySummaryFetcher {
@@ -218,13 +221,13 @@ enum CortexTelemetrySummaryFetcher {
         var scriptArguments: [String] = ["scripts/sentry_telemetry.py", "summary"]
         /// summary 会并发拉每个在跑执行者的 run 历史（10 分钟一轮后台跑），
         /// 实测整轮 20-60s，45s 的旧上限会把它掐成「这次没读到」。
-        var scriptTimeout: TimeInterval = 240
+        var scriptTimeout: TimeInterval = 30
         var export: CortexGitScriptExport.Configuration
 
         init(
             manifestPath: String = "scripts/sentry_telemetry.files",
             scriptArguments: [String] = ["scripts/sentry_telemetry.py", "summary"],
-            scriptTimeout: TimeInterval = 240,
+            scriptTimeout: TimeInterval = 30,
             cacheRoot: URL? = nil,
             export: CortexGitScriptExport.Configuration? = nil
         ) {
@@ -309,9 +312,9 @@ enum CortexTelemetrySummaryDisplay {
         }
         var lines: [String] = []
         // 顶部数改成「正在执行的任务」（一个执行者可背多条）；旧脚本没 tasks_total
-        // 时退回 working 个数兜底显示。
-        let running = payload.multica?.tasksTotal ?? payload.multica?.working
-        let title = running.map { "三机总览（Multica 在跑 \($0)）" } ?? "三机总览"
+        // 时标题写「在跑读不到」，不拿 working 人数兜底。
+        let running = payload.multica?.tasksTotal
+        let title = running.map { "三机总览（Multica 在跑 \($0)）" } ?? "三机总览（Multica 在跑读不到）"
         lines.append(title)
         for machine in payload.machines {
             lines.append(hardwareLine(of: machine))
@@ -345,20 +348,30 @@ enum CortexTelemetrySummaryDisplay {
         return "\(name) \(parts.joined(separator: " · "))"
     }
 
-    static func slotLine(of machine: CortexTelemetrySummaryPayload.Machine) -> String {
+    static func currentRunningLines(_ machine: CortexTelemetrySummaryPayload.Machine, now: Date) -> Int? {
+        guard let stamp = machine.ts.flatMap(CortexPlanStatusDate.parse) else { return nil }
+        let age = now.timeIntervalSince(stamp)
+        return age >= 0 && age < 60 ? machine.runningLines : nil
+    }
+
+    static func currentMultica(_ state: CortexTelemetrySummaryDisplayState?, now: Date) -> CortexTelemetrySummaryPayload.Multica? {
+        guard let state, state.failureText == nil, let stamp = state.fetchedAt else { return nil }
+        let age = now.timeIntervalSince(stamp)
+        return age >= 0 && age < 60 ? state.payload?.multica : nil
+    }
+
+    static func slotLine(of machine: CortexTelemetrySummaryPayload.Machine, now: Date = Date()) -> String {
         let name = machineToken(of: machine)
         var parts: [String] = []
         if let slots = machine.devSlots, let cap = slots.cap {
             parts.append("槽 \(slots.used ?? 0)/\(cap)")
         }
-        if let byModel = machine.linesByModel, !byModel.isEmpty {
-            let text = byModel
-                .sorted { $0.value > $1.value }
-                .map { key, count in count > 1 ? "\(shortModel(key))×\(count)" : shortModel(key) }
-                .joined(separator: "·")
-            parts.append("本机线 \(byModel.values.reduce(0, +))（\(text)）")
+        let readAt = machine.ts.flatMap(CortexPlanStatusDate.parse)
+        if let count = currentRunningLines(machine, now: now) {
+            parts.append("本机线 \(count)")
         } else {
-            parts.append("本机线 0")
+            let stamp = readAt.map { "（\(CortexPlanStatusDisplay.beijingClockText($0)) 读的）" } ?? ""
+            parts.append("本机线 读不到\(stamp)")
         }
         return "\(name) \(parts.joined(separator: " · "))"
     }

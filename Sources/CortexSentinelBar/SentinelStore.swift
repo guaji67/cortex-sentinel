@@ -182,6 +182,7 @@ final class SentinelStore {
     @ObservationIgnored private var cleanupTimer: Timer?
     /// 三机总览 KV 汇总的独立后台轮：跟各机哨兵写 KV 同拍（10 分钟）。
     @ObservationIgnored private var telemetryTimer: Timer?
+    @ObservationIgnored private var glmPlanStatusTimer: Timer?
     @ObservationIgnored private var aioRefreshInFlight = false
     @ObservationIgnored private var aioRefreshIncludesUsage = false
     @ObservationIgnored private var inputStatusRefreshInFlight = false
@@ -307,6 +308,7 @@ final class SentinelStore {
         officialUsageTimer?.invalidate()
         cleanupTimer?.invalidate()
         telemetryTimer?.invalidate()
+        glmPlanStatusTimer?.invalidate()
     }
 
     var severity: SentinelSeverity {
@@ -391,6 +393,13 @@ final class SentinelStore {
             self?.refreshCodeBuddyCredit()
             self?.refreshUpdateCheck()
         }
+
+        // 派工状态独立于用量轮询，最多 20 秒再取一次，不加用量 API 请求。
+        glmPlanStatusTimer = makeRepeatingTimer(interval: 20) { [weak self] in
+            guard let self else { return }
+            self.refreshGLMPlanStatus(entries: self.glmKeyEntries, snapshot: self.glmUsage)
+        }
+        refreshGLMPlanStatus(entries: glmKeyEntries, snapshot: glmUsage)
 
         // v3.2 第 5 点：启动即清一次派工日志，之后每小时巡检一次。
         runLogCleanup()

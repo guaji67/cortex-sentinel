@@ -31,11 +31,12 @@
       const states = Object.fromEntries([...ACTIVE].map(s => [s,rows.filter(t => t.status === s).length]));
       const running = newest(rows.filter(t => t.status === 'in_progress'));
       const blocked = newest(rows.filter(t => t.status === 'blocked'));
-      const owners = [...new Set(related.filter(t => card.track || !(t.ticket_labels || []).some(l => l.startsWith('家族:')) || (t.ticket_labels || []).includes(card.label)).map(t => t.owner).filter(x => typeof x === 'string' && x.trim()))];
+      const scopeRelated = related.filter(t => card.track || !(t.ticket_labels || []).some(l => l.startsWith('家族:')) || (t.ticket_labels || []).includes(card.label));
+      const owners = [...new Set(scopeRelated.map(t => t.owner).filter(x => typeof x === 'string' && x.trim()))];
       const merged = mergeRecords.filter(m => (m.ticket_keys || []).some(key => byKey.has(key) && matches(byKey.get(key))));
       return {...card, rows, related, states, owners, merged,
-        doing: running[0]?.title || related.find(t => t.status_label)?.status_label || '票面尚无进行中的工作',
-        blocker: blocked[0]?.title || related.find(t => t.blocker)?.blocker || '票面未标阻塞，未逐项复验',
+        doing: running[0]?.title || scopeRelated.find(t => t.status_label)?.status_label || '票面尚无进行中的工作',
+        blocker: blocked[0]?.title || scopeRelated.find(t => t.blocker)?.blocker || '票面未标阻塞，未逐项复验',
         share:percent(rows.length, live.length), runningShare:percent(states.in_progress,rows.length), blockedShare:percent(states.blocked,rows.length)};
     };
     const cards = domains.map(d => {

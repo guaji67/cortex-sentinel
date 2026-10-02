@@ -18,9 +18,8 @@ actor WorkbenchMultica {
     private func call(_ args: [String]) async throws -> Any {
         guard callsRemaining > 0, deadline.timeIntervalSinceNow > 0 else { throw WorkbenchError(503, "本轮查询达到上限，保留上一份完整快照") }
         callsRemaining -= 1
-        var environment = ProcessInfo.processInfo.environment
+        var environment = executionEnvironment()
         environment["MULTICA_HTTP_TIMEOUT"] = "45"
-        environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:" + (environment["PATH"] ?? "")
         let out = await runner.run(executablePath: executable, arguments: args + ["--output", "json"],
                                    workingDirectory: nil, environment: environment, stdin: nil, timeout: min(45, deadline.timeIntervalSinceNow))
         guard out.exitCode == 0 else { throw WorkbenchError(503, "Multica 没有返回有效快照；请检查本机登录与连接") }
@@ -109,10 +108,16 @@ actor WorkbenchMultica {
         } else { next["domain"] = "X"; next["domain_src"] = "none" }
         return next
     }
+    private func executionEnvironment() -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        // launchd 不继承交互 shell；复用本机用户 CLI 目录，不绑定开发机路径。
+        let localBin = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin").path
+        environment["PATH"] = localBin + ":/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:" + (environment["PATH"] ?? "")
+        return environment
+    }
     private func recentMerges() async throws -> BoardObject {
         guard deadline.timeIntervalSinceNow > 0 else { throw WorkbenchError(503, "查询预算已用完") }
-        var environment = ProcessInfo.processInfo.environment
-        environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:" + (environment["PATH"] ?? "")
+        let environment = executionEnvironment()
         let cutoff = WorkbenchJSON.timestamp().prefix(10)
         // 只读最近一批主线 PR，不扫描仓库提交史，不获取 PR 正文。
         let out = await runner.run(executablePath: "/usr/bin/env", arguments: ["gh", "pr", "list", "--repo", "guaji67/cortex", "--state", "merged", "--base", "main", "--limit", "100", "--json", "number,title,mergedAt,mergeCommit,url,baseRefName"], workingDirectory: nil, environment: environment, stdin: nil, timeout: min(30,deadline.timeIntervalSinceNow))

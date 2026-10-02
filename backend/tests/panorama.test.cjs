@@ -37,3 +37,9 @@ test('域标签被摘后马上进未归类，不使用 domain 字段残值',()=>
 test('空快照保留未归类且不显示 NaN 百分比',()=>{
   const p=build({});assert.equal(p.cards.length,1);assert.equal(p.cards[0].runningShare,'0.0%');
 });
+
+test('家族负责人和卡点不扩成整个域的负责人和卡点',()=>{
+ const track={kind:'track',id:'family',title:'家族',owner:'家族负责人',blocker:'家族卡点',domains:['P1'],ticket_labels:['家族:特定']};
+ const p=build({domains:[domain],entities:[track],tickets:[]});
+ assert.deepEqual(p.cards[0].owners,[]);assert.notEqual(p.cards[0].blocker,'家族卡点');assert.equal(p.trackCards[0].blocker,'家族卡点');
+});

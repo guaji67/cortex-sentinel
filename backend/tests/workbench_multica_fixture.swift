@@ -23,6 +23,7 @@ actor FakeRunner: CortexSubprocessRunning {
         let value: Any
         if arguments.first == "gh" {
             precondition(arguments.prefix(3).elementsEqual(["gh","pr","list"]))
+            precondition(environment?["PATH"]?.contains("/.local/bin:") == true)
             if mode == "github-failed" { return .init(exitCode: 1,standardOutput: Data(),standardError: Data(),timedOut: false) }
             value = [["number":1,"title":"fix: COR-1 修复","baseRefName":"main","mergedAt":WorkbenchJSON.timestamp(),"mergeCommit":["oid":"synthetic-main-merge"],"url":"https://github.com/example/repo/pull/1"]]
         } else {

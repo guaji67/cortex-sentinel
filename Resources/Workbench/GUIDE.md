@@ -52,3 +52,16 @@ POST /api/update、/api/source 使用 X-Board-Client / X-Board-Time / X-Board-Si
 签名为 HMAC-SHA256(secret, timestamp + newline + path + newline + body)，允许五分钟时差。
 协议版本不一致不静默连接；来源断开保留旧快照。不会改 Multica 票、派工或同步 Hook。
 网络限可信局域网；外网走已有安全隧道，不公开映射这个 HTTP 端口。
+
+## 全开发全景与新板块登记
+
+首页全景读现有 overview，当前域标签决定归属；没有主域或多个主域的票进入未归类。读数只显示百分比，进行中是票面状态，实际运行不从票面推断。近期主线记录来自有界 GitHub 查询，关票不代表合入或用户验证。
+
+新窗口、新家族都登记同一份 track，不另建名册：
+
+```sh
+client.py --profile PROFILE register-track ID --title 板块名 --owner 当前负责人 --domain 域编号 --family 家族名 --summary 当前工作 --blocker 卡点
+client.py --profile PROFILE register-track ID --archive
+```
+
+`--family` 按家族标签自动归票，可跨域。客户端自动先读修订、写后回读。撤下保留历史；权限不覆盖就报告，不换身份绕过。

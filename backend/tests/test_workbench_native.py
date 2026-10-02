@@ -89,6 +89,23 @@ class NativeWorkbench(unittest.TestCase):
         self.assertEqual(row["custom"]["unusual"][2]["x"], "保留")
         self.assertGreaterEqual(len(self.request("/api/overview")[1]["entities"]), 100)
 
+    def test_panorama_asset_and_one_registration_entry(self):
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/panorama.js") as response:
+            self.assertIn(b"CortexPanorama", response.read())
+        profile = self.root / "synthetic-client.json"
+        profile.write_text(json.dumps({"url": f"http://127.0.0.1:{self.port}", "client": "tester", "secret": self.secret}))
+        client = REPO / "backend/cortex_sentinel/workbench/client.py"
+        id = "panorama-test-" + uuid.uuid4().hex
+        command = ["python3", str(client), "--profile", str(profile), "register-track", id]
+        result = subprocess.run(command + ["--title", "测试板块", "--owner", "合成负责人", "--domain", "P1", "--family", "测试家族"], capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        row = self.request("/api/entities/" + id)[1]
+        self.assertEqual(row["ticket_labels"], ["家族:测试家族"])
+        self.assertEqual(row["owner"], "合成负责人")
+        result = subprocess.run(command + ["--archive"], capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.request("/api/entities/" + id)[1]["archived"])
+
     def test_idempotency_and_conflict(self):
         e = self.event()
         self.assertEqual(self.request("/api/update", e)[0], 200)

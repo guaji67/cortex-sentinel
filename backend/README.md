@@ -43,3 +43,25 @@ Cortex 哨兵后端
 
 launchd 模板在 `launchd/*.plist.tmpl`，占位符是 `@INSTALL_ROOT@` `@PYTHON3@` `@SENTINEL_HOME@` `@HOME@`。
 后端不负责挂 job。
+
+派工占用与派工记录
+
+每分钟记一行占用、每条新起的 run 记一行，留给派工复盘用（Falcon 10-04）。
+
+    bash scripts/install_occupancy_log.sh install      # 装：每 60 秒一轮的 LaunchAgent，不是常驻
+    bash scripts/install_occupancy_log.sh status
+    bash scripts/install_occupancy_log.sh uninstall    # 只摘 job，记录不删
+
+记录在 `~/Library/Application Support/CortexSentinel/occupancy/`（北京日期）：
+`YYYY-MM-DD.jsonl` 每分钟一行（各号在跑/上限，看板 run、本机线、手开窗口、排队分开，各执行者在跑与看板帽，
+三机内存压力）；`dispatch-YYYY-MM-DD.jsonl` 每条新 run 一行（票号、执行者、机器、号、模型、run 类型、
+触发评论开头 40 字、当刻各号在跑数，按 run 号去重）。目录里有「不要删除.md」，至少留 30 天。
+
+查询：
+
+    sentinel-occupancy at "2026-10-04 00:05"      # 那一刻最近一行的各号占用
+    sentinel-occupancy runs --since "00:00"       # 这段时间的派工行
+
+数法不另写一套：号的在跑数读哨兵面板同一份（闸运行时 `glm_plan_status.py --json`），三机内存读
+`sentry_telemetry.read_machines()`。面板口径不含手开窗口、监工占位和预占；这些来自三机上报的
+`zcode_other`，单列在 `manual_windows` / `supervisor_windows`，两边口径的差别各自并排写，不合并。

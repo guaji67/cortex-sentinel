@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+"""sentinel-occupancy：查哨兵的占用记录与派工记录。
+
+    sentinel-occupancy at "2026-10-04 00:05"      那一刻最近一行的各号占用
+    sentinel-occupancy runs --since "00:00"       这段时间的派工行
+    sentinel-occupancy tick                       记一轮（launchd 每分钟调一次）
+"""
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from cortex_sentinel.occupancy import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())

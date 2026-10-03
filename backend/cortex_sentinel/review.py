@@ -11,8 +11,12 @@ Falcon 10-04 01:5x：不是跑分、不是派单去测、不是从回执里自�
 
 用法：
     sentinel-review add COR-12366 好 "6.7 分钟一次做对，回执与实物对得上" [--run 前缀] [--by 窗口名] [--model 手填]
+    sentinel-review void COR-12153 --run 01a1009f --by 窗口名 "原因"     作废那条 run 上的评价，汇总整条不算
     sentinel-review summary [--days 7] [--local]
     sentinel-review pending [--since 今天] [--local]
+
+add 不带 --run 时取这张票最近一条真跑完的 run（完工状态、有实际用时），没开跑就撤的、被取消的、失败的跳过；
+要评那些，明写 --run。
 
 summary 和 pending 默认三台合看：评价各机写各机的 reviews.jsonl，这里用 ssh（cortex-pro / cortex-mini，
 只读 cat 对方的 reviews.jsonl 和派工记录）合起来；连不上的机器在输出里写一行，不静默。pending 另扫看板上
@@ -113,17 +117,21 @@ def _dispatch_rows(occ_base: Path, ticket: Optional[str] = None) -> list[dict[st
 
 
 def run_from_dispatch(occ_base: Path, ticket: str, run_prefix: str = "") -> Optional[dict[str, Any]]:
-    """派工记录里这张票最近一条 run（按创建时刻）；指定 --run 就只认那一条。"""
+    """现查不通时的退路：派工记录里这张票的 run。指定 --run 就只认那一条；不指定只认记录里已完工的最近一条
+    （派工记录只在第一次看见时记状态，没核过用时，来源里写明）。"""
     rows = _dispatch_rows(occ_base, ticket)
     if run_prefix:
         rows = [r for r in rows if str(r.get("run_id") or "").startswith(run_prefix)]
+    else:
+        rows = [r for r in rows if r.get("status_at_seen") == "completed"]
     if not rows:
         return None
     row = max(rows, key=lambda r: str(r.get("created_bj") or r.get("ts_bj") or ""))
     return {
         "run_id": row.get("run_id"), "model": row.get("model"), "executor": row.get("executor"),
         "executor_id": row.get("executor_id"), "machine": row.get("machine") or machine_word(str(row.get("executor") or "")),
-        "account": row.get("account") or "-", "run_created_bj": row.get("created_bj"), "source": "派工记录",
+        "account": row.get("account") or "-", "run_created_bj": row.get("created_bj"), "run_seconds": None,
+        "source": "派工记录（现查不通，用时未核）",
     }
 
 
@@ -146,41 +154,69 @@ def fetch_issue_runs(ticket: str) -> tuple[Optional[list], Optional[str]]:
     return rows, None
 
 
-def run_from_multica(
-    ticket: str, run_prefix: str = "", *,
-    occ_base: Optional[Path] = None,
-    runs_fn: Callable[[str], tuple[Optional[list], Optional[str]]] = fetch_issue_runs,
-    agents_fn: Callable[[], tuple[Optional[list], Optional[str]]] = fetch_agents_all,
-) -> Optional[dict[str, Any]]:
-    """现查：multica issue runs 最近一条（新到旧），模型和执行者名从 agent 清单取，号从派工记录里同一执行者借。"""
-    runs, _err = runs_fn(ticket)
-    if not runs:
+def run_seconds(run: Mapping[str, Any]) -> Optional[int]:
+    """实际用时：开跑和完工时刻都有且完工晚于开跑；排队没开跑就被撤的没有。"""
+    started, finished = occ.parse_utc(run.get("started_at")), occ.parse_utc(run.get("completed_at"))
+    if started is None or finished is None or finished <= started:
         return None
-    if run_prefix:
-        runs = [r for r in runs if str(r.get("id") or "").startswith(run_prefix)]
-    if not runs:
-        return None
-    run = max(runs, key=lambda r: str(r.get("created_at") or ""))
+    return int((finished - started).total_seconds())
+
+
+def pick_finished_run(runs: Sequence[Mapping[str, Any]]) -> Optional[Mapping[str, Any]]:
+    """最近一条真跑完的 run：状态是 completed 且有实际用时，按完工时刻取最新。
+    没开跑就撤的、被取消的（哪怕跑了很久）、失败的都跳过，要评它们明写 --run。"""
+    done = [r for r in runs if str(r.get("status")) == "completed" and run_seconds(r) is not None]
+    return max(done, key=lambda r: str(r.get("completed_at"))) if done else None
+
+
+def describe_run(run: Mapping[str, Any], occ_base: Optional[Path],
+                 agents_fn: Callable[[], tuple[Optional[list], Optional[str]]]) -> dict[str, Any]:
+    """模型和执行者名从 agent 清单取（含归档），号先按 run 号、再按同一执行者从派工记录里借。"""
     agents, _err = agents_fn()
     agent = next((a for a in agents or [] if a.get("id") == run.get("agent_id")), {})
     name = str(agent.get("name") or "")
     account = "-"
     if occ_base is not None:
-        for row in reversed(_dispatch_rows(occ_base)):
-            if row.get("executor_id") == run.get("agent_id") and row.get("account") not in (None, "-"):
+        rows = list(reversed(_dispatch_rows(occ_base)))
+        for row in rows:
+            if row.get("run_id") == run.get("id") and row.get("account") not in (None, "-"):
                 account = str(row["account"])
                 break
+        else:
+            for row in rows:
+                if row.get("executor_id") == run.get("agent_id") and row.get("account") not in (None, "-"):
+                    account = str(row["account"])
+                    break
     created = occ.parse_utc(run.get("created_at"))
     return {
         "run_id": run.get("id"), "model": agent.get("model"), "executor": name or None,
         "executor_id": run.get("agent_id"), "machine": machine_word(name), "account": account,
-        "run_created_bj": occ.fmt_bj(created) if created else None, "source": "multica 现查",
+        "run_created_bj": occ.fmt_bj(created) if created else None, "run_seconds": run_seconds(run),
+        "source": "multica 现查",
     }
 
 
-def find_run(ticket: str, run_prefix: str, occ_base: Path, **live: Any) -> Optional[dict[str, Any]]:
-    return run_from_dispatch(occ_base, ticket, run_prefix) or run_from_multica(
-        ticket, run_prefix, occ_base=occ_base, **live)
+def find_run(
+    ticket: str, run_prefix: str, occ_base: Path, *,
+    runs_fn: Callable[[str], tuple[Optional[list], Optional[str]]] = fetch_issue_runs,
+    agents_fn: Callable[[], tuple[Optional[list], Optional[str]]] = fetch_agents_all,
+) -> Optional[dict[str, Any]]:
+    """找这张票要评的 run。不带 --run：multica 现查，取最近一条真跑完的（完工状态、有实际用时）；
+    带 --run：按前缀认那一条，不管状态。现查不通或没有，再退到派工记录。"""
+    runs, _err = runs_fn(ticket)
+    if runs:
+        if run_prefix:
+            matched = [r for r in runs if str(r.get("id") or "").startswith(run_prefix)]
+            chosen = max(matched, key=lambda r: str(r.get("created_at") or "")) if matched else None
+        else:
+            chosen = pick_finished_run(runs)
+            if chosen is None:
+                states = "、".join(f"{str(r.get('id'))[:8]} {r.get('status')}" for r in runs[:6])
+                raise LookupError(f"{ticket} 没有真跑完的 run（完工状态且有实际用时），现有：{states}；"
+                                  f"要评别的 run 就写 --run <run 号前缀>")
+        if chosen is not None:
+            return describe_run(chosen, occ_base, agents_fn)
+    return run_from_dispatch(occ_base, ticket, run_prefix)
 
 
 # ---------------------------------------------------------------- 记一条
@@ -190,6 +226,7 @@ def build_review(*, now: datetime, ticket: str, grade: str, note: str, by: str,
     run = run or {}
     return {
         "schema": SCHEMA,
+        "kind": "review",
         "ts_bj": occ.fmt_bj(now),
         "ticket": ticket,
         "run_id": run.get("run_id"),
@@ -201,6 +238,7 @@ def build_review(*, now: datetime, ticket: str, grade: str, note: str, by: str,
         "note": note.strip(),
         "by": by,
         "run_created_bj": run.get("run_created_bj"),
+        "run_secs": run.get("run_seconds"),
         "source": run.get("source") or ("手填模型" if model_override else "未找到 run"),
     }
 
@@ -214,12 +252,53 @@ def add_review(
     if not note.strip():
         raise ValueError("感受不能空：写一句做得好在哪、坏在哪")
     ticket = normalize_ticket(ticket)
-    run = find_run(ticket, run_prefix, occ_base, **live)
+    try:
+        run = find_run(ticket, run_prefix, occ_base, **live)
+    except LookupError:
+        if not model_override:
+            raise
+        run = None
     if run is None and not model_override:
         raise LookupError(f"{ticket} 派工记录和 multica issue runs 都没找到 run；"
                           f"确实是本机线或别的做法，就加 --model 手填模型")
     row = build_review(now=now or datetime.now(timezone.utc), ticket=ticket, grade=grade, note=note,
                        by=by or default_reviewer(), run=run, model_override=model_override)
+    occ.append_jsonl(reviews_file(base), row)
+    return row
+
+
+def void_review(
+    base: Path, occ_base: Path, *, ticket: str, run_prefix: str, note: str, by: str = "",
+    now: Optional[datetime] = None, **live: Any,
+) -> dict[str, Any]:
+    """作废：追加一行 void 记录，汇总按同票同 run 取最新时遇到它整条不算；原评价行留在文件里不删。
+    之后对同一条 run 再 add 一条，又按最新算（作废可以被新评价盖掉）。"""
+    if not run_prefix.strip():
+        raise ValueError("作废要写 --run <run 号前缀>：作废的是哪一条 run 上的评价")
+    if not note.strip():
+        raise ValueError("作废要写一句原因")
+    ticket = normalize_ticket(ticket)
+    run_prefix = run_prefix.strip()
+    mine = [r for r in read_reviews(base) if str(r.get("ticket") or "").upper() == ticket
+            and str(r.get("run_id") or "").startswith(run_prefix)]
+    ids = sorted({str(r.get("run_id")) for r in mine})
+    if len(ids) > 1:
+        raise ValueError(f"--run {run_prefix} 在 {ticket} 上对到 {len(ids)} 条 run：{'、'.join(i[:12] for i in ids)}，前缀写长一点")
+    if ids:
+        run_id = ids[0]
+    else:
+        found = find_run(ticket, run_prefix, occ_base, **live)
+        if not found or not found.get("run_id"):
+            raise LookupError(f"{ticket} 上找不到 run 前缀 {run_prefix}")
+        run_id = str(found["run_id"])
+    current = [r for r in latest_per_run(mine) if str(r.get("run_id")) == run_id]
+    target = current[0] if current else {}
+    row = {
+        "schema": SCHEMA, "kind": "void", "ts_bj": occ.fmt_bj(now or datetime.now(timezone.utc)),
+        "ticket": ticket, "run_id": run_id, "note": note.strip(), "by": by or default_reviewer(),
+        "voided_grade": None if is_void(target) else target.get("grade"),
+        "voided_model": None if is_void(target) else target.get("model"),
+    }
     occ.append_jsonl(reviews_file(base), row)
     return row
 
@@ -300,7 +379,7 @@ def dedupe(rows: Sequence[Mapping[str, Any]], key: Callable[[Mapping[str, Any]],
 
 
 def review_key(row: Mapping[str, Any]) -> tuple:
-    return (row.get("ts_bj"), row.get("ticket"), row.get("by"), row.get("note"))
+    return (row.get("ts_bj"), row.get("kind"), row.get("ticket"), row.get("by"), row.get("note"))
 
 
 def gather(base: Path, occ_base: Path, *, since: Optional[datetime] = None, peers: bool = True,
@@ -393,19 +472,28 @@ def clip(text: str, limit: int = NOTE_SHOW_CHARS) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+def is_void(row: Mapping[str, Any]) -> bool:
+    return row.get("kind") == "void"
+
+
 def latest_per_run(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
-    """同一张票同一条 run 只留最新一条评价（后评覆盖前评，旧行留在文件里不删）。
-    补评、翻案都靠再 add 一条；汇总只认最新，不让同一次活算两回。"""
+    """同一张票同一条 run 只留最新一条记录（后评覆盖前评，旧行留在文件里不删）。
+    补评、翻案都靠再 add 一条；汇总只认最新，不让同一次活算两回。作废记录也在这里参与排序。"""
     latest: dict[tuple[str, str], Mapping[str, Any]] = {}
     for row in sorted(rows, key=lambda r: str(r.get("ts_bj") or "")):
         latest[(str(row.get("ticket") or "").upper(), str(row.get("run_id") or ""))] = row
     return list(latest.values())
 
 
+def live_reviews(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """算数的评价：每条 run 取最新，最新是作废的整条不算。"""
+    return [r for r in latest_per_run(rows) if not is_void(r)]
+
+
 def summarize(rows: Sequence[Mapping[str, Any]], *, now: datetime, days: int = 7) -> list[dict[str, Any]]:
     start = occ.fmt_bj(now - timedelta(days=days))
     by_model: dict[str, list[Mapping[str, Any]]] = {}
-    for row in latest_per_run(rows):
+    for row in live_reviews(rows):
         if str(row.get("ts_bj") or "") >= start:
             by_model.setdefault(str(row.get("model") or "未知"), []).append(row)
     result = []
@@ -538,7 +626,7 @@ def collect_pending(base: Path, occ_base: Path, since: datetime, now: datetime, 
     rows = rows + extra
     seed = {str(run.get("id")): run for runs in board.values() for run in runs}
     current = fetch_current_runs(rows, seed=seed)
-    reviewed = {str(r.get("ticket") or "").upper() for r in reviews}
+    reviewed = {str(r.get("ticket") or "").upper() for r in live_reviews(reviews)}
     items, in_flight = compute_pending(rows, current, reviewed)
     items = [p for p in items if str(p["completed_bj"]) >= occ.fmt_bj(since)]
     return items, in_flight, read_from, missed
@@ -554,6 +642,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p_add.add_argument("--run", default="", help="run 号前缀；缺省取这张票最近一条")
     p_add.add_argument("--by", default="", help="评价人窗口名；缺省读环境里的会话名")
     p_add.add_argument("--model", default="", help="找不到 run 时手填模型")
+    p_void = sub.add_parser("void", help="作废一条 run 上的评价（旧行不删，汇总整条不算）")
+    p_void.add_argument("ticket")
+    p_void.add_argument("note", help="作废原因")
+    p_void.add_argument("--run", required=True, help="要作废的 run 号前缀")
+    p_void.add_argument("--by", default="", help="谁作废的；缺省读环境里的会话名")
     p_sum = sub.add_parser("summary", help="按模型汇总（默认三台合看）")
     p_sum.add_argument("--days", type=int, default=7)
     p_sum.add_argument("--local", action="store_true", help="只看本机")
@@ -573,6 +666,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             run_short = str(row.get("run_id") or "-")[:8]
             print(f"已记 {row['ticket']} {row['grade']}  模型 {row['model']}  {row['executor']}@{row['machine']}"
                   f"  号 {row['account']}  run {run_short}（{row['source']}）  评价人 {row['by']}")
+            return 0
+        if args.cmd == "void":
+            row = void_review(base, occ_base, ticket=args.ticket, run_prefix=args.run, note=args.note,
+                              by=args.by, now=now)
+            was = f"原评 {row['voided_grade']} / {row['voided_model']}" if row.get("voided_grade") else "本机没有这条评价，作废记在本机，合看时生效"
+            print(f"已作废 {row['ticket']} run {str(row['run_id'])[:8]}（{was}）  原因：{row['note']}  经手 {row['by']}")
             return 0
         if args.cmd == "summary":
             reviews, _rows, read_from, missed = gather(base, occ_base, peers=not args.local)

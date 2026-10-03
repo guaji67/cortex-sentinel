@@ -118,6 +118,26 @@ class SummaryTests(unittest.TestCase):
         self.assertIn("glm  好 2 / 一般 1 / 差 1", text)
         self.assertEqual(len([l for l in text.splitlines() if l.startswith(("glm", "sol"))]), 2)
 
+    def test_later_review_of_same_ticket_and_run_overrides_earlier(self) -> None:
+        rows = [
+            {"ts_bj": "2026-10-04 01:00:00", "ticket": "COR-12403", "run_id": "r1", "model": "glm", "grade": "好", "note": "先评好"},
+            {"ts_bj": "2026-10-04 02:30:00", "ticket": "COR-12403", "run_id": "r1", "model": "glm", "grade": "一般", "note": "被翻案，改一般"},
+            {"ts_bj": "2026-10-04 01:10:00", "ticket": "COR-12403", "run_id": "r2", "model": "glm", "grade": "差", "note": "另一条 run 各算各的"},
+            {"ts_bj": "2026-10-04 01:20:00", "ticket": "COR-7", "run_id": "r1", "model": "glm", "grade": "好", "note": "别的票同号 run 不受影响"},
+        ]
+        (entry,) = rv.summarize(rows, now=NOW, days=7)
+        self.assertEqual((entry["good"], entry["ok"], entry["bad"], entry["total"]), (1, 1, 1, 3))
+        notes = [r["note"] for r in entry["recent"]]
+        self.assertIn("被翻案，改一般", notes)
+        self.assertNotIn("先评好", notes)
+        self.assertEqual(entry["recent"][0]["note"], "被翻案，改一般")
+        # 旧行没动：原始记录两条都还在，只是汇总不重复算
+        self.assertEqual(len(rows), 4)
+        # 后评在文件里排在前面也认时刻不认行序
+        flipped = [rows[1], rows[0]]
+        (again,) = rv.summarize(flipped, now=NOW, days=7)
+        self.assertEqual((again["good"], again["ok"], again["total"]), (0, 1, 1))
+
 
 class PendingTests(unittest.TestCase):
     def test_pending_skips_reviewed_unfinished_and_in_flight(self) -> None:

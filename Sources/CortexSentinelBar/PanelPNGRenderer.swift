@@ -201,7 +201,8 @@ enum PanelPNGRenderer {
         demoPlanStatusOld: Bool = false,
         demoPlanStatusQuotaZero: Bool = false,
         previewHoverCard: Bool = false,
-        previewHoverRow: String? = nil
+        previewHoverRow: String? = nil,
+        telemetryPayload: CortexTelemetrySummaryPayload? = nil
     ) async throws {
         try await render(
             fixture: fixture,
@@ -211,7 +212,8 @@ enum PanelPNGRenderer {
             demoPlanStatusOld: demoPlanStatusOld,
             demoPlanStatusQuotaZero: demoPlanStatusQuotaZero,
             previewHoverCard: previewHoverCard,
-            previewHoverRow: previewHoverRow
+            previewHoverRow: previewHoverRow,
+            telemetryPayload: telemetryPayload
         )
     }
 
@@ -224,11 +226,15 @@ enum PanelPNGRenderer {
         demoPlanStatusOld: Bool = false,
         demoPlanStatusQuotaZero: Bool = false,
         previewHoverCard: Bool = false,
-        previewHoverRow: String? = nil
+        previewHoverRow: String? = nil,
+        telemetryPayload: CortexTelemetrySummaryPayload? = nil
     ) async throws {
         _ = NSApplication.shared
         let session = try await PanelPreviewFactory.makeSession(fixture: fixture)
         defer { session.tearDown() }
+        if let telemetryPayload {
+            session.store.injectPreviewData(telemetryPayload: telemetryPayload)
+        }
         if demoBalances {
             DemoBalancesPreview.inject(
                 into: session.store,

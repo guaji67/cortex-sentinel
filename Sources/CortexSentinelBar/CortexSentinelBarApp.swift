@@ -220,6 +220,11 @@ enum CortexSentinelBarMain {
             fixture = .idle
         }
         do {
+            var telemetryPayload: CortexTelemetrySummaryPayload?
+            if let index = arguments.firstIndex(of: "--panel-telemetry-json"), index + 1 < arguments.count {
+                let data = try Data(contentsOf: URL(fileURLWithPath: arguments[index + 1]))
+                telemetryPayload = try JSONDecoder().decode(CortexTelemetrySummaryPayload.self, from: data)
+            }
             try await PanelPNGRenderer.render(
                 fixture: fixture,
                 to: outputPath,
@@ -228,7 +233,8 @@ enum CortexSentinelBarMain {
                 demoPlanStatusOld: arguments.contains(demoPlanStatusOldArgument),
                 demoPlanStatusQuotaZero: arguments.contains(demoPlanStatusQuotaZeroArgument),
                 previewHoverCard: arguments.contains(previewHoverCardArgument),
-                previewHoverRow: previewHoverRowValue(arguments)
+                previewHoverRow: previewHoverRowValue(arguments),
+                telemetryPayload: telemetryPayload
             )
             print("written \(outputPath)")
         } catch {

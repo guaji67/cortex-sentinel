@@ -129,6 +129,39 @@ struct CortexTelemetrySummaryPayload: Decodable, Equatable, Sendable {
             let name: String
             let machine: String?
             let tasks: Int
+            let items: [TaskItem]
+
+            struct TaskItem: Decodable, Equatable, Sendable {
+                let identifier: String
+                let title: String
+                let status: String
+                let elapsedText: String
+                let source: String
+
+                enum CodingKeys: String, CodingKey {
+                    case identifier, title, status, source
+                    case elapsedText = "elapsed_text"
+                }
+            }
+
+            enum CodingKeys: String, CodingKey {
+                case name, machine, tasks, items
+            }
+
+            init(name: String, machine: String?, tasks: Int, items: [TaskItem] = []) {
+                self.name = name
+                self.machine = machine
+                self.tasks = tasks
+                self.items = items
+            }
+
+            init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                name = try container.decode(String.self, forKey: .name)
+                machine = try container.decodeIfPresent(String.self, forKey: .machine)
+                tasks = try container.decode(Int.self, forKey: .tasks)
+                items = try container.decodeIfPresent([TaskItem].self, forKey: .items) ?? []
+            }
         }
 
         enum CodingKeys: String, CodingKey {

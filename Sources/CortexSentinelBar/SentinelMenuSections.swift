@@ -292,6 +292,38 @@ struct BalanceHoverContent {
     var alertColor: Color?
 }
 
+enum TelemetryBoardItemsDisplay {
+    static let maximumRows = 12
+
+    static func lines(for agents: [CortexTelemetrySummaryPayload.Multica.AgentTasks]) -> [BalanceHoverLine] {
+        agents.flatMap { agent in
+            [BalanceHoverLine(
+                label: "执行者",
+                value: agent.name.isEmpty ? "（未署名执行者）" : agent.name,
+                note: "\(agent.tasks) 条", noteColor: nil, wraps: true
+            )] + agent.items.map { item in
+                let state = item.status == "running" ? "已跑" : "排队"
+                let elapsed = item.elapsedText.isEmpty ? state : "\(state) \(item.elapsedText)"
+                return BalanceHoverLine(
+                    label: item.identifier.isEmpty ? "票号未读到" : item.identifier,
+                    value: [String(item.title.prefix(24)), elapsed, "看板"]
+                        .filter { !$0.isEmpty }.joined(separator: " · "),
+                    note: nil, noteColor: nil, wraps: true
+                )
+            }
+        }
+    }
+
+    static func content(title: String, subtitle: String, lines: [BalanceHoverLine]) -> BalanceHoverContent {
+        let hidden = max(0, lines.count - maximumRows)
+        return BalanceHoverContent(
+            title: title, subtitle: subtitle,
+            lines: Array(lines.prefix(maximumRows)),
+            footer: hidden > 0 ? "另有 \(hidden) 行未展开" : nil
+        )
+    }
+}
+
 /// 悬停 0.5 秒弹出的详情卡。
 /// 不用系统 tooltip：弹层里系统悬浮提示经常不出，且样式没法设计。
 /// Falcon 2026-09-11 令：不许密密麻麻一团字，标签/数值/时间分列，重点靠颜色。
@@ -316,7 +348,7 @@ struct BalanceHoverDetail: View {
                     .fill(SentinelTheme.Colors.borderSoft)
                     .frame(height: 1)
                 VStack(alignment: .leading, spacing: 6) {
-                    ForEach(content.lines, id: \.label) { line in
+                    ForEach(Array(content.lines.enumerated()), id: \.offset) { _, line in
                         HStack(alignment: .firstTextBaseline, spacing: SentinelTheme.Spacing.sm) {
                             Text(line.label)
                                 .font(SentinelTheme.Fonts.balanceMeta)
@@ -1035,6 +1067,7 @@ struct SentinelBalancesSection: View {
 
             // 机器总览在派工预案上面（Falcon 09-18 令整体对调）。
             telemetrySummarySection
+                .zIndex(branchesWithHoverCard.contains("multica") || self.rowMatchesPreviewSelection("Multica") ? 1 : 0)
 
             routePreviewSection
 
@@ -1801,10 +1834,12 @@ struct SentinelBalancesSection: View {
                             .contentShape(Rectangle())
                             .modifier(HoverDetailCard(
                                 makeContent: { self.multicaHoverContent(payload) },
-                                branchID: "multica"
+                                branchID: "multica",
+                                previewRowMatch: self.rowMatchesPreviewSelection("Multica")
                             ))
                     }
                 }
+                .zIndex(branchesWithHoverCard.contains("multica") || self.rowMatchesPreviewSelection("Multica") ? 1 : 0)
                 ForEach(Array(machines.enumerated()), id: \.offset) { _, machine in
                     machineCard(machine, tasksByMachine: payload?.multica?.tasksByMachine ?? [:],
                                 tasksByAgent: payload?.multica?.tasksByAgent ?? [])
@@ -1851,14 +1886,10 @@ struct SentinelBalancesSection: View {
                 footer: "Multica 没返回执行者拆账"
             )
         }
-        return BalanceHoverContent(
+        return TelemetryBoardItemsDisplay.content(
             title: "Multica 在跑 \(tasks)",
-            subtitle: "Multica 工作区 · 每行一名执行者名下的在飞任务",
-            lines: rows.map { row in
-                BalanceHoverLine(label: row.name.isEmpty ? "（未署名执行者）" : row.name,
-                                 value: "\(row.tasks) 条",
-                                 note: nil, noteColor: nil)
-            }
+            subtitle: "执行者与看板任务",
+            lines: TelemetryBoardItemsDisplay.lines(for: rows)
         )
     }
 

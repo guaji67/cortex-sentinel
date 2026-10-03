@@ -39,7 +39,7 @@ class OccupancyRowTests(unittest.TestCase):
             self.assertIn(key, plan)
         self.assertEqual((plan["running"], plan["cap"], plan["board_runs"], plan["queued_over_cap"],
                           plan["manual_windows"], plan["queued_scan"]), (7, 7, 8, 1, 1, 1))
-        self.assertEqual(plan["ledger"], {"total": 9, "board_run": 7, "local_line": 0, "other": 2})
+        self.assertEqual(plan["ledger"], {"total": 9, "board_run": 7, "local_line": 0, "other": 2, "age_sec": 0})
         executor = row["executors"][0]
         for key in ("name", "running", "board_cap", "on_board", "archived", "stopped"):
             self.assertIn(key, executor)

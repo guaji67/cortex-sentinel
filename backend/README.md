@@ -65,3 +65,18 @@ launchd 模板在 `launchd/*.plist.tmpl`，占位符是 `@INSTALL_ROOT@` `@PYTHO
 数法不另写一套：号的在跑数读哨兵面板同一份（闸运行时 `glm_plan_status.py --json`），三机内存读
 `sentry_telemetry.read_machines()`。面板口径不含手开窗口、监工占位和预占；这些来自三机上报的
 `zcode_other`，单列在 `manual_windows` / `supervisor_windows`；派工器账本口径（号超上限哨兵同一读方，看板行不封顶、含手开/监工/预占）并排写在 `plans[*].ledger`，两边口径的差别各自写，不合并。
+
+模型口碑（Falcon 10-04：每张活交回来，验收的窗口顺手写一句好 / 一般 / 差加感受，按模型攒起来；不是跑分，不从回执里自动判）
+
+    bash scripts/install_review.sh install            # 装 sentinel-review 到 ~/.local/bin，没有常驻 job；每台机器各装一次
+    sentinel-review add COR-12345 好|一般|差 "一句感受" [--run 前缀] [--by 窗口名] [--model 手填]
+    sentinel-review summary [--days 7] [--local]      # 按模型一行：好 / 一般 / 差各几条、最近三句
+    sentinel-review pending [--since 今天] [--local]  # 已完工、还没评价的票
+
+`add` 先在本机派工记录里找这张票最近一条 run，没有再 `multica issue runs` 现查（含已归档的执行者），把模型、执行者、
+机器、号、run 号带上；评价人缺省读环境里的窗口名（`CLAUDE_WINDOW_NAME` 等），再退到会话号前 8 位，都没有写 unknown。
+记录各机写各机的 `~/Library/Application Support/CortexSentinel/reviews/reviews.jsonl`（只追加，目录里有「不要删除.md」）。
+`summary`、`pending` 默认三台合看：用 `ssh cortex-pro` / `cortex-mini` 只读 cat 对方的 reviews.jsonl 和 dispatch-*.jsonl
+（不往对方写任何东西），连不上的机器在输出末尾写「没读到：xxx」；`--local` 只看本机。`pending` 另扫看板上所有执行者
+（含已归档）最近 200 条 run，派工记录里没有的完工票也补进来；票上还有 run 在跑的算没交回，只报个数。
+Pro、mini 上命令要装才有：拉最新哨兵仓后跑 `bash backend/scripts/install_review.sh install`。

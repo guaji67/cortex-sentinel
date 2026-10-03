@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+"""sentinel-review：每张活交回来记一句好 / 一般 / 差，按模型攒口碑。
+
+    sentinel-review add COR-12345 好|一般|差 "一句感受"     记一条，模型 / 执行者 / 机器 / 号 / run 自动带上
+    sentinel-review summary [--days 7]                     按模型一行：好 / 一般 / 差各几条、最近三句
+    sentinel-review pending [--since 今天]                  已完工、还没评价的票
+"""
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from cortex_sentinel.review import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())

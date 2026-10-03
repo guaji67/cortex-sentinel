@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cortex.sentinel.occupancy-log</string>
+
+    <!-- 每 60 秒起一次、记一轮就退出，不是常驻进程。解释器用仓外的 HealthRuntime 那份 python
+         （仓在 ~/Documents，TCC 保护目录，别改回仓内 venv 当入口）。 -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>@PYTHON3@</string>
+        <string>@INSTALL_ROOT@/bin/sentinel-occupancy</string>
+        <string>tick</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>@INSTALL_ROOT@</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StartInterval</key>
+    <integer>60</integer>
+
+    <key>StandardOutPath</key>
+    <string>/dev/null</string>
+
+    <key>StandardErrorPath</key>
+    <string>@DATA_DIR@/tick-error.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>@HOME@</string>
+        <key>CORTEX_SENTINEL_OCCUPANCY_DIR</key>
+        <string>@DATA_DIR@</string>
+        <key>CORTEX_GATE_CHECKOUT_BASE</key>
+        <string>@CHECKOUT_BASE@</string>
+        <key>LANG</key>
+        <string>en_US.UTF-8</string>
+        <key>LC_ALL</key>
+        <string>en_US.UTF-8</string>
+        <key>PATH</key>
+        <string>@HOME@/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>

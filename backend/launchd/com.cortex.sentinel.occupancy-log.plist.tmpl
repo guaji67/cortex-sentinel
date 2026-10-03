@@ -5,7 +5,7 @@
     <key>Label</key>
     <string>com.cortex.sentinel.occupancy-log</string>
 
-    <!-- 每 60 秒起一次、记一轮就退出，不是常驻进程。解释器用仓外的 HealthRuntime 那份 python
+    <!-- 每分钟起一次、记一轮就退出，不是常驻进程。解释器用仓外的 HealthRuntime 那份 python
          （仓在 ~/Documents，TCC 保护目录，别改回仓内 venv 当入口）。 -->
     <key>ProgramArguments</key>
     <array>
@@ -20,8 +20,10 @@
     <key>RunAtLoad</key>
     <true/>
 
-    <key>StartInterval</key>
-    <integer>60</integer>
+    <!-- 空字典 = 每分钟整点各起一次。不用 StartInterval：它从上一轮退出后才开始数 60 秒，
+         机器忙、一轮跑到一分钟以上时记录会拖成两分钟一行（M1 Max 负载 170 时实测）。 -->
+    <key>StartCalendarInterval</key>
+    <dict/>
 
     <key>StandardOutPath</key>
     <string>/dev/null</string>

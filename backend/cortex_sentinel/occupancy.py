@@ -42,6 +42,8 @@ QUEUED_STATUSES = ("queued", "dispatched", "waiting_local_directory")
 TRIGGER_HEAD_CHARS = 40
 # 账本读方串行问好几个执行者，机器忙时慢；等不过这么久就沿用上一份（带 age_sec），不拖慢整轮。
 LEDGER_TIMEOUT = 30
+# 面板读数在机器重载时慢（负载 170 实测超 60 秒）；等 45 秒，整轮压在一分钟以内，读不到就如实写 notes。
+PANEL_TIMEOUT = 45
 LEDGER_REUSE = timedelta(minutes=10)
 
 KEEP_NOTE = (
@@ -196,7 +198,7 @@ def gate_python() -> str:
 def fetch_panel_payload() -> tuple[Optional[dict], Optional[str]]:
     """面板「在跑 n/7」的同一份读数：glm_plan_status.py --json（用量从 stdin 喂空，不影响在跑数）。"""
     out, err = _run([gate_python(), "scripts/glm_plan_status.py", "--json"],
-                    cwd=gate_runtime(), env=_env(), stdin="", timeout=60)
+                    cwd=gate_runtime(), env=_env(), stdin="", timeout=PANEL_TIMEOUT)
     payload = _json_from(out)
     if not isinstance(payload, dict) or "plans" not in payload:
         return None, err or "面板读数解析不了"

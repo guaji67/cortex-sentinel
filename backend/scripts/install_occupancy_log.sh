@@ -47,7 +47,13 @@ WRAP
         "$HERE/launchd/$LABEL.plist.tmpl" > "$PLIST"
     plutil -lint "$PLIST" >/dev/null || { echo "plist 不合法" >&2; exit 1; }
     launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
-    launchctl bootstrap "$DOMAIN" "$PLIST" || { echo "bootstrap 失败" >&2; exit 1; }
+    # bootout 是异步的：等老的真卸干净再挂，否则 bootstrap 会报 Input/output error（实测 5 次里 1 次）
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1 || break
+      /bin/sleep 1
+    done
+    launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null || { /bin/sleep 2; launchctl bootstrap "$DOMAIN" "$PLIST"; } \
+      || { echo "bootstrap 失败" >&2; exit 1; }
     echo "已装：$LABEL（每 60 秒一轮），记录目录 $DATA_DIR"
     ;;
   status)

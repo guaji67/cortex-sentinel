@@ -40,6 +40,9 @@ RUNS_PER_AGENT = 60
 OCCUPYING_STATUSES = ("running",)
 QUEUED_STATUSES = ("queued", "dispatched", "waiting_local_directory")
 TRIGGER_HEAD_CHARS = 40
+# 账本读方串行问好几个执行者，机器忙时慢；等不过这么久就沿用上一份（带 age_sec），不拖慢整轮。
+LEDGER_TIMEOUT = 30
+LEDGER_REUSE = timedelta(minutes=10)
 
 KEEP_NOTE = (
     "CORTEX-KEEP\n"
@@ -223,7 +226,7 @@ def fetch_ledger() -> tuple[Optional[dict], Optional[str]]:
         "    kinds[str(l.account)][str(l.kind)] += 1\n"
         "print(json.dumps({'totals': dict(r.totals), 'kinds': {a: dict(c) for a, c in kinds.items()}, 'notes': list(r.notes)}, ensure_ascii=False))\n"
     )
-    out, err = _run([gate_python(), "-c", code], cwd=gate_runtime(), env=_env(), timeout=60)
+    out, err = _run([gate_python(), "-c", code], cwd=gate_runtime(), env=_env(), timeout=LEDGER_TIMEOUT)
     data = _json_from(out)
     if not isinstance(data, dict) or "totals" not in data:
         return None, err or "账本读数解析不了"
@@ -326,7 +329,8 @@ def _ledger_of(ledger: Optional[Mapping[str, Any]], account: str) -> Optional[di
     total = int(ledger["totals"][account] or 0)
     kinds = (ledger.get("kinds") or {}).get(account) or {}
     board, local = int(kinds.get("board_run", 0)), int(kinds.get("local_line", 0))
-    return {"total": total, "board_run": board, "local_line": local, "other": total - board - local}
+    return {"total": total, "board_run": board, "local_line": local, "other": total - board - local,
+            "age_sec": ledger.get("_age_sec", 0)}
 
 
 def build_occupancy_row(
@@ -548,7 +552,7 @@ def tick(now: Optional[datetime] = None, base: Optional[Path] = None) -> dict[st
             notes.append(f"三机读数：{err}")
         ledger, err = f_ledger.result()
         if err and ledger is None:
-            notes.append(f"账本读数：{err}")
+            notes.append(f"账本读数：{str(err)[:60]}")
         for agent_id, future in f_runs.items():
             runs, err = future.result()
             if runs is None:
@@ -558,11 +562,21 @@ def tick(now: Optional[datetime] = None, base: Optional[Path] = None) -> dict[st
     index = executor_index(payload or {})
 
     day = to_beijing(now).strftime("%Y-%m-%d")
+    state = load_state(base)
+    if ledger is not None:
+        ledger["_age_sec"] = 0
+        state["ledger"] = {"at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "data": ledger}
+    else:
+        cached = state.get("ledger") or {}
+        at = parse_utc(cached.get("at"))
+        if at is not None and now - at <= LEDGER_REUSE and isinstance(cached.get("data"), dict):
+            ledger = dict(cached["data"])
+            ledger["_age_sec"] = int((now - at).total_seconds())
+            notes.append(f"账本口径沿用 {ledger['_age_sec']} 秒前的读数")
     occ = build_occupancy_row(now=now, payload=payload, machines=machines,
                               scan=scan_board_runs(runs_by_agent, index), ledger=ledger, notes=notes)
     append_jsonl(occupancy_file(base, day), occ)
 
-    state = load_state(base)
     rows = new_dispatch_rows(
         now=now, runs_by_agent=runs_by_agent, agents_by_id=agents_by_id, index=index,
         running_by_account=account_running_summary(payload),

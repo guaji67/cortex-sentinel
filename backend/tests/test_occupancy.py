@@ -31,13 +31,15 @@ MACHINES = [{"machine": "m1max", "mem_pressure_pct": 17.2, "pressure_level": 1, 
 class OccupancyRowTests(unittest.TestCase):
     def test_row_has_every_required_field(self) -> None:
         row = occ.build_occupancy_row(now=NOW, payload=PAYLOAD, machines=MACHINES,
-                                      scan={"falcon": {"scan_running": 7, "scan_queued": 1}})
+                                      scan={"falcon": {"scan_running": 7, "scan_queued": 1}},
+                                      ledger={"totals": {"falcon": 9}, "kinds": {"falcon": {"board_run": 7, "local_line": 0}}})
         self.assertEqual(row["ts_bj"], "2026-10-04 00:30:00")
         plan = row["plans"]["falcon"]
-        for key in ("running", "cap", "board_runs", "local_lines", "manual_windows", "queued_over_cap", "queued_scan"):
+        for key in ("running", "cap", "board_runs", "local_lines", "manual_windows", "queued_over_cap", "queued_scan", "ledger"):
             self.assertIn(key, plan)
         self.assertEqual((plan["running"], plan["cap"], plan["board_runs"], plan["queued_over_cap"],
                           plan["manual_windows"], plan["queued_scan"]), (7, 7, 8, 1, 1, 1))
+        self.assertEqual(plan["ledger"], {"total": 9, "board_run": 7, "local_line": 0, "other": 2})
         executor = row["executors"][0]
         for key in ("name", "running", "board_cap", "on_board", "archived", "stopped"):
             self.assertIn(key, executor)

@@ -11,7 +11,7 @@
 数法不另写一套：号的在跑数直接读哨兵面板那份读数（闸运行时 scripts/glm_plan_status.py
 --json，即面板「在跑 n/7」的来源），三机内存读闸运行时 sentry_telemetry.read_machines()
 （面板三机总览同一入口）。面板口径与派工器 GLM_ACCOUNT_LEDGER、号超上限哨兵的差异见
-README 与交活报告，这里不去统一，各口径原值并排写进行里（plans[*].panel_* 与 ledger_*）。
+README 与交活报告，这里不去统一，各口径原值并排写进行里（plans[*] 是面板口径，plans[*].ledger 是派工器账本口径）。
 
 只读：不写 Multica、不碰钥匙，只追加自己的两份记录和一份去重状态。
 查询：sentinel-occupancy at "2026-10-04 00:05" / sentinel-occupancy runs --since "00:00"。
@@ -210,6 +210,26 @@ def fetch_machines() -> tuple[Optional[list], Optional[str]]:
     return rows, None
 
 
+def fetch_ledger() -> tuple[Optional[dict], Optional[str]]:
+    """派工器账本口径的读数：号超上限哨兵同一个读方（account_cap_sentinel.collect_round →
+    account_running_counts），看板行不按帽封顶，另含手开窗口 / 监工占位 / 预占。只读。"""
+    code = (
+        "import json,collections\n"
+        "from datetime import datetime, timezone\n"
+        "from scripts.account_cap_sentinel import collect_round\n"
+        "r = collect_round(now=datetime.now(timezone.utc))\n"
+        "kinds = collections.defaultdict(lambda: collections.Counter())\n"
+        "for l in r.lines:\n"
+        "    kinds[str(l.account)][str(l.kind)] += 1\n"
+        "print(json.dumps({'totals': dict(r.totals), 'kinds': {a: dict(c) for a, c in kinds.items()}, 'notes': list(r.notes)}, ensure_ascii=False))\n"
+    )
+    out, err = _run([gate_python(), "-c", code], cwd=gate_runtime(), env=_env(), timeout=60)
+    data = _json_from(out)
+    if not isinstance(data, dict) or "totals" not in data:
+        return None, err or "账本读数解析不了"
+    return data, None
+
+
 def fetch_agents() -> tuple[Optional[list], Optional[str]]:
     out, err = _run([multica_bin(), "agent", "list", "--output", "json"], env=_env(), timeout=30)
     rows = _json_from(out)
@@ -298,12 +318,24 @@ def scan_board_runs(runs_by_agent: Mapping[str, Sequence[Mapping[str, Any]]],
     return per_account
 
 
+def _ledger_of(ledger: Optional[Mapping[str, Any]], account: str) -> Optional[dict[str, Any]]:
+    """账本口径并排写：total 是派工器 / 号超上限哨兵的合计，other = total - 看板行 - 本机线
+    （手开窗口、监工占位、预占，不细分，细分归属在账本那边有已知对调，见 README）。"""
+    if not isinstance(ledger, Mapping) or account not in (ledger.get("totals") or {}):
+        return None
+    total = int(ledger["totals"][account] or 0)
+    kinds = (ledger.get("kinds") or {}).get(account) or {}
+    board, local = int(kinds.get("board_run", 0)), int(kinds.get("local_line", 0))
+    return {"total": total, "board_run": board, "local_line": local, "other": total - board - local}
+
+
 def build_occupancy_row(
     *,
     now: datetime,
     payload: Optional[Mapping[str, Any]],
     machines: Optional[Sequence[Mapping[str, Any]]],
     scan: Optional[Mapping[str, Mapping[str, int]]] = None,
+    ledger: Optional[Mapping[str, Any]] = None,
     notes: Sequence[str] = (),
 ) -> dict[str, Any]:
     plans_out: dict[str, Any] = {}
@@ -345,6 +377,7 @@ def build_occupancy_row(
             "skip_code": plan.get("skip_code"),
             "cooldown_until": plan.get("cooldown_until"),
             "read_error": plan.get("read_error"),
+            "ledger": _ledger_of(ledger, account),
         }
         for ex in plan.get("executors") or []:
             name = str(ex.get("name") or "")
@@ -382,6 +415,8 @@ def build_occupancy_row(
         row_notes.append("面板读数没读到，plans 为空")
     if machines is None:
         row_notes.append("三机读数没读到，machines 为空")
+    if ledger is None:
+        row_notes.append("账本口径读数没读到，plans[*].ledger 为空")
     return {
         "schema": SCHEMA,
         "ts_bj": fmt_bj(now),
@@ -498,6 +533,7 @@ def tick(now: Optional[datetime] = None, base: Optional[Path] = None) -> dict[st
         f_payload = pool.submit(fetch_panel_payload)
         f_machines = pool.submit(fetch_machines)
         f_agents = pool.submit(fetch_agents)
+        f_ledger = pool.submit(fetch_ledger)
         agents, err = f_agents.result()
         if err and agents is None:
             notes.append(f"agent 清单：{err}")
@@ -510,6 +546,9 @@ def tick(now: Optional[datetime] = None, base: Optional[Path] = None) -> dict[st
         machines, err = f_machines.result()
         if err and machines is None:
             notes.append(f"三机读数：{err}")
+        ledger, err = f_ledger.result()
+        if err and ledger is None:
+            notes.append(f"账本读数：{err}")
         for agent_id, future in f_runs.items():
             runs, err = future.result()
             if runs is None:
@@ -520,7 +559,7 @@ def tick(now: Optional[datetime] = None, base: Optional[Path] = None) -> dict[st
 
     day = to_beijing(now).strftime("%Y-%m-%d")
     occ = build_occupancy_row(now=now, payload=payload, machines=machines,
-                              scan=scan_board_runs(runs_by_agent, index), notes=notes)
+                              scan=scan_board_runs(runs_by_agent, index), ledger=ledger, notes=notes)
     append_jsonl(occupancy_file(base, day), occ)
 
     state = load_state(base)
@@ -583,7 +622,8 @@ def format_occupancy(row: Mapping[str, Any]) -> str:
             f"  {account:<7} 在跑 {p.get('running')}/{p.get('cap')}  看板 {p.get('board_runs')}"
             f"（封顶后 {p.get('board_runs_capped')}，超帽排队 {p.get('queued_over_cap')}，扫到排队 {p.get('queued_scan')}）"
             f"  本机线 {p.get('local_lines')}  手开 {p.get('manual_windows')}  监工 {p.get('supervisor_windows')}"
-            f"  可派 {p.get('dispatchable')}")
+            f"  可派 {p.get('dispatchable')}  账本合计 {(p.get('ledger') or {}).get('total')}"
+            f"（其他占位 {(p.get('ledger') or {}).get('other')}）")
     for ex in row.get("executors") or []:
         flag = "  [归档]" if ex.get("archived") else ""
         lines.append(f"    {ex.get('account')}/{ex.get('name')}  在跑 {ex.get('running')}/{ex.get('board_cap')}{flag}")

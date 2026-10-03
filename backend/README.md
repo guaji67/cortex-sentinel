@@ -64,4 +64,4 @@ launchd 模板在 `launchd/*.plist.tmpl`，占位符是 `@INSTALL_ROOT@` `@PYTHO
 
 数法不另写一套：号的在跑数读哨兵面板同一份（闸运行时 `glm_plan_status.py --json`），三机内存读
 `sentry_telemetry.read_machines()`。面板口径不含手开窗口、监工占位和预占；这些来自三机上报的
-`zcode_other`，单列在 `manual_windows` / `supervisor_windows`，两边口径的差别各自并排写，不合并。
+`zcode_other`，单列在 `manual_windows` / `supervisor_windows`；派工器账本口径（号超上限哨兵同一读方，看板行不封顶、含手开/监工/预占）并排写在 `plans[*].ledger`，两边口径的差别各自写，不合并。

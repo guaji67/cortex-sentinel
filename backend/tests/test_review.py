@@ -15,11 +15,19 @@ from cortex_sentinel import review as rv  # noqa: E402
 NOW = datetime(2026, 10, 3, 18, 0, 0, tzinfo=timezone.utc)  # 北京 2026-10-04 02:00
 
 
+OFFLINE = dict(runs_fn=lambda _t: (None, "离线"), agents_fn=lambda: (None, "离线"))
+
+
+def mk_run(run_id: str, status: str, created: str, started: str = "", completed: str = "", agent_id: str = "ex-7") -> dict:
+    return {"id": run_id, "agent_id": agent_id, "status": status, "created_at": created,
+            "started_at": started or None, "completed_at": completed or None}
+
+
 def dispatch_row(run_id: str, ticket: str, model: str, created_bj: str, executor: str = "Pro 执行者(ZCode GLM Flash·Falcon 套餐)",
-                 machine: str = "pro", account: str = "falcon", executor_id: str = "ex-1") -> dict:
+                 machine: str = "pro", account: str = "falcon", executor_id: str = "ex-1", status: str = "running") -> dict:
     return {"run_id": run_id, "ticket": ticket, "model": model, "created_bj": created_bj, "ts_bj": created_bj,
             "executor": executor, "executor_id": executor_id, "machine": machine, "account": account,
-            "status_at_seen": "running"}
+            "status_at_seen": status}
 
 
 def write_dispatch(base: Path, rows: list, day: str = "2026-10-04") -> None:
@@ -36,18 +44,22 @@ class AddTests(unittest.TestCase):
         self.reviews.mkdir()
         self.occ.mkdir()
 
-    def test_add_takes_model_and_executor_from_dispatch_log(self) -> None:
+    def test_add_takes_model_and_executor_from_dispatch_log_when_multica_offline(self) -> None:
         write_dispatch(self.occ, [
-            dispatch_row("run-old", "COR-1", "glm-5.3-flash", "2026-10-04 00:10:00"),
+            dispatch_row("run-old", "COR-1", "glm-5.3-flash", "2026-10-04 00:10:00", status="completed"),
             dispatch_row("run-new", "COR-1", "gpt-6.1-sol", "2026-10-04 01:10:00",
-                         executor="M1Max 执行者(Codex Sol High)", machine="m1max", account="-", executor_id="ex-2"),
-            dispatch_row("run-other", "COR-2", "mimo-v2.6-flash", "2026-10-04 01:30:00"),
+                         executor="M1Max 执行者(Codex Sol High)", machine="m1max", account="-", executor_id="ex-2",
+                         status="completed"),
+            dispatch_row("run-cancel", "COR-1", "mimo", "2026-10-04 01:20:00", status="cancelled"),
+            dispatch_row("run-other", "COR-2", "mimo-v2.6-flash", "2026-10-04 01:30:00", status="completed"),
         ])
-        row = rv.add_review(self.reviews, self.occ, ticket="cor-1", grade="好", note="一轮过", by="窗口甲", now=NOW)
-        self.assertEqual((row["ticket"], row["run_id"], row["model"], row["machine"], row["account"], row["source"]),
-                         ("COR-1", "run-new", "gpt-6.1-sol", "m1max", "-", "派工记录"))
+        row = rv.add_review(self.reviews, self.occ, ticket="cor-1", grade="好", note="一轮过", by="窗口甲", now=NOW, **OFFLINE)
+        self.assertEqual((row["ticket"], row["run_id"], row["model"], row["machine"], row["account"]),
+                         ("COR-1", "run-new", "gpt-6.1-sol", "m1max", "-"))
+        self.assertIn("派工记录", row["source"])
         self.assertEqual(row["executor"], "M1Max 执行者(Codex Sol High)")
-        self.assertEqual((row["by"], row["grade"], row["note"], row["ts_bj"]), ("窗口甲", "好", "一轮过", "2026-10-04 02:00:00"))
+        self.assertEqual((row["by"], row["grade"], row["note"], row["ts_bj"], row["kind"]),
+                         ("窗口甲", "好", "一轮过", "2026-10-04 02:00:00", "review"))
         saved = occ.read_jsonl(rv.reviews_file(self.reviews))
         self.assertEqual(len(saved), 1)
         self.assertEqual(saved[0]["model"], "gpt-6.1-sol")
@@ -57,22 +69,38 @@ class AddTests(unittest.TestCase):
             dispatch_row("run-old", "COR-1", "glm-5.3-flash", "2026-10-04 00:10:00"),
             dispatch_row("run-new", "COR-1", "gpt-6.1-sol", "2026-10-04 01:10:00"),
         ])
-        row = rv.add_review(self.reviews, self.occ, ticket="COR-1", grade="差", note="跑偏", run_prefix="run-o", now=NOW)
+        row = rv.add_review(self.reviews, self.occ, ticket="COR-1", grade="差", note="跑偏", run_prefix="run-o", now=NOW, **OFFLINE)
         self.assertEqual((row["run_id"], row["model"]), ("run-old", "glm-5.3-flash"))
 
-    def test_falls_back_to_multica_when_dispatch_log_has_no_run(self) -> None:
-        # 派工记录里没有这张票：现查 issue runs，模型和执行者名从 agent 清单取，号从派工记录里同一执行者借
+    def test_add_without_run_picks_latest_really_finished_run_from_multica(self) -> None:
+        # 现查：最近一条真跑完的（completed 且有实际用时）。没开跑就撤的、被取消的哪怕更新也跳过。
         write_dispatch(self.occ, [dispatch_row("run-x", "COR-9", "glm-5.3-flash", "2026-10-04 00:10:00", executor_id="ex-7")])
         runs = [
-            {"id": "run-2", "agent_id": "ex-7", "created_at": "2026-10-03T14:46:36Z", "status": "completed"},
-            {"id": "run-1", "agent_id": "ex-3", "created_at": "2026-10-03T10:00:00Z", "status": "completed"},
+            mk_run("run-cancel-unstarted", "cancelled", "2026-10-03T16:00:00Z", completed="2026-10-03T16:04:00Z"),
+            mk_run("run-cancel-long", "cancelled", "2026-10-03T15:00:00Z", "2026-10-03T15:00:01Z", "2026-10-03T16:40:00Z"),
+            mk_run("run-zero", "completed", "2026-10-03T14:50:00Z", "2026-10-03T14:50:00Z", "2026-10-03T14:50:00Z"),
+            mk_run("run-2", "completed", "2026-10-03T14:46:36Z", "2026-10-03T14:46:37Z", "2026-10-03T14:53:15Z"),
+            mk_run("run-1", "completed", "2026-10-03T10:00:00Z", "2026-10-03T10:00:05Z", "2026-10-03T10:30:00Z", agent_id="ex-3"),
         ]
         agents = [{"id": "ex-7", "name": "mini 执行者(MiMo v2.6 Flash Go)", "model": "mimo-v2.6-flash"}]
         row = rv.add_review(self.reviews, self.occ, ticket="COR-12366", grade="好", note="一次做对", now=NOW,
                             runs_fn=lambda _t: (runs, None), agents_fn=lambda: (agents, None))
         self.assertEqual((row["run_id"], row["model"], row["machine"], row["account"], row["source"]),
                          ("run-2", "mimo-v2.6-flash", "mini", "falcon", "multica 现查"))
-        self.assertEqual(row["run_created_bj"], "2026-10-03 22:46:36")
+        self.assertEqual((row["run_created_bj"], row["run_secs"]), ("2026-10-03 22:46:36", 398))
+
+    def test_add_without_run_refuses_when_nothing_really_finished(self) -> None:
+        runs = [mk_run("run-a", "cancelled", "2026-10-03T16:00:00Z", completed="2026-10-03T16:04:00Z"),
+                mk_run("run-b", "failed", "2026-10-03T15:00:00Z", "2026-10-03T15:00:01Z", "2026-10-03T15:10:00Z")]
+        live = dict(runs_fn=lambda _t: (runs, None), agents_fn=lambda: ([], None))
+        with self.assertRaises(LookupError) as ctx:
+            rv.add_review(self.reviews, self.occ, ticket="COR-12153", grade="好", note="x", now=NOW, **live)
+        self.assertIn("--run", str(ctx.exception))
+        self.assertEqual(occ.read_jsonl(rv.reviews_file(self.reviews)), [])
+        # 明写 --run 才能评被取消的那条，状态不管
+        row = rv.add_review(self.reviews, self.occ, ticket="COR-12153", grade="一般", note="被撤", run_prefix="run-a",
+                            now=NOW, **live)
+        self.assertEqual((row["run_id"], row["run_secs"]), ("run-a", None))
 
     def test_no_run_needs_model_override_and_bad_grade_rejected(self) -> None:
         none = dict(runs_fn=lambda _t: ([], None), agents_fn=lambda: ([], None))
@@ -137,6 +165,70 @@ class SummaryTests(unittest.TestCase):
         flipped = [rows[1], rows[0]]
         (again,) = rv.summarize(flipped, now=NOW, days=7)
         self.assertEqual((again["good"], again["ok"], again["total"]), (0, 1, 1))
+
+
+class VoidTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.reviews = Path(self.tmp.name) / "reviews"
+        self.occ = Path(self.tmp.name) / "occupancy"
+        self.reviews.mkdir()
+        self.occ.mkdir()
+
+    def put(self, **row) -> None:
+        occ.append_jsonl(rv.reviews_file(self.reviews), row)
+
+    def test_void_drops_the_whole_run_from_summary_and_keeps_old_rows(self) -> None:
+        self.put(ts_bj="2026-10-04 01:39:00", ticket="COR-12153", run_id="01a1009f-aaaa", model="opencode/muse-spark", grade="好", note="误记")
+        self.put(ts_bj="2026-10-04 01:45:00", ticket="COR-12153", run_id="01a1009f-aaaa", model="未起跑（不计口碑）", grade="一般", note="没开跑就被撤")
+        self.put(ts_bj="2026-10-04 01:45:30", ticket="COR-12153", run_id="01a10012-bbbb", model="glm", grade="好", note="真跑完的那条")
+        before = {e["model"] for e in rv.summarize(occ.read_jsonl(rv.reviews_file(self.reviews)), now=NOW)}
+        self.assertEqual(before, {"未起跑（不计口碑）", "glm"})
+        row = rv.void_review(self.reviews, self.occ, ticket="cor-12153", run_prefix="01a1009f", note="没起跑，不计口碑",
+                             by="cortex-2c", now=NOW, **OFFLINE)
+        self.assertEqual((row["kind"], row["ticket"], row["run_id"], row["voided_grade"], row["voided_model"]),
+                         ("void", "COR-12153", "01a1009f-aaaa", "一般", "未起跑（不计口碑）"))
+        rows = occ.read_jsonl(rv.reviews_file(self.reviews))
+        self.assertEqual(len(rows), 4)  # 旧行都还在，只多了一行作废
+        entries = rv.summarize(rows, now=NOW)
+        self.assertEqual([(e["model"], e["total"]) for e in entries], [("glm", 1)])
+        text = rv.format_summary(entries, 7)
+        self.assertNotIn("未起跑", text)
+        self.assertNotIn("opencode", text)  # 同一条 run 上更早的误记「好」也一起不算
+
+    def test_later_review_revives_a_voided_run_and_other_runs_are_untouched(self) -> None:
+        self.put(ts_bj="2026-10-04 01:00:00", ticket="COR-1", run_id="r1-aaaa", model="glm", grade="好", note="a")
+        self.put(ts_bj="2026-10-04 01:01:00", ticket="COR-1", run_id="r2-bbbb", model="glm", grade="差", note="b")
+        rv.void_review(self.reviews, self.occ, ticket="COR-1", run_prefix="r1", note="误记", now=NOW, **OFFLINE)
+        (e,) = rv.summarize(occ.read_jsonl(rv.reviews_file(self.reviews)), now=NOW)
+        self.assertEqual((e["good"], e["bad"], e["total"]), (0, 1, 1))
+        later = NOW + timedelta(minutes=5)
+        occ.append_jsonl(rv.reviews_file(self.reviews), {"ts_bj": occ.fmt_bj(later), "kind": "review", "ticket": "COR-1",
+                                                         "run_id": "r1-aaaa", "model": "glm", "grade": "一般", "note": "重评"})
+        (e,) = rv.summarize(occ.read_jsonl(rv.reviews_file(self.reviews)), now=later)
+        self.assertEqual((e["good"], e["ok"], e["bad"], e["total"]), (0, 1, 1, 2))
+
+    def test_void_needs_run_and_reason_and_resolvable_run(self) -> None:
+        with self.assertRaises(ValueError):
+            rv.void_review(self.reviews, self.occ, ticket="COR-1", run_prefix="", note="x", now=NOW, **OFFLINE)
+        with self.assertRaises(ValueError):
+            rv.void_review(self.reviews, self.occ, ticket="COR-1", run_prefix="r1", note=" ", now=NOW, **OFFLINE)
+        with self.assertRaises(LookupError):
+            rv.void_review(self.reviews, self.occ, ticket="COR-1", run_prefix="zzz", note="x", now=NOW, **OFFLINE)
+        self.put(ts_bj="2026-10-04 01:00:00", ticket="COR-1", run_id="r1-aaaa", model="glm", grade="好", note="a")
+        self.put(ts_bj="2026-10-04 01:01:00", ticket="COR-1", run_id="r1-bbbb", model="glm", grade="好", note="b")
+        with self.assertRaises(ValueError):  # 前缀对到两条，要写长
+            rv.void_review(self.reviews, self.occ, ticket="COR-1", run_prefix="r1", note="x", now=NOW, **OFFLINE)
+
+    def test_pending_counts_a_ticket_again_when_its_only_review_was_voided(self) -> None:
+        rows = [dispatch_row("r1", "COR-1", "glm", "2026-10-04 00:10:00")]
+        current = {"r1": {"id": "r1", "status": "completed", "completed_at": "2026-10-03T17:00:00Z"}}
+        reviews = [{"ts_bj": "2026-10-04 01:00:00", "ticket": "COR-1", "run_id": "r1", "grade": "好"},
+                   {"ts_bj": "2026-10-04 01:05:00", "kind": "void", "ticket": "COR-1", "run_id": "r1"}]
+        reviewed = {str(r.get("ticket")).upper() for r in rv.live_reviews(reviews)}
+        items, _ = rv.compute_pending(rows, current, reviewed)
+        self.assertEqual([p["ticket"] for p in items], ["COR-1"])
 
 
 class PendingTests(unittest.TestCase):

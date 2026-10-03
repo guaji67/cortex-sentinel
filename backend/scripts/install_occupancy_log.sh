@@ -2,7 +2,7 @@
 # 装「派工占用 + 派工记录」每分钟记账（backend/cortex_sentinel/occupancy.py）。
 #
 # 做的事：把 occupancy.py 和 sentinel-occupancy 拷到仓外
-# ~/Library/Application Support/CortexSentinel/occupancy-runtime/，写一个每 60 秒起一次的
+# ~/Library/Application Support/CortexSentinel/occupancy-runtime/，写一个每分钟起一次的
 # LaunchAgent（记一轮就退出，不是常驻），把查询命令链到 ~/.local/bin/sentinel-occupancy。
 # 记录落 ~/Library/Application Support/CortexSentinel/occupancy/，里面有「不要删除.md」。
 #
@@ -54,7 +54,7 @@ WRAP
     done
     launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null || { /bin/sleep 2; launchctl bootstrap "$DOMAIN" "$PLIST"; } \
       || { echo "bootstrap 失败" >&2; exit 1; }
-    echo "已装：$LABEL（每 60 秒一轮），记录目录 $DATA_DIR"
+    echo "已装：$LABEL（每分钟一轮），记录目录 $DATA_DIR"
     ;;
   status)
     launchctl print "$DOMAIN/$LABEL" 2>/dev/null | grep -E "state|last exit code|runs" || echo "job 没挂"

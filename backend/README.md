@@ -76,6 +76,7 @@ launchd 模板在 `launchd/*.plist.tmpl`，占位符是 `@INSTALL_ROOT@` `@PYTHO
 `add` 先在本机派工记录里找这张票最近一条 run，没有再 `multica issue runs` 现查（含已归档的执行者），把模型、执行者、
 机器、号、run 号带上；评价人缺省读环境里的窗口名（`CLAUDE_WINDOW_NAME` 等），再退到会话号前 8 位，都没有写 unknown。
 记录各机写各机的 `~/Library/Application Support/CortexSentinel/reviews/reviews.jsonl`（只追加，目录里有「不要删除.md」）。
+补评或翻案就再 `add` 一条：summary 里同一张票同一条 run 只算最新那条（含最近感受），旧行留在文件里不删。
 `summary`、`pending` 默认三台合看：用 `ssh cortex-pro` / `cortex-mini` 只读 cat 对方的 reviews.jsonl 和 dispatch-*.jsonl
 （不往对方写任何东西），连不上的机器在输出末尾写「没读到：xxx」；`--local` 只看本机。`pending` 另扫看板上所有执行者
 （含已归档）最近 200 条 run，派工记录里没有的完工票也补进来；票上还有 run 在跑的算没交回，只报个数。

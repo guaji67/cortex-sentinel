@@ -393,10 +393,19 @@ def clip(text: str, limit: int = NOTE_SHOW_CHARS) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+def latest_per_run(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """同一张票同一条 run 只留最新一条评价（后评覆盖前评，旧行留在文件里不删）。
+    补评、翻案都靠再 add 一条；汇总只认最新，不让同一次活算两回。"""
+    latest: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for row in sorted(rows, key=lambda r: str(r.get("ts_bj") or "")):
+        latest[(str(row.get("ticket") or "").upper(), str(row.get("run_id") or ""))] = row
+    return list(latest.values())
+
+
 def summarize(rows: Sequence[Mapping[str, Any]], *, now: datetime, days: int = 7) -> list[dict[str, Any]]:
     start = occ.fmt_bj(now - timedelta(days=days))
     by_model: dict[str, list[Mapping[str, Any]]] = {}
-    for row in rows:
+    for row in latest_per_run(rows):
         if str(row.get("ts_bj") or "") >= start:
             by_model.setdefault(str(row.get("model") or "未知"), []).append(row)
     result = []

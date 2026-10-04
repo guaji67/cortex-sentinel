@@ -674,6 +674,114 @@ class MirrorAndRestoreTests(unittest.TestCase):
         self.assertIn("删了就丢模型口碑", text)
 
 
+class NudgeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name) / "reviews"
+        self.base.mkdir()
+        self.occ = Path(self.tmp.name) / "occupancy"
+        self.occ.mkdir()
+        self.calls: list = []
+
+    def enable(self, **extra) -> None:
+        (self.base / rv.NUDGE_CONFIG).write_text(json.dumps({"enabled": True, **extra}), encoding="utf-8")
+
+    def item(self, ticket: str, done_bj: str, model: str = "glm-5.3-flash") -> dict:
+        return {"ticket": ticket, "model": model, "executor": "Pro 执行者(ZCode)", "machine": "pro",
+                "completed_bj": done_bj, "run_id": "r-" + ticket}
+
+    def pending(self, items: list):
+        return lambda base, occ_base, since, now: (items, 0, ["本机"], [])
+
+    def dispatch_ok(self, argv):
+        self.calls.append(list(argv))
+        return 0, "ok"
+
+    def go(self, items: list, now: datetime = NOW, **kw):
+        titles = {"COR-1": "标题一", "COR-2": "标题二", "COR-3": "标题三", "COR-9": "补评单 B1003-1000：5 张已完工票的口碑"}
+        return rv.run_nudge(self.base, self.occ, now=now, pending_fn=self.pending(items), dispatch_fn=self.dispatch_ok,
+                            title_fn=lambda t: titles.get(t), **kw)
+
+    def test_off_by_default_and_interval_gate(self) -> None:
+        self.assertFalse(rv.nudge_due(self.base, NOW))
+        self.assertIn("没开", self.go([self.item("COR-1", "2026-10-04 00:00:00")])["skipped"])
+        self.assertEqual(self.calls, [])
+        self.enable()
+        self.assertTrue(rv.nudge_due(self.base, NOW))
+        first = self.go([self.item("COR-1", "2026-10-04 00:00:00")])
+        self.assertEqual(first["batched"], 1)
+        self.assertFalse(rv.nudge_due(self.base, NOW + timedelta(hours=2, minutes=59)))
+        self.assertTrue(rv.nudge_due(self.base, NOW + timedelta(hours=3)))
+        too_soon = self.go([self.item("COR-2", "2026-10-04 00:00:00")], now=NOW + timedelta(hours=1))
+        self.assertIn("不到 3 小时", too_soon["skipped"])
+
+    def test_only_old_unreviewed_unbatched_tickets_and_never_nudge_tickets_themselves(self) -> None:
+        self.enable()
+        # NOW 是北京 02:00：01:30 才完工半小时，不够 2 小时；00:00 够；COR-9 是前一张补评单自己，不能再请人评它
+        items = [self.item("COR-1", "2026-10-04 00:00:00"), self.item("COR-2", "2026-10-04 01:30:00"),
+                 self.item("COR-9", "2026-10-03 22:00:00")]
+        res = self.go(items)
+        self.assertEqual((res["tickets"], res["batched"]), (["COR-1"], 1))
+        body = Path(res["workorder"]).read_text(encoding="utf-8")
+        self.assertIn("COR-1  标题一", body)
+        self.assertNotIn("COR-2", body)
+        self.assertNotIn("COR-9", body)
+        # 同一批票不重复建单：下一轮 COR-1 不再进，COR-2 这时够 2 小时了才进
+        later = NOW + timedelta(hours=3)
+        res2 = self.go(items, now=later)
+        self.assertEqual(res2["tickets"], ["COR-2"])
+        self.assertEqual(len(self.calls), 2)
+        state = rv.load_nudge_state(self.base)
+        self.assertEqual(state["batched"], {"COR-1": res["batch"], "COR-2": res2["batch"]})
+        res3 = self.go(items, now=later + timedelta(hours=3))
+        self.assertEqual(res3["batched"], 0)
+        self.assertEqual(len(self.calls), 2)   # 没有新票就不建单
+
+    def test_dispatch_command_and_workorder_carry_the_tightened_rules(self) -> None:
+        self.enable(max_tickets=2, dispatch_args=["--machine", "m1max", "--machine-reason", "命令只装在 M1 Max"])
+        items = [self.item(f"COR-{i}", f"2026-10-03 23:0{i}:00") for i in (1, 2, 3)]
+        res = self.go(items)
+        self.assertEqual(res["tickets"], ["COR-1", "COR-2"])    # 超出一批上限的下一批再说
+        argv = self.calls[0]
+        self.assertIn("multica_dispatch.py", argv[1])
+        self.assertEqual(argv[argv.index("--lane") + 1], "backend")
+        self.assertEqual(argv[argv.index("--score") + 1], "20")
+        self.assertEqual(argv[argv.index("--machine") + 1], "m1max")
+        self.assertNotIn("--dry-run", argv)
+        self.assertTrue(argv[argv.index("--title") + 1].startswith("补评单 B"))
+        body = Path(argv[argv.index("--description-file") + 1]).read_text(encoding="utf-8")
+        self.assertIn('sentinel-review add COR-12345 好|一般|差 "一句为什么"', body)
+        self.assertIn("违反工单禁令", body)
+        self.assertIn("最多评「一般」", body)
+        self.assertIn("交接有错", body)
+        self.assertIn("第一发自己漏做", body)
+        self.assertIn("被环境或别人误杀", body)
+        self.assertIn("不算模型的锅", body)
+
+    def test_dispatch_failure_is_not_marked_and_retries_in_half_an_hour(self) -> None:
+        self.enable()
+        items = [self.item("COR-1", "2026-10-04 00:00:00")]
+        res = rv.run_nudge(self.base, self.occ, now=NOW, pending_fn=self.pending(items),
+                           dispatch_fn=lambda argv: (3, "GLM_ACCOUNT_BLOCKED"), title_fn=lambda t: "标题一")
+        self.assertIn("30 分钟后重试", res["error"])
+        state = rv.load_nudge_state(self.base)
+        self.assertEqual(state["batched"], {})
+        self.assertEqual(state["last_error"]["exit"], 3)
+        self.assertFalse(rv.nudge_due(self.base, NOW + timedelta(minutes=29)))
+        self.assertTrue(rv.nudge_due(self.base, NOW + timedelta(minutes=31)))
+        retry = self.go(items, now=NOW + timedelta(minutes=31))
+        self.assertEqual(retry["batched"], 1)     # 重试成功才算这批
+
+    def test_dry_run_plans_but_marks_nothing(self) -> None:
+        self.enable()
+        res = self.go([self.item("COR-1", "2026-10-04 00:00:00")], dry_run=True)
+        self.assertIn("--dry-run", self.calls[0])
+        self.assertEqual(res["tickets"], ["COR-1"])
+        self.assertEqual(rv.load_nudge_state(self.base)["batched"], {})
+        self.assertNotIn("last_attempt", rv.load_nudge_state(self.base))
+
+
 class PendingTests(unittest.TestCase):
     def test_pending_skips_reviewed_unfinished_and_in_flight(self) -> None:
         rows = [

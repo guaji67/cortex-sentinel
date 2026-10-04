@@ -78,10 +78,10 @@ launchd 模板在 `launchd/*.plist.tmpl`，占位符是 `@INSTALL_ROOT@` `@PYTHO
 记录各机写各机的 `~/Library/Application Support/CortexSentinel/reviews/reviews.jsonl`（只追加，目录里有「不要删除.md」）。
 `add` 不带 `--run` 时取这张票最近一条真跑完的 run（完工状态、有实际用时）；没开跑就撤的、被取消的、失败的跳过，要评它们明写 `--run`。
 误记或不该计口碑的（比如没起跑）用 `sentinel-review void COR-12153 --run 01a1009f --by 窗口名 "原因"` 作废：追加一行作废记录，summary 按同票同 run 取最新时遇到作废整条不算，旧行不删；之后再 `add` 又按最新算。
-评价里的模型取那条 run 实际用的（`multica issue runs` 的 usage，去掉 `[1m]` 这类后缀），不取执行者现在的配置：同一个执行者会先配 Spark 后改回小米。run 没有用量记录才退执行者配置，并标「模型未核」（`model_verified=false`）。summary 里免费 Spark 和付费 Spark(Go) 分两行。
-`sentinel-review reverify-models [--apply] [--match 正则]` 是一次性重核：默认核执行者名带 Go 或 Spark 的评价，模型和 run 实际不符就追加一条更正（同票同 run 新行覆盖旧行，旧行留着，评价发生时刻存在 `orig_ts_bj`）；不带 `--apply` 只出计划。
+评价里的模型取值顺序：那条 run 的 usage 里实际用的（去掉 `[1m]` 这类后缀）→ 派工记录里这条 run 刚建出来时执行者的模型配置 → 执行者现配置（标「模型未核」，`model_verified=false`）。代码里不写任何模型名单或分组：summary、list 按数据里出现的模型串原样分组，新模型不改代码自动出新的一行；免费和付费 Spark 靠模型串本身不同分行。本机线（CLI 派工）读会话记录或日志里的实际模型这一支还没做（本机和 Pro 上没有可核对的状态文件样本），目前用 `--model` 手填。
+`sentinel-review reverify-models [--apply] [--match 正则]` 是一次性重核：默认核全部评价，模型和 run 实际不符就追加一条更正（`--match` 可收窄到执行者名匹配某个正则的）（同票同 run 新行覆盖旧行，旧行留着，评价发生时刻存在 `orig_ts_bj`）；不带 `--apply` 只出计划。
 评价人只写两样：好 / 一般 / 差加一句为什么，其余程序填：任务标题（`multica issue get` 现查，缓存在 `reviews/task-titles.json`）、执行者、run 实际用的模型、机器、号、run 起止时刻、评价人窗口名（环境里的窗口名，否则读 Claude Code 会话记录里的窗口标题，带 `@机器`）、评价者自己的模型（Claude Code 读 `~/.claude/projects/*/<会话号>.jsonl` 最后一条助手消息的 model，Codex 读 rollout 的 turn_context，环境变量 `CORTEX_REVIEWER_MODEL` 优先，读不到留空不报错）。`--task`（没有票号的活，票号写 `-`，同时要 `--model`）和 `--reviewer-model` 只当兜底。
-`sentinel-review list [--model 小米|spark|glm] [--grade 差|一般|好] [--days 7]` 一行一条：时刻、票号、任务标题（40 字内）、评价档、为什么、评价人、评价者模型、模型、执行者、机器；`--model` 认俗名（小米=mimo，spark 含免费付费，glm=ZCode）。`sentinel-review backfill-tasks` 给已有评价补任务标题（只写旁表，评价原行不改）。
+`sentinel-review list [--model 小米|spark|glm] [--grade 差|一般|好] [--days 7]` 一行一条：时刻、票号、任务标题（40 字内）、评价档、为什么、评价人、评价者模型、模型、执行者、机器；`--model` 先查俗名表 `reviews/model-aliases.json`（可改，第一次用时从随代码带的 `cortex_sentinel/data/model-aliases.json` 拷过去，重装不覆盖；右边写正则，如 小米、spark、免费spark、付费spark、glm），查不到俗名就按模型串子串匹配，不报错。`sentinel-review backfill-tasks` 给已有评价补任务标题（只写旁表，评价原行不改）。
 补评或翻案就再 `add` 一条：summary 里同一张票同一条 run 只算最新那条（含最近感受），旧行留在文件里不删。
 `summary`、`pending` 默认三台合看：用 `ssh cortex-pro` / `cortex-mini` 只读 cat 对方的 reviews.jsonl 和 dispatch-*.jsonl
 （不往对方写任何东西），连不上的机器在输出末尾写「没读到：xxx」；`--local` 只看本机。`pending` 另扫看板上所有执行者

@@ -295,18 +295,63 @@ class ActualModelTests(unittest.TestCase):
         self.assertEqual((row["model"], row["model_verified"]), ("mimo-v2.6-flash", False))
         self.assertIn("模型未核", row["source"])
 
-    def test_summary_splits_free_and_paid_spark_and_labels_them(self) -> None:
+    def test_summary_groups_by_raw_model_string_so_unseen_models_get_their_own_row(self) -> None:
+        # 代码里没有任何模型名单：数据里出现什么模型串就出什么行。免费 / 付费 Spark、没见过的 k3 都靠串本身分开。
         rows = [
             {"ts_bj": "2026-10-04 01:00:00", "ticket": "COR-1", "run_id": "a", "model": "opencode/muse-spark-1.3-contributor-free", "grade": "好", "note": "免费"},
             {"ts_bj": "2026-10-04 01:01:00", "ticket": "COR-2", "run_id": "b", "model": "muse-spark-1.3-contributor[1m]", "grade": "差", "note": "付费"},
+            {"ts_bj": "2026-10-04 01:02:00", "ticket": "COR-3", "run_id": "c", "model": "kimi-code/k3", "grade": "一般", "note": "新模型"},
+            {"ts_bj": "2026-10-04 01:03:00", "ticket": "COR-4", "run_id": "d", "model": "zz-never-seen-model-9", "grade": "好", "note": "从没见过的串"},
         ]
         entries = {e["model"]: e for e in rv.summarize(rows, now=NOW)}
-        self.assertEqual(set(entries), {"opencode/muse-spark-1.3-contributor-free", "muse-spark-1.3-contributor"})
-        self.assertEqual(entries["opencode/muse-spark-1.3-contributor-free"]["label"], "Spark 免费")
-        self.assertEqual(entries["muse-spark-1.3-contributor"]["label"], "Spark 付费(Go)")
+        self.assertEqual(set(entries), {"opencode/muse-spark-1.3-contributor-free", "muse-spark-1.3-contributor",
+                                        "kimi-code/k3", "zz-never-seen-model-9"})
+        self.assertNotIn("label", entries["kimi-code/k3"])
         text = rv.format_summary(list(entries.values()), 7)
-        self.assertIn("Spark 免费 [opencode/muse-spark-1.3-contributor-free]  好 1", text)
-        self.assertIn("Spark 付费(Go) [muse-spark-1.3-contributor]  好 0 / 一般 0 / 差 1", text)
+        self.assertIn("zz-never-seen-model-9  好 1 / 一般 0 / 差 0", text)
+        self.assertIn("muse-spark-1.3-contributor  好 0 / 一般 0 / 差 1", text)
+        # list 不改代码就能按子串查到没见过的模型；查不到别名不报错
+        self.assertEqual([r["ticket"] for r in rv.list_reviews(rows, now=NOW, model="never-seen")], ["COR-4"])
+        self.assertEqual([r["ticket"] for r in rv.list_reviews(rows, now=NOW, model="K3")], ["COR-3"])
+        self.assertEqual(rv.list_reviews(rows, now=NOW, model="没有这个模型"), [])
+
+    def test_aliases_come_from_a_file_and_unknown_alias_falls_back_to_substring(self) -> None:
+        shipped = rv.load_aliases(None)  # 随代码带的那份
+        self.assertIn("小米", shipped)
+        base = Path(self.tmp.name) / "reviews"
+        base.mkdir(exist_ok=True)
+        (base / rv.ALIASES_NAME).write_text(json.dumps({"_说明": "x", "我的k": ["kimi", "k3"], "SPARK": "muse-spark"}), encoding="utf-8")
+        mine = rv.load_aliases(base)  # 评价记录目录里的那份优先，下划线开头的键是说明不算
+        self.assertEqual(set(mine), {"我的k", "spark"})
+        self.assertTrue(rv.model_matches("kimi-code/k3", "我的k", mine))
+        self.assertTrue(rv.model_matches("muse-spark-1.3-contributor", "Spark", mine))
+        self.assertTrue(rv.model_matches("mimo-v2.6-flash", "mimo", mine))        # 不在表里：按子串
+        self.assertFalse(rv.model_matches("mimo-v2.6-flash", "kimi", mine))
+        shipped_free = rv.model_matches("opencode/muse-spark-1.3-contributor-free", "免费spark", shipped)
+        shipped_paid = rv.model_matches("muse-spark-1.3-contributor", "免费spark", shipped)
+        self.assertEqual((shipped_free, shipped_paid), (True, False))
+        self.assertTrue(rv.model_matches("muse-spark-1.3-contributor", "付费spark", shipped))
+        self.assertFalse(rv.model_matches("opencode/muse-spark-1.3-contributor-free", "付费spark", shipped))
+        self.assertTrue(rv.model_matches("x", "", shipped))
+
+    def test_model_order_usage_then_dispatch_snapshot_then_current_config_marked_unverified(self) -> None:
+        agents = [{"id": "ex-7", "name": "Pro 执行者(某个通道)", "model": "config-now"}]
+        occ_base = Path(self.tmp.name) / "occupancy"
+        occ_base.mkdir(exist_ok=True)
+        done = ("2026-10-03T09:13:13Z", "2026-10-03T09:13:14Z", "2026-10-03T09:30:00Z")
+        # 1 有用量：取用量里的（带通道）
+        run1 = mk_run("r1", "completed", *done, usage=usage_of("kimi-code/k3"))
+        d1 = rv.describe_run(run1, occ_base, lambda: (agents, None))
+        self.assertEqual((d1["model"], d1["model_verified"], d1["provider"], d1["source"]), ("kimi-code/k3", True, "claude", "multica 现查"))
+        # 2 没用量，但派工记录里有这条 run 当时的配置：取它，不算未核
+        write_dispatch(occ_base, [dispatch_row("r2", "COR-2", "config-at-run", "2026-10-04 00:10:00")])
+        d2 = rv.describe_run(mk_run("r2", "completed", *done, usage=[]), occ_base, lambda: (agents, None))
+        self.assertEqual((d2["model"], d2["model_verified"]), ("config-at-run", True))
+        self.assertIn("当时的执行者配置", d2["source"])
+        # 3 都没有：退执行者现配置，标未核
+        d3 = rv.describe_run(mk_run("r3", "completed", *done, usage=[]), occ_base, lambda: (agents, None))
+        self.assertEqual((d3["model"], d3["model_verified"]), ("config-now", False))
+        self.assertIn("模型未核", d3["source"])
 
     def test_reverify_corrects_wrong_models_only_for_matching_executors_and_keeps_old_rows(self) -> None:
         old = lambda **kw: {"ts_bj": "2026-10-04 01:00:00", "kind": "review", "grade": "好", "note": "n", "by": "甲", **kw}
@@ -331,11 +376,11 @@ class ActualModelTests(unittest.TestCase):
             asked.append(ticket)
             return runs[ticket], None
 
-        plan = rv.reverify_models(self.reviews, self.occ, apply=False, now=NOW, issue_runs_fn=fake, reviews=reviews)
+        plan = rv.reverify_models(self.reviews, self.occ, match=r"\bGo\b|Spark", apply=False, now=NOW, issue_runs_fn=fake, reviews=reviews)
         self.assertEqual((plan["checked"], plan["corrected"], plan["unchanged"], plan["no_usage"], plan["no_run"]), (4, 2, 1, 1, 0))
         self.assertNotIn("COR-4", asked)  # ZCode 执行者不在核的范围
         self.assertEqual(occ.read_jsonl(rv.reviews_file(self.reviews)), [])  # 没 --apply 不写
-        done = rv.reverify_models(self.reviews, self.occ, apply=True, now=NOW, issue_runs_fn=fake, reviews=reviews)
+        done = rv.reverify_models(self.reviews, self.occ, match=r"\bGo\b|Spark", apply=True, now=NOW, issue_runs_fn=fake, reviews=reviews)
         written = occ.read_jsonl(rv.reviews_file(self.reviews))
         self.assertEqual(sorted((r["ticket"], r["model"]) for r in written),
                          [("COR-12266", "muse-spark-1.3-contributor"), ("COR-3", "kimi-code/k3")])
@@ -352,6 +397,14 @@ class ActualModelTests(unittest.TestCase):
         text = rv.format_reverify(done)
         self.assertIn("改 2 条", text)
         self.assertIn("mimo-v2.6-flash → muse-spark-1.3-contributor", text)
+
+    def test_reverify_defaults_to_all_executors_without_any_name_list(self) -> None:
+        reviews = [{"ts_bj": "2026-10-04 01:00:00", "ticket": "COR-4", "run_id": "r-glm", "model": "old-config-model",
+                    "executor": "任意执行者(从没见过的通道)", "grade": "好", "note": "n", "by": "甲"}]
+        runs = {"COR-4": [mk_run("r-glm", "completed", "x", usage=usage_of("brand-new/model-x"))]}
+        plan = rv.reverify_models(self.reviews, self.occ, apply=False, now=NOW, issue_runs_fn=lambda t: (runs[t], None), reviews=reviews)
+        self.assertEqual((plan["checked"], plan["corrected"]), (1, 1))
+        self.assertEqual(plan["corrections"][0]["model"], "brand-new/model-x")
 
     def test_corrected_row_keeps_original_time_for_window(self) -> None:
         # 更正写在「现在」，但评价是 10 天前的：仍在 7 天窗口外，不因为更正而重新冒出来
@@ -426,15 +479,15 @@ class TaskAndListTests(unittest.TestCase):
             {"ts_bj": "2026-10-04 01:04:00", "kind": "void", "ticket": "COR-2", "run_id": "b"},   # COR-2 被作废
             {"ts_bj": "2026-09-01 01:00:00", "ticket": "COR-9", "run_id": "z", "model": "mimo-v2.6-flash", "grade": "差", "note": "太老", "by": "q"},
         ]
-        tickets = lambda **kw: [r["ticket"] for r in rv.list_reviews(rows, now=NOW, **kw)]
+        shipped = rv.load_aliases(None)
+        tickets = lambda **kw: [r["ticket"] for r in rv.list_reviews(rows, now=NOW, aliases=shipped, **kw)]
         self.assertEqual(tickets(model="小米", grade="差"), ["COR-1"])
         self.assertEqual(sorted(tickets(model="spark")), ["COR-3"])          # COR-2 已作废；免费 Spark 在内
         self.assertEqual(tickets(model="glm"), ["COR-4"])
         self.assertEqual(sorted(tickets(grade="差")), ["COR-1", "COR-4"])
         self.assertEqual(tickets(model="免费spark"), ["COR-3"])
         self.assertEqual(tickets(model="付费spark"), [])
-        self.assertTrue(rv.model_matches("muse-spark-1.3-contributor", "付费spark"))
-        line = rv.format_list_line(rv.list_reviews(rows, now=NOW, model="小米")[0])
+        line = rv.format_list_line(rv.list_reviews(rows, now=NOW, model="小米", aliases=shipped)[0])
         self.assertIn("2026-10-04 01:00:00 | COR-1 | 升级前备份真根", line)
         self.assertIn("| 差 | 为什么：跑偏 | 评价人 cortex-2c | 评价者模型 Claude Opus 5.5 | 模型 mimo-v2.6-flash | 执行者 - | 机器 pro", line)
         task_cell = line.split(" | ")[2]

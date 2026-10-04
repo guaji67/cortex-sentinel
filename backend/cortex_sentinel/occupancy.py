@@ -548,6 +548,25 @@ def _sync_review_mirror() -> dict[str, Any]:
         return {"error": f"拉评价备份出错：{str(exc)[:120]}"}
 
 
+def _maybe_spawn_nudge(now: datetime) -> Optional[str]:
+    """补评单：开着且到点才起一个脱离的后台进程去建（拉三台数据、扫看板要几十秒，不占 tick 这一分钟）。"""
+    try:
+        from . import review as rv
+        base = rv.reviews_dir()
+        if not rv.nudge_due(base, now):
+            return None
+        log_dir = base / "nudge"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with open(log_dir / "nudge.log", "a", encoding="utf-8") as log:
+            subprocess.Popen(
+                [sys.executable, "-m", "cortex_sentinel.review", "nudge"],
+                cwd=str(Path(__file__).resolve().parents[1]), stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                start_new_session=True, env=_env())
+        return "已起后台进程"
+    except Exception as exc:  # noqa: BLE001
+        return f"起补评单出错：{str(exc)[:120]}"
+
+
 def _audit_fallback(base: Path, fetched: Mapping[str, Any], now: datetime) -> dict[str, Any]:
     status: dict[str, Any] = {"read_from": fetched.get("read_from"), "missed": fetched.get("missed")}
     if fetched.get("error"):
@@ -626,6 +645,9 @@ def tick(now: Optional[datetime] = None, base: Optional[Path] = None) -> dict[st
     fallback_status = _audit_fallback(base, fallback_lines, now)
     state["fallback_audit"] = {"at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), **fallback_status}
     state["review_mirror"] = {"at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), **mirror_status}
+    nudge_note = _maybe_spawn_nudge(now)
+    if nudge_note:
+        state["review_nudge"] = {"at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "note": nudge_note}
     save_state(base, state)
     return {"occupancy": occ["ts_bj"], "dispatch_rows": len(rows), "notes": notes, "fallback_audit": fallback_status}
 

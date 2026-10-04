@@ -11,6 +11,7 @@ Falcon 10-04 01:5x：不是跑分、不是派单去测、不是从回执里自�
 
 用法：
     sentinel-review add COR-12366 好 "6.7 分钟一次做对，回执与实物对得上" [--run 前缀] [--by 窗口名] [--model 手填]
+    sentinel-review nudge [--dry-run|--force]    完工没人评的票凑一批建补评单派出去（要先在 reviews/nudge.json 里 enabled）
     sentinel-review restore [--apply]            评价记录丢了或缺了，从另外两台里本机的备份补回（先不带 --apply 看计划）
     sentinel-review list [--model 小米|spark|glm] [--grade 差|一般|好] [--days 7]   一行一条，看谁为什么打的这个档
     sentinel-review add - 差 "为什么" --task "当时干了啥" --model 模型名            没有票号的活
@@ -36,6 +37,7 @@ import json
 import os
 import re
 import socket
+import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -856,6 +858,168 @@ def format_restore(res: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------- 补评单：完工没人评的票，哨兵定时建一张单派出去
+
+NUDGE_CONFIG = "nudge.json"
+NUDGE_STATE = "nudge-state.json"
+NUDGE_DEFAULTS: dict[str, Any] = {
+    "enabled": False,          # 总开关：只有这台机器的 reviews/nudge.json 里写 enabled=true 才建单（三台里只开一台，不然各建各的）
+    "older_than_hours": 2,     # 完工超过这么久还没人评才算
+    "interval_hours": 3,       # 每隔多久建一张
+    "since_hours": 48,         # 只看最近这么久完工的
+    "max_tickets": 20,         # 一张单最多列几张票，多的下一批
+    "dispatch_args": [],       # 追加给派工器的参数（比如钉机器时写 --machine m1max --machine-reason ...）
+}
+NUDGE_RETRY_AFTER = timedelta(minutes=30)
+NUDGE_TITLE_PREFIX = "补评单"
+
+NUDGE_RULES = (
+    "收紧口径（他定的，评每一张都照这个）：\n"
+    "- 违反工单禁令（越界改了不该碰的东西、没按工单写明的做法做）的，最多评「一般」，不给「好」。\n"
+    "- 交接有错（路径、说明、回执写错），或第一发自己漏做、靠别人催或接力才做成的，不给「好」。\n"
+    "- 被环境或别人误杀的（运行被撤、被改派、接口或额度报错打断、工作树被别人动了）不算模型的锅：不要评，在回执里写一行是哪几张和原因。\n"
+    "- 评的是那条 run 的模型这一趟干得好不好，不是这张票最后好不好；一句话写清为什么，写具体的事，不写套话。"
+)
+
+
+def nudge_config(base: Path) -> dict[str, Any]:
+    cfg = dict(NUDGE_DEFAULTS)
+    path = base / NUDGE_CONFIG
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return cfg
+    if isinstance(raw, dict):
+        cfg.update({k: v for k, v in raw.items() if k in NUDGE_DEFAULTS})
+    return cfg
+
+
+def load_nudge_state(base: Path) -> dict[str, Any]:
+    try:
+        raw = json.loads((base / NUDGE_STATE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raw = {}
+    raw = raw if isinstance(raw, dict) else {}
+    raw.setdefault("batched", {})
+    raw.setdefault("batches", [])
+    return raw
+
+
+def save_nudge_state(base: Path, state: Mapping[str, Any]) -> None:
+    tmp = base / (NUDGE_STATE + ".tmp")
+    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(base / NUDGE_STATE)
+
+
+def nudge_due(base: Path, now: datetime) -> bool:
+    """tick 每分钟问一次：开着、而且离上次尝试够久，才起一个后台进程去干。"""
+    cfg = nudge_config(base)
+    if not cfg.get("enabled"):
+        return False
+    last = occ.parse_utc(load_nudge_state(base).get("last_attempt"))
+    return last is None or now - last >= timedelta(hours=float(cfg["interval_hours"]))
+
+
+def build_nudge_workorder(batch_id: str, items: Sequence[Mapping[str, Any]], titles: Mapping[str, str]) -> str:
+    rows = "\n".join(
+        f"- {p['ticket']}  {clip(titles.get(p['ticket'], ''), 40)}  |  模型 {p.get('model')}  |  {p.get('executor') or '-'}  |  完工 {p.get('completed_bj')}"
+        for p in items)
+    return (
+        f"# {NUDGE_TITLE_PREFIX} {batch_id}：{len(items)} 张已完工、还没人评的票\n\n"
+        "哨兵自动建的单。目的：把每张票交付的口碑补上，攒成各模型的好坏账。\n\n"
+        "## 怎么做\n"
+        "逐张看票面（`multica issue get <票号>`、`multica issue runs <票号>`）和回执、PR 或实物，然后在本机跑：\n\n"
+        "    sentinel-review add COR-12345 好|一般|差 \"一句为什么\"\n\n"
+        "只写档位和一句为什么。任务标题、执行者、那条 run 实际用的模型、机器、号、起止时刻、评价人窗口名、评价者模型，程序自己填，不用写。\n"
+        "一张票有多条 run 时，不带 --run 默认取最近一条真跑完的；要评别的 run 才加 `--run <run 号前缀>`。\n"
+        "只读：不要改票的状态，不要改别人的代码，不要合 PR，不要开新单。\n\n"
+        f"## {NUDGE_RULES}\n\n"
+        f"## 票（{len(items)} 张）\n{rows}\n\n"
+        "## 收工\n"
+        "全部评完（或写明跳过原因）就在本票回一条回执：评了几张、好 / 一般 / 差各几张、跳过了哪几张和原因。\n")
+
+
+def dispatch_nudge(argv: Sequence[str]) -> tuple[int, str]:
+    try:
+        proc = subprocess.run(list(argv), env=occ._env(), capture_output=True, text=True, timeout=300)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return 1, f"派工器没跑成：{exc}"
+    return proc.returncode, ((proc.stdout or "") + (proc.stderr or ""))[-1500:]
+
+
+def nudge_command(cfg: Mapping[str, Any], batch_id: str, workorder: Path, count: int, *, dry_run: bool) -> list[str]:
+    runtime = occ.gate_runtime()
+    venv_python = runtime / ".venv" / "bin" / "python3"
+    python = str(venv_python) if venv_python.exists() else occ.gate_python()
+    argv = [python, str(runtime / "scripts" / "multica_dispatch.py"),
+            "--title", f"{NUDGE_TITLE_PREFIX} {batch_id}：{count} 张已完工票的口碑",
+            "--lane", "backend", "--score", "20", "--status", "todo",
+            "--description-file", str(workorder),
+            "--claim", f"哨兵自动补评单 {batch_id} / 只读票面与回执，逐张 sentinel-review add / 授权：他 10-04 定补评不靠窗口"]
+    argv += [str(x) for x in cfg.get("dispatch_args") or []]
+    if dry_run:
+        argv.append("--dry-run")
+    return argv
+
+
+def run_nudge(
+    base: Path, occ_base: Path, *, now: Optional[datetime] = None, force: bool = False, dry_run: bool = False,
+    pending_fn: Optional[Callable[..., Any]] = None,
+    dispatch_fn: Callable[[Sequence[str]], tuple[int, str]] = dispatch_nudge,
+    title_fn: Optional[Callable[[str], Optional[str]]] = None,
+) -> dict[str, Any]:
+    """完工超过 older_than_hours 还没人评的票，凑一批（同一张票只进一批），建一张补评单照派工器派出去。
+    派工器失败不标记已批，30 分钟后重试；--dry-run 只打计划并让派工器 dry-run，不标记。"""
+    now = now or datetime.now(timezone.utc)
+    cfg = nudge_config(base)
+    if not cfg.get("enabled") and not force:
+        return {"skipped": f"没开：这台机器的 reviews/{NUDGE_CONFIG} 里没有 enabled=true"}
+    state = load_nudge_state(base)
+    last = occ.parse_utc(state.get("last_attempt"))
+    interval = timedelta(hours=float(cfg["interval_hours"]))
+    if not force and not dry_run and last is not None and now - last < interval:
+        return {"skipped": f"离上次尝试（{occ.fmt_bj(last)}）不到 {cfg['interval_hours']} 小时"}
+    if not dry_run:
+        state["last_attempt"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        save_nudge_state(base, state)
+    since = now - timedelta(hours=float(cfg["since_hours"]))
+    fetch = pending_fn or collect_pending
+    items, _in_flight, _read_from, missed = fetch(base, occ_base, since, now)
+    cutoff = occ.fmt_bj(now - timedelta(hours=float(cfg["older_than_hours"])))
+    fresh = [p for p in items if str(p["completed_bj"]) <= cutoff and p["ticket"] not in state["batched"]]
+    titles = resolve_titles(base, [p["ticket"] for p in fresh], title_fn=title_fn)
+    candidates = [p for p in fresh if not titles.get(p["ticket"], "").startswith(NUDGE_TITLE_PREFIX)]
+    result: dict[str, Any] = {"candidates": len(candidates), "missed": missed, "dry_run": dry_run}
+    if not candidates:
+        result["batched"] = 0
+        return result
+    chosen = candidates[: int(cfg["max_tickets"])]
+    batch_id = "B" + occ.to_beijing(now).strftime("%m%d-%H%M")
+    nudge_dir = base / "nudge"
+    nudge_dir.mkdir(parents=True, exist_ok=True)
+    workorder = nudge_dir / f"{batch_id}.md"
+    workorder.write_text(build_nudge_workorder(batch_id, chosen, titles), encoding="utf-8")
+    code, tail = dispatch_fn(nudge_command(cfg, batch_id, workorder, len(chosen), dry_run=dry_run))
+    result.update({"batch": batch_id, "tickets": [p["ticket"] for p in chosen], "workorder": str(workorder),
+                   "dispatch_exit": code, "dispatch_tail": tail[-400:]})
+    if dry_run:
+        return result
+    if code != 0:
+        state["last_attempt"] = (now - interval + NUDGE_RETRY_AFTER).strftime("%Y-%m-%dT%H:%M:%SZ")
+        state["last_error"] = {"at": occ.fmt_bj(now), "batch": batch_id, "exit": code, "tail": tail[-400:]}
+        save_nudge_state(base, state)
+        result["error"] = "派工器没派出去，30 分钟后重试"
+        return result
+    for p in chosen:
+        state["batched"][p["ticket"]] = batch_id
+    state["batches"].append({"id": batch_id, "at": occ.fmt_bj(now), "tickets": [p["ticket"] for p in chosen],
+                             "dispatch_tail": tail[-300:]})
+    state.pop("last_error", None)
+    save_nudge_state(base, state)
+    result["batched"] = len(chosen)
+    return result
+
+
 # ---------------------------------------------------------------- 一次性重核：评价里的模型按 run 实际用的重算
 
 # 默认核全部评价：每条拿 run 实际用的模型比，不符才更正。--match 可以收窄到执行者名匹配某个正则的那几条。
@@ -1156,6 +1320,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p_list.add_argument("--days", type=int, default=7)
     p_list.add_argument("--local", action="store_true", help="只看本机")
     p_list.add_argument("--json", action="store_true")
+    p_nud = sub.add_parser("nudge", help="完工没人评的票凑一批建补评单派出去（tick 每 3 小时调一次，要在 reviews/nudge.json 里开）")
+    p_nud.add_argument("--dry-run", action="store_true", help="只出计划，让派工器 dry-run，不标记已批")
+    p_nud.add_argument("--force", action="store_true", help="不管开关和间隔，现在就建一张")
     p_res = sub.add_parser("restore", help="本机评价记录丢了或缺了：从另外两台里本机的备份补回")
     p_res.add_argument("--apply", action="store_true", help="真补回；不带只出计划")
     p_mir = sub.add_parser("mirror-sync", help="立刻拉一次另外两台的评价记录备份（tick 每分钟也会拉）")
@@ -1207,6 +1374,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             else:
                 print(format_list(picked, titles, read_from, missed))
             return 0
+        if args.cmd == "nudge":
+            result = run_nudge(base, occ_base, now=now, force=args.force, dry_run=args.dry_run)
+            print(json.dumps(result, ensure_ascii=False))
+            return 1 if result.get("error") else 0
         if args.cmd == "restore":
             print(format_restore(restore_from_peers(base, apply=args.apply)))
             return 0

@@ -9,6 +9,10 @@ Falcon 10-04 01:5x：不是跑分、不是派单去测、不是从回执里自�
 读口复用占用记录那一套：派工记录 dispatch-YYYY-MM-DD.jsonl 里找这张票最近一条 run，找不到再用
 `multica issue runs` 现查；pending 读当前 run 状态也走 occupancy 的 fetch_agent_runs。
 
+本机线（派工器在本机起的 CLI 线，看板只占票、不起 multica run）没有 multica run，模型取它自己
+会话日志里实际用的那一个：读 logs/codebuddy-<票号>.status.json 和 .log，两处都找（主检出的 logs/
+优先，再看闸运行时树的 logs/）。run 号记成 local:<slug>，执行者写「本机线 <引擎>」。不写死模型名单。
+
 用法：
     sentinel-review add COR-12366 好 "6.7 分钟一次做对，回执与实物对得上" [--run 前缀] [--by 窗口名] [--model 手填]
     sentinel-review nudge [--dry-run|--force]    完工没人评的票凑一批建补评单派出去（要先在 reviews/nudge.json 里 enabled）
@@ -21,7 +25,8 @@ Falcon 10-04 01:5x：不是跑分、不是派单去测、不是从回执里自�
     sentinel-review pending [--since 今天] [--local]
 
 add 不带 --run 时取这张票最近一条真跑完的 run（完工状态、有实际用时），没开跑就撤的、被取消的、失败的跳过；
-要评那些，明写 --run。
+要评那些，明写 --run。multica 没有真跑完的 run，就看这张票的本机线（终态 done、退出码 0、有实际用时才取），
+明写 --run local:<slug> 可以直指某条本机线。
 
 summary 和 pending 默认三台合看：评价各机写各机的 reviews.jsonl，这里用 ssh（cortex-pro / cortex-mini，
 只读 cat 对方的 reviews.jsonl 和派工记录）合起来；连不上的机器在输出里写一行，不静默。pending 另扫看板上
@@ -277,6 +282,154 @@ def effective_ts(row: Mapping[str, Any]) -> str:
     return str(row.get("orig_ts_bj") or row.get("ts_bj") or "")
 
 
+# ---------------------------------------------------------------- 本机线：看板只占票、不起 multica run 的那种线
+
+LOCAL_LINE_PREFIX = "codebuddy"                 # 状态和日志文件名的前缀：codebuddy-<slug>.status.json / .log
+LOCAL_RUN_PREFIX = "local:"                     # 本机线在评价记录里的 run 号前缀
+LOCAL_SLUG_RE = re.compile(r"^cor-\d+$", re.IGNORECASE)
+LOCAL_STATUS_RE = re.compile(rf"^{LOCAL_LINE_PREFIX}-(cor-\d+)\.status\.json$", re.IGNORECASE)
+
+
+def local_slug(ticket: str) -> str:
+    """票号 → 本机线的 slug（COR-12474 → cor-12474）。不是票号形状的（如 q-B51-...）返回空串，
+    那种线不管、不报错。"""
+    slug = str(ticket or "").strip().lower()
+    return slug if LOCAL_SLUG_RE.match(slug) else ""
+
+
+def default_local_logs_dirs() -> list[Path]:
+    """本机线的状态和日志两处都找：Cortex 主检出的 logs/ 优先，再看闸运行时树的 logs/。"""
+    dirs: list[Path] = []
+    for raw in (Path(occ.checkout_base()) / "logs", occ.gate_runtime() / "logs"):
+        if raw not in dirs:
+            dirs.append(raw)
+    return dirs
+
+
+def _stream_log_models(path: Path) -> tuple[Optional[str], Optional[str]]:
+    """流式逐行读 stream-json 日志（大的几十 MB，不许整读），只解析含 "model" 的行。
+    返回 (assistant 消息里出现最多的模型, init 事件的模型)，都读不到给 None。"""
+    assistants: dict[str, int] = {}
+    init_model = ""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if '"model"' not in line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                if row.get("type") == "assistant":
+                    name = norm_model((row.get("message") or {}).get("model"))
+                    if name and name != "<synthetic>":
+                        assistants[name] = assistants.get(name, 0) + 1
+                elif row.get("subtype") == "init" and not init_model:
+                    name = norm_model(row.get("model"))
+                    if name and name != "<synthetic>":
+                        init_model = name
+    except OSError:
+        return None, None
+    best = max(assistants, key=lambda name: assistants[name]) if assistants else ""
+    return (best or None), (init_model or None)
+
+
+def local_line_info(slug: str, logs_dirs: Optional[Sequence[Path]] = None, *,
+                    read_log: bool = True) -> Optional[dict[str, Any]]:
+    """一条本机线的底细。状态文件给引擎、配置模型、会话号、起止时刻、状态、退出码；
+    日志流式读出真正用的模型，取值顺序：assistant 消息里用量最多的 → init 事件的 →
+    都没有才退状态文件里的配置模型并标「模型未核」。
+    slug 不是票号形状、两处都找不到状态文件、状态文件读不懂的返回 None，不报错。"""
+    slug = str(slug or "").strip().lower()
+    if not LOCAL_SLUG_RE.match(slug):
+        return None
+    dirs = list(logs_dirs) if logs_dirs is not None else default_local_logs_dirs()
+    status_path = next((d / f"{LOCAL_LINE_PREFIX}-{slug}.status.json" for d in dirs
+                        if (d / f"{LOCAL_LINE_PREFIX}-{slug}.status.json").is_file()), None)
+    if status_path is None:
+        return None
+    try:
+        payload = json.loads(status_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    actual: Optional[str] = None
+    init: Optional[str] = None
+    log_path = status_path.with_name(f"{LOCAL_LINE_PREFIX}-{slug}.log")
+    if read_log and log_path.is_file():
+        actual, init = _stream_log_models(log_path)
+    model = actual or init
+    verified = bool(model)
+    if not model:
+        model = norm_model(payload.get("model"))
+    started = occ.parse_utc(payload.get("started_at"))
+    finished = occ.parse_utc(payload.get("updated_at"))
+    seconds = int((finished - started).total_seconds()) if started and finished and finished > started else None
+    return {
+        "slug": slug,
+        "engine": str(payload.get("engine") or "").strip(),
+        "model": model,
+        "model_verified": verified,
+        "config_model": norm_model(payload.get("model")),
+        "session_id": str(payload.get("session_id") or ""),
+        "started_bj": occ.fmt_bj(started) if started else None,
+        "finished_bj": occ.fmt_bj(finished) if finished else None,
+        "run_seconds": seconds,
+        "state": str(payload.get("state") or "").strip().lower(),
+        "exit_code": payload.get("exit_code"),
+    }
+
+
+def list_local_lines(logs_dirs: Optional[Sequence[Path]] = None, *,
+                     read_log: bool = True) -> dict[str, dict[str, Any]]:
+    """两处 logs 目录里所有本机线的底细，按 slug 索引，主检出优先；只认 codebuddy-<票号>.status.json，
+    别的前缀、别的 slug 形状的文件不碰。read_log=False 只读状态文件（先挑候选，别一上来就流读日志）。"""
+    dirs = list(logs_dirs) if logs_dirs is not None else default_local_logs_dirs()
+    found: dict[str, dict[str, Any]] = {}
+    for directory in dirs:
+        try:
+            names = os.listdir(directory)
+        except OSError:
+            continue
+        for name in names:
+            matched = LOCAL_STATUS_RE.match(name)
+            if not matched:
+                continue
+            slug = matched.group(1).lower()
+            if slug in found:
+                continue
+            info = local_line_info(slug, [directory], read_log=read_log)
+            if info:
+                found[slug] = info
+    return found
+
+
+def local_run_row(slug: str, logs_dirs: Optional[Sequence[Path]] = None) -> Optional[dict[str, Any]]:
+    """这条本机线可不可以拿来评、评的话记哪些字段：状态终态 done、退出码 0、有实际用时
+    （updated_at 晚于 started_at）才取，否则 None。run_id 记 local:<slug>，执行者写「本机线 <引擎>」，
+    机器写本机，来源写「本机线日志」。"""
+    info = local_line_info(slug, logs_dirs)
+    if not info or info["state"] != "done" or str(info["exit_code"]).strip() != "0" or info["run_seconds"] is None:
+        return None
+    return {
+        "run_id": LOCAL_RUN_PREFIX + info["slug"],
+        "model": info["model"],
+        "model_verified": info["model_verified"],
+        "executor": f"本机线 {info['engine']}".strip(),
+        "executor_id": None,
+        "machine": local_machine(),
+        "account": "-",
+        "run_created_bj": info["started_bj"],
+        "run_seconds": info["run_seconds"],
+        "run_started_bj": info["started_bj"],
+        "run_finished_bj": info["finished_bj"],
+        "source": "本机线日志",
+    }
+
+
 # ---------------------------------------------------------------- 找这张票的 run
 
 def _dispatch_rows(occ_base: Path, ticket: Optional[str] = None) -> list[dict[str, Any]]:
@@ -411,9 +564,15 @@ def find_run(
     ticket: str, run_prefix: str, occ_base: Path, *,
     runs_fn: Callable[[str], tuple[Optional[list], Optional[str]]] = fetch_issue_runs,
     agents_fn: Callable[[], tuple[Optional[list], Optional[str]]] = fetch_agents_all,
+    local_logs_dirs: Optional[Sequence[Path]] = None,
 ) -> Optional[dict[str, Any]]:
     """找这张票要评的 run。不带 --run：multica 现查，取最近一条真跑完的（完工状态、有实际用时）；
-    带 --run：按前缀认那一条，不管状态。现查不通或没有，再退到派工记录。"""
+    现查没有真跑完的，再看这张票有没有本机线；带 --run：按前缀认那一条，不管状态（--run local:<slug>
+    直指本机线）。都找不到再退到派工记录。"""
+    run_prefix = (run_prefix or "").strip()
+    if run_prefix.startswith(LOCAL_RUN_PREFIX):
+        slug = run_prefix[len(LOCAL_RUN_PREFIX):].strip() or local_slug(ticket)
+        return local_run_row(slug, local_logs_dirs) or run_from_dispatch(occ_base, ticket, run_prefix)
     runs, _err = runs_fn(ticket)
     if runs:
         if run_prefix:
@@ -422,11 +581,18 @@ def find_run(
         else:
             chosen = pick_finished_run(runs)
             if chosen is None:
+                local = local_run_row(local_slug(ticket), local_logs_dirs)
+                if local is not None:
+                    return local
                 states = "、".join(f"{str(r.get('id'))[:8]} {r.get('status')}" for r in runs[:6])
                 raise LookupError(f"{ticket} 没有真跑完的 run（完工状态且有实际用时），现有：{states}；"
                                   f"要评别的 run 就写 --run <run 号前缀>")
         if chosen is not None:
             return describe_run(chosen, occ_base, agents_fn)
+    if not run_prefix:
+        local = local_run_row(local_slug(ticket), local_logs_dirs)
+        if local is not None:
+            return local
     return run_from_dispatch(occ_base, ticket, run_prefix)
 
 
@@ -1031,8 +1197,10 @@ def reverify_models(
     now: Optional[datetime] = None, peers: bool = True,
     issue_runs_fn: Callable[[str], tuple[Optional[list], Optional[str]]] = fetch_issue_runs,
     reviews: Optional[Sequence[Mapping[str, Any]]] = None,
+    local_logs_dirs: Optional[Sequence[Path]] = None,
 ) -> dict[str, Any]:
     """算数的评价里执行者名字匹配 match 的，逐条拿 run 实际用的模型（multica 现查 usage）比；
+    run 号以 local: 开头的按本机线日志重算（只有日志里读到实际模型才算数，退配置的不改）。
     模型不对就追加一条更正（同票同 run 的新行覆盖旧行，旧行留着）。更正行的 ts_bj 是现在，
     评价发生时刻另存 orig_ts_bj，不改 7 天窗口和「最近三句」的顺序。apply=False 只出计划，不写。"""
     now = now or datetime.now(timezone.utc)
@@ -1042,7 +1210,9 @@ def reverify_models(
         reviews, _rows, read_from, missed = gather(base, occ_base, peers=peers)
     live = live_reviews(reviews)
     targets = [r for r in live if re.search(match, str(r.get("executor") or "")) and r.get("run_id")]
-    tickets = sorted({str(r.get("ticket") or "").upper() for r in targets} - {""})
+    is_local = lambda row: str(row.get("run_id")).startswith(LOCAL_RUN_PREFIX)
+    remote = [r for r in targets if not is_local(r)]
+    tickets = sorted({str(r.get("ticket") or "").upper() for r in remote} - {""})
     runs_by_id: dict[str, Mapping[str, Any]] = {}
     with ThreadPoolExecutor(max_workers=8) as pool:
         for runs, _err in pool.map(issue_runs_fn, tickets):
@@ -1050,7 +1220,22 @@ def reverify_models(
                 runs_by_id[str(run.get("id"))] = run
     corrections: list[dict[str, Any]] = []
     unchanged = no_usage = no_run = 0
-    for row in targets:
+
+    def correct(row: Mapping[str, Any], actual: str, how: str) -> None:
+        nonlocal unchanged
+        if norm_model(actual) == norm_model(row.get("model")):
+            unchanged += 1
+            return
+        fixed = dict(row)
+        fixed.update({
+            "kind": "review", "ts_bj": occ.fmt_bj(now), "orig_ts_bj": effective_ts(row),
+            "model": actual, "model_verified": True,
+            "correction": f"模型更正：{norm_model(row.get('model'))} → {actual}（{how}）",
+            "corrected_by": default_reviewer(),
+        })
+        corrections.append(fixed)
+
+    for row in remote:
         run = runs_by_id.get(str(row.get("run_id")))
         if run is None:
             no_run += 1
@@ -1059,17 +1244,16 @@ def reverify_models(
         if actual is None:
             no_usage += 1
             continue
-        if norm_model(actual) == norm_model(row.get("model")):
-            unchanged += 1
+        correct(row, actual, "按 run 实际用的模型重核")
+    for row in [r for r in targets if is_local(r)]:
+        info = local_line_info(str(row.get("run_id"))[len(LOCAL_RUN_PREFIX):], local_logs_dirs)
+        if info is None:
+            no_run += 1
             continue
-        fixed = dict(row)
-        fixed.update({
-            "kind": "review", "ts_bj": occ.fmt_bj(now), "orig_ts_bj": effective_ts(row),
-            "model": actual, "model_verified": True,
-            "correction": f"模型更正：{norm_model(row.get('model'))} → {actual}（按 run 实际用的模型重核）",
-            "corrected_by": default_reviewer(),
-        })
-        corrections.append(fixed)
+        if not info["model_verified"] or not info["model"]:
+            no_usage += 1
+            continue
+        correct(row, info["model"], "按本机线日志重核")
     if apply:
         for fixed in corrections:
             occ.append_jsonl(reviews_file(base), fixed)
@@ -1270,11 +1454,36 @@ def format_pending(items: Sequence[Mapping[str, Any]], in_flight: int, since: da
     return "\n".join(lines + format_sources(read_from, missed))
 
 
+def local_pending_items(logs_dirs: Optional[Sequence[Path]] = None, *, reviewed: Optional[set] = None,
+                        since: Optional[datetime] = None, known: Sequence[str] = (),
+                        ) -> list[dict[str, Any]]:
+    """本机线里已完工（state=done、退出码 0）、过了 since、没人评、也不在 known（派工记录或看板已记的票）
+    里的票。模型取日志里的实际模型。先只读状态文件挑候选，挑中了才流式读日志。"""
+    want = {str(t).upper() for t in known} | {str(t).upper() for t in (reviewed or set())}
+    since_bj = occ.fmt_bj(since) if since else ""
+    picked = [slug for slug, info in list_local_lines(logs_dirs, read_log=False).items()
+              if slug.upper() not in want
+              and info["state"] == "done" and str(info["exit_code"]).strip() == "0"
+              and info["finished_bj"] and info["finished_bj"] >= since_bj]
+    items: list[dict[str, Any]] = []
+    for slug in picked:
+        info = local_line_info(slug, logs_dirs)
+        if not info:
+            continue
+        items.append({
+            "ticket": slug.upper(), "model": info["model"] or "未知",
+            "executor": f"本机线 {info['engine']}".strip(), "machine": local_machine(),
+            "completed_bj": info["finished_bj"], "run_id": LOCAL_RUN_PREFIX + slug,
+        })
+    return sorted(items, key=lambda p: str(p["completed_bj"]))
+
+
 # ---------------------------------------------------------------- 命令行
 
 def collect_pending(base: Path, occ_base: Path, since: datetime, now: datetime, *, peers: bool = True,
+                    local_logs_dirs: Optional[Sequence[Path]] = None,
                     ) -> tuple[list[dict[str, Any]], int, list[str], list[str]]:
-    """三台派工记录 + 看板各执行者最近的 run，合起来判：已完工、没评价的票。"""
+    """三台派工记录 + 看板各执行者最近的 run + 本机线，合起来判：已完工、没评价的票。"""
     # 往前多翻一天的派工行，昨晚起的、今天凌晨才交回的也不漏；最后再按完工时刻卡 since。
     reviews, rows, read_from, missed = gather(base, occ_base, since=since - timedelta(days=1), peers=peers, now=now)
     # 含归档的执行者一起扫：零点前完工的票常是后来被归档的执行者做的。
@@ -1298,7 +1507,12 @@ def collect_pending(base: Path, occ_base: Path, since: datetime, now: datetime, 
     reviewed = {str(r.get("ticket") or "").upper() for r in live_reviews(reviews)}
     items, in_flight = compute_pending(rows, current, reviewed)
     items = [p for p in items if str(p["completed_bj"]) >= occ.fmt_bj(since)]
-    return items, in_flight, read_from, missed
+    # 派工记录和看板都没有的（本机线看板只占票、不起 multica run），从本机线日志补上
+    local = local_pending_items(local_logs_dirs, reviewed=reviewed, since=since,
+                                known=[str(r.get("ticket") or "") for r in rows])
+    have = {p["ticket"] for p in items}
+    items += [p for p in local if p["ticket"] not in have]
+    return sorted(items, key=lambda p: str(p["completed_bj"])), in_flight, read_from, missed
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

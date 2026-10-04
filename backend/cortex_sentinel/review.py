@@ -12,6 +12,7 @@ Falcon 10-04 01:5x：不是跑分、不是派单去测、不是从回执里自�
 用法：
     sentinel-review add COR-12366 好 "6.7 分钟一次做对，回执与实物对得上" [--run 前缀] [--by 窗口名] [--model 手填]
     sentinel-review void COR-12153 --run 01a1009f --by 窗口名 "原因"     作废那条 run 上的评价，汇总整条不算
+    sentinel-review reverify-models [--apply] [--match 正则]   一次性重核评价里的模型，按 run 实际用的重算
     sentinel-review summary [--days 7] [--local]
     sentinel-review pending [--since 今天] [--local]
 
@@ -105,6 +106,41 @@ def machine_word(name: str) -> str:
     return word
 
 
+# ---------------------------------------------------------------- 模型：以那条 run 实际用的为准
+
+def norm_model(name: Any) -> str:
+    """去掉 Claude Code 带的上下文档后缀（如 mimo-v2.6-flash[1m]），同一个模型只留一个写法。"""
+    return re.sub(r"\[[^\]]*\]$", "", str(name or "").strip())
+
+
+def actual_model(run: Mapping[str, Any]) -> Optional[str]:
+    """run 实际用的模型：取 run.usage 里有用量的模型，多个就取用量最大的；没有 usage 返回 None。
+    执行者的配置会被改回改去（同一个执行者先配 Spark 后改回小米），只有 run 自己的用量记录是当时真用的。"""
+    totals: dict[str, int] = {}
+    for item in run.get("usage") or []:
+        if not isinstance(item, Mapping):
+            continue
+        name = norm_model(item.get("model"))
+        tokens = int(item.get("input_tokens") or 0) + int(item.get("output_tokens") or 0)
+        if name and tokens > 0:
+            totals[name] = totals.get(name, 0) + tokens
+    return max(totals, key=lambda k: totals[k]) if totals else None
+
+
+def model_label(model: Any) -> str:
+    """汇总里显示用：免费 Spark 和付费 Spark（Go 钥匙）分开叫；其余原样。"""
+    name = norm_model(model)
+    low = name.lower()
+    if "muse-spark" in low:
+        return "Spark 免费" if "free" in low else "Spark 付费(Go)"
+    return name
+
+
+def effective_ts(row: Mapping[str, Any]) -> str:
+    """评价算在哪个时刻：更正行写在更正当时（要盖过旧行），但评价本身发生在 orig_ts_bj。"""
+    return str(row.get("orig_ts_bj") or row.get("ts_bj") or "")
+
+
 # ---------------------------------------------------------------- 找这张票的 run
 
 def _dispatch_rows(occ_base: Path, ticket: Optional[str] = None) -> list[dict[str, Any]]:
@@ -131,7 +167,8 @@ def run_from_dispatch(occ_base: Path, ticket: str, run_prefix: str = "") -> Opti
         "run_id": row.get("run_id"), "model": row.get("model"), "executor": row.get("executor"),
         "executor_id": row.get("executor_id"), "machine": row.get("machine") or machine_word(str(row.get("executor") or "")),
         "account": row.get("account") or "-", "run_created_bj": row.get("created_bj"), "run_seconds": None,
-        "source": "派工记录（现查不通，用时未核）",
+        "model_verified": False,
+        "source": "派工记录（现查不通，用时未核，模型未核：执行者配置）",
     }
 
 
@@ -188,11 +225,13 @@ def describe_run(run: Mapping[str, Any], occ_base: Optional[Path],
                     account = str(row["account"])
                     break
     created = occ.parse_utc(run.get("created_at"))
+    actual = actual_model(run)
     return {
-        "run_id": run.get("id"), "model": agent.get("model"), "executor": name or None,
+        "run_id": run.get("id"), "model": actual or agent.get("model"), "model_verified": actual is not None,
+        "executor": name or None,
         "executor_id": run.get("agent_id"), "machine": machine_word(name), "account": account,
         "run_created_bj": occ.fmt_bj(created) if created else None, "run_seconds": run_seconds(run),
-        "source": "multica 现查",
+        "source": "multica 现查" if actual else "multica 现查（模型未核：run 没有用量记录，退执行者配置）",
     }
 
 
@@ -230,7 +269,7 @@ def build_review(*, now: datetime, ticket: str, grade: str, note: str, by: str,
         "ts_bj": occ.fmt_bj(now),
         "ticket": ticket,
         "run_id": run.get("run_id"),
-        "model": model_override or run.get("model") or "未知",
+        "model": norm_model(model_override or run.get("model")) or "未知",
         "executor": run.get("executor") or "-",
         "machine": run.get("machine") or "-",
         "account": run.get("account") or "-",
@@ -239,6 +278,7 @@ def build_review(*, now: datetime, ticket: str, grade: str, note: str, by: str,
         "by": by,
         "run_created_bj": run.get("run_created_bj"),
         "run_secs": run.get("run_seconds"),
+        "model_verified": True if model_override else run.get("model_verified"),
         "source": run.get("source") or ("手填模型" if model_override else "未找到 run"),
     }
 
@@ -379,7 +419,7 @@ def dedupe(rows: Sequence[Mapping[str, Any]], key: Callable[[Mapping[str, Any]],
 
 
 def review_key(row: Mapping[str, Any]) -> tuple:
-    return (row.get("ts_bj"), row.get("kind"), row.get("ticket"), row.get("by"), row.get("note"))
+    return (row.get("ts_bj"), row.get("kind"), row.get("ticket"), row.get("run_id"), row.get("by"), row.get("note"))
 
 
 def gather(base: Path, occ_base: Path, *, since: Optional[datetime] = None, peers: bool = True,
@@ -494,18 +534,102 @@ def summarize(rows: Sequence[Mapping[str, Any]], *, now: datetime, days: int = 7
     start = occ.fmt_bj(now - timedelta(days=days))
     by_model: dict[str, list[Mapping[str, Any]]] = {}
     for row in live_reviews(rows):
-        if str(row.get("ts_bj") or "") >= start:
-            by_model.setdefault(str(row.get("model") or "未知"), []).append(row)
+        if effective_ts(row) >= start:
+            by_model.setdefault(norm_model(row.get("model")) or "未知", []).append(row)
     result = []
     for model, items in by_model.items():
-        items = sorted(items, key=lambda r: str(r.get("ts_bj") or ""), reverse=True)
+        items = sorted(items, key=effective_ts, reverse=True)
         counts = {g: sum(1 for r in items if r.get("grade") == g) for g in GRADES}
         result.append({
-            "model": model, "good": counts["好"], "ok": counts["一般"], "bad": counts["差"], "total": len(items),
+            "model": model, "label": model_label(model), "unverified": sum(1 for r in items if r.get("model_verified") is False),
+            "good": counts["好"], "ok": counts["一般"], "bad": counts["差"], "total": len(items),
             "recent": [{"ticket": r.get("ticket"), "grade": r.get("grade"), "note": clip(str(r.get("note") or ""))}
                        for r in items[:RECENT_NOTES]],
         })
     return sorted(result, key=lambda r: (-r["total"], r["model"]))
+
+
+# ---------------------------------------------------------------- 一次性重核：评价里的模型按 run 实际用的重算
+
+# 默认只核名字里带 Go 的执行者（付费 Go 钥匙那几个，配置会在小米和 Spark 之间改来改去）和 Spark 执行者。
+REVERIFY_MATCH = r"\bGo\b|Spark"
+
+
+def reverify_models(
+    base: Path, occ_base: Path, *, match: str = REVERIFY_MATCH, apply: bool = False,
+    now: Optional[datetime] = None, peers: bool = True,
+    issue_runs_fn: Callable[[str], tuple[Optional[list], Optional[str]]] = fetch_issue_runs,
+    reviews: Optional[Sequence[Mapping[str, Any]]] = None,
+) -> dict[str, Any]:
+    """算数的评价里执行者名字匹配 match 的，逐条拿 run 实际用的模型（multica 现查 usage）比；
+    模型不对就追加一条更正（同票同 run 的新行覆盖旧行，旧行留着）。更正行的 ts_bj 是现在，
+    评价发生时刻另存 orig_ts_bj，不改 7 天窗口和「最近三句」的顺序。apply=False 只出计划，不写。"""
+    now = now or datetime.now(timezone.utc)
+    read_from: list[str] = []
+    missed: list[str] = []
+    if reviews is None:
+        reviews, _rows, read_from, missed = gather(base, occ_base, peers=peers)
+    live = live_reviews(reviews)
+    targets = [r for r in live if re.search(match, str(r.get("executor") or "")) and r.get("run_id")]
+    tickets = sorted({str(r.get("ticket") or "").upper() for r in targets} - {""})
+    runs_by_id: dict[str, Mapping[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for runs, _err in pool.map(issue_runs_fn, tickets):
+            for run in runs or []:
+                runs_by_id[str(run.get("id"))] = run
+    corrections: list[dict[str, Any]] = []
+    unchanged = no_usage = no_run = 0
+    for row in targets:
+        run = runs_by_id.get(str(row.get("run_id")))
+        if run is None:
+            no_run += 1
+            continue
+        actual = actual_model(run)
+        if actual is None:
+            no_usage += 1
+            continue
+        if norm_model(actual) == norm_model(row.get("model")):
+            unchanged += 1
+            continue
+        fixed = dict(row)
+        fixed.update({
+            "kind": "review", "ts_bj": occ.fmt_bj(now), "orig_ts_bj": effective_ts(row),
+            "model": actual, "model_verified": True,
+            "correction": f"模型更正：{norm_model(row.get('model'))} → {actual}（按 run 实际用的模型重核）",
+            "corrected_by": default_reviewer(),
+        })
+        corrections.append(fixed)
+    if apply:
+        for fixed in corrections:
+            occ.append_jsonl(reviews_file(base), fixed)
+    before = summarize(reviews, now=now, days=3650)
+    after = summarize(list(reviews) + corrections, now=now, days=3650)
+    return {"checked": len(targets), "corrected": len(corrections), "unchanged": unchanged,
+            "no_usage": no_usage, "no_run": no_run, "applied": apply, "corrections": corrections,
+            "before": before, "after": after, "read_from": read_from, "missed": missed}
+
+
+def format_reverify(result: Mapping[str, Any]) -> str:
+    head = "已追加更正" if result["applied"] else "只是计划，没写（加 --apply 才写）"
+    lines = [f"模型重核（{head}）：核了 {result['checked']} 条，改 {result['corrected']} 条，"
+             f"本来就对 {result['unchanged']} 条，run 没用量记录 {result['no_usage']} 条，找不到 run {result['no_run']} 条"]
+    moves: dict[tuple[str, str], int] = {}
+    for fixed in result["corrections"]:
+        old = str(fixed["correction"]).split("：", 1)[1].split(" → ")[0]
+        key = (old, str(fixed["model"]))
+        moves[key] = moves.get(key, 0) + 1
+    for (old, new), n in sorted(moves.items(), key=lambda kv: -kv[1]):
+        lines.append(f"  {n} 条 {old} → {new}")
+    names = sorted({e["model"] for e in result["before"]} | {e["model"] for e in result["after"]})
+    lines.append("改前 → 改后（好 / 一般 / 差）：")
+    for name in names:
+        b = next((e for e in result["before"] if e["model"] == name), None)
+        a = next((e for e in result["after"] if e["model"] == name), None)
+        if (b and (b["good"], b["ok"], b["bad"])) == (a and (a["good"], a["ok"], a["bad"])):
+            continue
+        fmt = lambda e: f"{e['good']} / {e['ok']} / {e['bad']}" if e else "无"
+        lines.append(f"  {model_label(name)} [{name}]：{fmt(b)} → {fmt(a)}")
+    return "\n".join(lines + format_sources(result.get("read_from") or [], result.get("missed") or []))
 
 
 def format_sources(read_from: Sequence[str], missed: Sequence[str]) -> list[str]:
@@ -521,7 +645,10 @@ def format_summary(entries: Sequence[Mapping[str, Any]], days: int,
     lines = [f"模型口碑（最近 {days} 天，北京时间）"]
     for e in entries:
         recent = " / ".join(f"{r['ticket']} {r['grade']}：{r['note']}" for r in e["recent"])
-        lines.append(f"{e['model']}  好 {e['good']} / 一般 {e['ok']} / 差 {e['bad']}  最近：{recent}")
+        name = e.get("label") or e["model"]
+        if name != e["model"]:
+            name = f"{name} [{e['model']}]"
+        lines.append(f"{name}  好 {e['good']} / 一般 {e['ok']} / 差 {e['bad']}  最近：{recent}")
     return "\n".join(lines + format_sources(read_from, missed))
 
 
@@ -572,7 +699,7 @@ def compute_pending(
         row, run = max(done, key=lambda pair: str(pair[1].get("completed_at")))
         finished = occ.parse_utc(run.get("completed_at"))
         pending.append({
-            "ticket": ticket, "model": row.get("model") or "未知", "executor": row.get("executor"),
+            "ticket": ticket, "model": actual_model(run) or norm_model(row.get("model")) or "未知", "executor": row.get("executor"),
             "machine": row.get("machine"), "completed_bj": occ.fmt_bj(finished) if finished else None,
             "run_id": row.get("run_id"),
         })
@@ -647,6 +774,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p_void.add_argument("note", help="作废原因")
     p_void.add_argument("--run", required=True, help="要作废的 run 号前缀")
     p_void.add_argument("--by", default="", help="谁作废的；缺省读环境里的会话名")
+    p_rev = sub.add_parser("reverify-models", help="一次性重核：评价里的模型按 run 实际用的重算，不对的追加更正")
+    p_rev.add_argument("--apply", action="store_true", help="真写更正行；不带只出计划")
+    p_rev.add_argument("--match", default=REVERIFY_MATCH, help="只核执行者名字匹配这个正则的评价")
+    p_rev.add_argument("--local", action="store_true", help="只看本机评价记录")
+    p_rev.add_argument("--json", action="store_true")
     p_sum = sub.add_parser("summary", help="按模型汇总（默认三台合看）")
     p_sum.add_argument("--days", type=int, default=7)
     p_sum.add_argument("--local", action="store_true", help="只看本机")
@@ -664,7 +796,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             row = add_review(base, occ_base, ticket=args.ticket, grade=args.grade, note=args.note,
                              by=args.by, run_prefix=args.run, model_override=args.model, now=now)
             run_short = str(row.get("run_id") or "-")[:8]
-            print(f"已记 {row['ticket']} {row['grade']}  模型 {row['model']}  {row['executor']}@{row['machine']}"
+            unchecked = "（模型未核）" if row.get("model_verified") is False else ""
+            print(f"已记 {row['ticket']} {row['grade']}  模型 {row['model']}{unchecked}  {row['executor']}@{row['machine']}"
                   f"  号 {row['account']}  run {run_short}（{row['source']}）  评价人 {row['by']}")
             return 0
         if args.cmd == "void":
@@ -672,6 +805,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                               by=args.by, now=now)
             was = f"原评 {row['voided_grade']} / {row['voided_model']}" if row.get("voided_grade") else "本机没有这条评价，作废记在本机，合看时生效"
             print(f"已作废 {row['ticket']} run {str(row['run_id'])[:8]}（{was}）  原因：{row['note']}  经手 {row['by']}")
+            return 0
+        if args.cmd == "reverify-models":
+            result = reverify_models(base, occ_base, match=args.match, apply=args.apply, now=now, peers=not args.local)
+            print(json.dumps({k: v for k, v in result.items() if k not in ("before", "after")}, ensure_ascii=False)
+                  if args.json else format_reverify(result))
             return 0
         if args.cmd == "summary":
             reviews, _rows, read_from, missed = gather(base, occ_base, peers=not args.local)

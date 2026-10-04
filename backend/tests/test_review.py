@@ -18,9 +18,14 @@ NOW = datetime(2026, 10, 3, 18, 0, 0, tzinfo=timezone.utc)  # 北京 2026-10-04 
 OFFLINE = dict(runs_fn=lambda _t: (None, "离线"), agents_fn=lambda: (None, "离线"))
 
 
-def mk_run(run_id: str, status: str, created: str, started: str = "", completed: str = "", agent_id: str = "ex-7") -> dict:
+def mk_run(run_id: str, status: str, created: str, started: str = "", completed: str = "", agent_id: str = "ex-7",
+           usage: object = None) -> dict:
     return {"id": run_id, "agent_id": agent_id, "status": status, "created_at": created,
-            "started_at": started or None, "completed_at": completed or None}
+            "started_at": started or None, "completed_at": completed or None, "usage": usage}
+
+
+def usage_of(model: str, tokens: int = 1000) -> list:
+    return [{"model": model, "input_tokens": tokens, "output_tokens": 10, "cache_read_tokens": 5, "provider": "claude"}]
 
 
 def dispatch_row(run_id: str, ticket: str, model: str, created_bj: str, executor: str = "Pro 执行者(ZCode GLM Flash·Falcon 套餐)",
@@ -79,7 +84,8 @@ class AddTests(unittest.TestCase):
             mk_run("run-cancel-unstarted", "cancelled", "2026-10-03T16:00:00Z", completed="2026-10-03T16:04:00Z"),
             mk_run("run-cancel-long", "cancelled", "2026-10-03T15:00:00Z", "2026-10-03T15:00:01Z", "2026-10-03T16:40:00Z"),
             mk_run("run-zero", "completed", "2026-10-03T14:50:00Z", "2026-10-03T14:50:00Z", "2026-10-03T14:50:00Z"),
-            mk_run("run-2", "completed", "2026-10-03T14:46:36Z", "2026-10-03T14:46:37Z", "2026-10-03T14:53:15Z"),
+            mk_run("run-2", "completed", "2026-10-03T14:46:36Z", "2026-10-03T14:46:37Z", "2026-10-03T14:53:15Z",
+                   usage=usage_of("mimo-v2.6-flash[1m]")),
             mk_run("run-1", "completed", "2026-10-03T10:00:00Z", "2026-10-03T10:00:05Z", "2026-10-03T10:30:00Z", agent_id="ex-3"),
         ]
         agents = [{"id": "ex-7", "name": "mini 执行者(MiMo v2.6 Flash Go)", "model": "mimo-v2.6-flash"}]
@@ -229,6 +235,112 @@ class VoidTests(unittest.TestCase):
         reviewed = {str(r.get("ticket")).upper() for r in rv.live_reviews(reviews)}
         items, _ = rv.compute_pending(rows, current, reviewed)
         self.assertEqual([p["ticket"] for p in items], ["COR-1"])
+
+
+class ActualModelTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.reviews = Path(self.tmp.name) / "reviews"
+        self.occ = Path(self.tmp.name) / "occupancy"
+        self.reviews.mkdir()
+        self.occ.mkdir()
+
+    def test_actual_model_reads_usage_strips_suffix_and_ignores_empty(self) -> None:
+        self.assertEqual(rv.actual_model({"usage": usage_of("muse-spark-1.3-contributor[1m]")}), "muse-spark-1.3-contributor")
+        self.assertEqual(rv.actual_model({"usage": usage_of("mimo-v2.6-flash") + usage_of("mimo-v2.6-flash[1m]", 50)}),
+                         "mimo-v2.6-flash")
+        big, small = usage_of("kimi-code/k3", 9000), usage_of("haiku", 10)
+        self.assertEqual(rv.actual_model({"usage": small + big}), "kimi-code/k3")
+        self.assertIsNone(rv.actual_model({"usage": [{"model": "x", "input_tokens": 0, "output_tokens": 0}]}))
+        self.assertIsNone(rv.actual_model({"usage": None}))
+        self.assertIsNone(rv.actual_model({}))
+
+    def test_add_takes_the_model_the_run_really_used_not_the_executor_config(self) -> None:
+        # COR-12266：执行者配置现在写小米，那条 run 当时实际跑的是 Spark（Go 钥匙）
+        agents = [{"id": "ex-7", "name": "Pro 执行者(MiMo v2.6 Flash Go)", "model": "mimo-v2.6-flash"}]
+        runs = [mk_run("run-s", "completed", "2026-10-03T09:13:13Z", "2026-10-03T09:13:14Z", "2026-10-03T09:30:00Z",
+                       usage=usage_of("muse-spark-1.3-contributor[1m]"))]
+        row = rv.add_review(self.reviews, self.occ, ticket="COR-12266", grade="好", note="x", now=NOW,
+                            runs_fn=lambda _t: (runs, None), agents_fn=lambda: (agents, None))
+        self.assertEqual((row["model"], row["model_verified"], row["source"]), ("muse-spark-1.3-contributor", True, "multica 现查"))
+
+    def test_add_marks_model_unverified_when_run_has_no_usage(self) -> None:
+        agents = [{"id": "ex-7", "name": "Pro 执行者(MiMo v2.6 Flash Go)", "model": "mimo-v2.6-flash"}]
+        runs = [mk_run("run-n", "completed", "2026-10-03T09:13:13Z", "2026-10-03T09:13:14Z", "2026-10-03T09:30:00Z", usage=[])]
+        row = rv.add_review(self.reviews, self.occ, ticket="COR-1", grade="好", note="x", now=NOW,
+                            runs_fn=lambda _t: (runs, None), agents_fn=lambda: (agents, None))
+        self.assertEqual((row["model"], row["model_verified"]), ("mimo-v2.6-flash", False))
+        self.assertIn("模型未核", row["source"])
+
+    def test_summary_splits_free_and_paid_spark_and_labels_them(self) -> None:
+        rows = [
+            {"ts_bj": "2026-10-04 01:00:00", "ticket": "COR-1", "run_id": "a", "model": "opencode/muse-spark-1.3-contributor-free", "grade": "好", "note": "免费"},
+            {"ts_bj": "2026-10-04 01:01:00", "ticket": "COR-2", "run_id": "b", "model": "muse-spark-1.3-contributor[1m]", "grade": "差", "note": "付费"},
+        ]
+        entries = {e["model"]: e for e in rv.summarize(rows, now=NOW)}
+        self.assertEqual(set(entries), {"opencode/muse-spark-1.3-contributor-free", "muse-spark-1.3-contributor"})
+        self.assertEqual(entries["opencode/muse-spark-1.3-contributor-free"]["label"], "Spark 免费")
+        self.assertEqual(entries["muse-spark-1.3-contributor"]["label"], "Spark 付费(Go)")
+        text = rv.format_summary(list(entries.values()), 7)
+        self.assertIn("Spark 免费 [opencode/muse-spark-1.3-contributor-free]  好 1", text)
+        self.assertIn("Spark 付费(Go) [muse-spark-1.3-contributor]  好 0 / 一般 0 / 差 1", text)
+
+    def test_reverify_corrects_wrong_models_only_for_matching_executors_and_keeps_old_rows(self) -> None:
+        old = lambda **kw: {"ts_bj": "2026-10-04 01:00:00", "kind": "review", "grade": "好", "note": "n", "by": "甲", **kw}
+        reviews = [
+            old(ticket="COR-12266", run_id="r-spark", model="mimo-v2.6-flash", executor="Pro 执行者(MiMo v2.6 Flash Go)"),
+            old(ticket="COR-2", run_id="r-mimo", model="mimo-v2.6-flash", executor="mini 执行者(MiMo v2.6 Flash Go)"),
+            old(ticket="COR-3", run_id="r-k3", model="opencode/muse-spark-1.3-contributor-free",
+                executor="Pro 执行者(OpenCode Spark 1.3 免费)"),
+            old(ticket="COR-4", run_id="r-glm", model="glm-5.3-flash", executor="Pro 执行者(ZCode GLM Flash·Falcon 套餐)"),
+            old(ticket="COR-5", run_id="r-none", model="mimo-v2.6-flash", executor="M1Max 执行者(MiMo v2.6 Flash Go)"),
+        ]
+        runs = {
+            "COR-12266": [mk_run("r-spark", "completed", "x", usage=usage_of("muse-spark-1.3-contributor[1m]"))],
+            "COR-2": [mk_run("r-mimo", "completed", "x", usage=usage_of("mimo-v2.6-flash[1m]"))],
+            "COR-3": [mk_run("r-k3", "completed", "x", usage=usage_of("kimi-code/k3"))],
+            "COR-4": [mk_run("r-glm", "completed", "x", usage=usage_of("totally-other"))],
+            "COR-5": [mk_run("r-none", "completed", "x", usage=[])],
+        }
+        asked: list = []
+
+        def fake(ticket):
+            asked.append(ticket)
+            return runs[ticket], None
+
+        plan = rv.reverify_models(self.reviews, self.occ, apply=False, now=NOW, issue_runs_fn=fake, reviews=reviews)
+        self.assertEqual((plan["checked"], plan["corrected"], plan["unchanged"], plan["no_usage"], plan["no_run"]), (4, 2, 1, 1, 0))
+        self.assertNotIn("COR-4", asked)  # ZCode 执行者不在核的范围
+        self.assertEqual(occ.read_jsonl(rv.reviews_file(self.reviews)), [])  # 没 --apply 不写
+        done = rv.reverify_models(self.reviews, self.occ, apply=True, now=NOW, issue_runs_fn=fake, reviews=reviews)
+        written = occ.read_jsonl(rv.reviews_file(self.reviews))
+        self.assertEqual(sorted((r["ticket"], r["model"]) for r in written),
+                         [("COR-12266", "muse-spark-1.3-contributor"), ("COR-3", "kimi-code/k3")])
+        self.assertTrue(all(r["orig_ts_bj"] == "2026-10-04 01:00:00" and r["ts_bj"] > r["orig_ts_bj"] for r in written))
+        # 旧行留着，新行覆盖：合起来汇总时 COR-12266 算到 Spark 付费头上，小米只剩真跑小米的 COR-2 和没法核的 COR-5
+        merged = reviews + written
+        entries = {e["model"]: e for e in rv.summarize(merged, now=NOW)}
+        self.assertEqual(entries["mimo-v2.6-flash"]["total"], 2)
+        self.assertEqual(entries["muse-spark-1.3-contributor"]["total"], 1)
+        self.assertEqual(entries["kimi-code/k3"]["total"], 1)
+        self.assertNotIn("opencode/muse-spark-1.3-contributor-free", entries)
+        self.assertEqual(len(merged), 7)
+        self.assertEqual(done["after"] and len(done["after"]) >= 3, True)
+        text = rv.format_reverify(done)
+        self.assertIn("改 2 条", text)
+        self.assertIn("mimo-v2.6-flash → muse-spark-1.3-contributor", text)
+
+    def test_corrected_row_keeps_original_time_for_window(self) -> None:
+        # 更正写在「现在」，但评价是 10 天前的：仍在 7 天窗口外，不因为更正而重新冒出来
+        rows = [
+            {"ts_bj": "2026-09-20 01:00:00", "kind": "review", "ticket": "COR-1", "run_id": "a", "model": "mimo", "grade": "好", "note": "旧"},
+            {"ts_bj": "2026-10-04 01:00:00", "orig_ts_bj": "2026-09-20 01:00:00", "kind": "review", "ticket": "COR-1",
+             "run_id": "a", "model": "muse-spark-1.3-contributor", "grade": "好", "note": "旧"},
+        ]
+        self.assertEqual(rv.summarize(rows, now=NOW, days=7), [])
+        (e,) = rv.summarize(rows, now=NOW, days=30)
+        self.assertEqual(e["model"], "muse-spark-1.3-contributor")
 
 
 class PendingTests(unittest.TestCase):

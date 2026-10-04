@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 装「派工占用 + 派工记录」每分钟记账（backend/cortex_sentinel/occupancy.py）。
 #
-# 做的事：把 occupancy.py 和 sentinel-occupancy 拷到仓外
+# 做的事：把 occupancy.py、review.py、fallback_audit.py 和 sentinel-occupancy 拷到仓外
 # ~/Library/Application Support/CortexSentinel/occupancy-runtime/，写一个每分钟起一次的
 # LaunchAgent（记一轮就退出，不是常驻），把查询命令链到 ~/.local/bin/sentinel-occupancy。
 # 记录落 ~/Library/Application Support/CortexSentinel/occupancy/，里面有「不要删除.md」。
@@ -34,7 +34,9 @@ case "$cmd" in
     PYTHON3="$(pick_python)"
     mkdir -p "$RUNTIME/bin" "$RUNTIME/cortex_sentinel" "$DATA_DIR" "$HOME/Library/LaunchAgents" "$HOME/.local/bin"
     cp "$HERE/bin/sentinel-occupancy" "$RUNTIME/bin/sentinel-occupancy"
-    cp "$HERE/cortex_sentinel/__init__.py" "$HERE/cortex_sentinel/occupancy.py" "$RUNTIME/cortex_sentinel/"
+    # fallback_audit（落兜底档对账，tick 每分钟审一次）要读 review 里三台合看的 ssh 读口，一起拷
+    cp "$HERE/cortex_sentinel/__init__.py" "$HERE/cortex_sentinel/occupancy.py" \
+       "$HERE/cortex_sentinel/review.py" "$HERE/cortex_sentinel/fallback_audit.py" "$RUNTIME/cortex_sentinel/"
     chmod +x "$RUNTIME/bin/sentinel-occupancy"
     # 查询入口：包一层，保证用能跑它的解释器
     cat > "$HOME/.local/bin/sentinel-occupancy" <<WRAP

@@ -4,6 +4,7 @@
     sentinel-occupancy at "2026-10-04 00:05"      那一刻最近一行的各号占用
     sentinel-occupancy runs --since "00:00"       这段时间的派工行
     sentinel-occupancy tick                       记一轮（launchd 每分钟调一次）
+    sentinel-occupancy fallback-audit             落兜底档对账：落小米几次、误选几次（三台合看，tick 也每分钟记）
 """
 import sys
 from pathlib import Path

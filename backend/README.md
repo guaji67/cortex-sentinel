@@ -62,6 +62,20 @@ launchd 模板在 `launchd/*.plist.tmpl`，占位符是 `@INSTALL_ROOT@` `@PYTHO
     sentinel-occupancy at "2026-10-04 00:05"      # 那一刻最近一行的各号占用
     sentinel-occupancy runs --since "00:00"       # 这段时间的派工行
 
+落兜底档对账（Falcon 10-04：满了落小米是正常冗余，怕的是没满就选过去了）
+
+Cortex 主线 #5888 起，派工器在没选 ZCode、落到小米或别的通道时，往各机主检出 `logs/dispatch-fallback.jsonl` 追加一行
+（时刻、票号、选中谁、四个号各自的占用与帽、读数来源、判满理由）。每分钟 tick 把三台的行合起来（本机直接读，Pro / mini 用
+`ssh` 只读 `tail` 对方的那份，Pro / mini 主检出在 `~/Documents/Code/cortex`，M1 Max 在 `~/Documents/code/cortex`），
+每一行拿**同一分钟**占用记录里四个号的真在跑数（`plans[号].running`，预占不在里面）比：某个号帽 > 0 且真在跑 < 帽，
+就判误选，记进 `occupancy/fallback-audit-YYYY-MM-DD.jsonl`（占用加预占已撑满的标 `reserve_only`，派工器当时记的别的拦因写在 `blockers`）。
+同一分钟没有占用记录的行等 3 分钟，还没有就记「没法判」，不算误选。
+
+    sentinel-occupancy fallback-audit [--day 今天] [--local] [--report-only] [--json]
+    # 今天落兜底档几次、其中落小米几次、误选几次、误选的票号和当时哪个号有空；连不上的机器写「没读到」
+
+装机：`install_occupancy_log.sh install` 现在多拷 `review.py`（三台 ssh 读口）和 `fallback_audit.py`。
+
 数法不另写一套：号的在跑数读哨兵面板同一份（闸运行时 `glm_plan_status.py --json`），三机内存读
 `sentry_telemetry.read_machines()`。面板口径不含手开窗口、监工占位和预占；这些来自三机上报的
 `zcode_other`，单列在 `manual_windows` / `supervisor_windows`；派工器账本口径（号超上限哨兵同一读方，看板行不封顶、含手开/监工/预占）并排写在 `plans[*].ledger`，两边口径的差别各自写，不合并。

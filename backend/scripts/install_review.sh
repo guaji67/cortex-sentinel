@@ -26,7 +26,9 @@ cmd="${1:-install}"
 case "$cmd" in
   install)
     PYTHON3="$(pick_python)"
-    mkdir -p "$RUNTIME/bin" "$RUNTIME/cortex_sentinel" "$DATA_DIR" "$HOME/.local/bin"
+    mkdir -p "$RUNTIME/bin" "$RUNTIME/cortex_sentinel/data" "$DATA_DIR" "$HOME/.local/bin"
+    # 俗名表（list --model 用）：随代码带一份；第一次用时拷到评价记录目录，改那一份，重装不覆盖
+    cp "$HERE/cortex_sentinel/data/model-aliases.json" "$RUNTIME/cortex_sentinel/data/model-aliases.json"
     cp "$HERE/bin/sentinel-review" "$RUNTIME/bin/sentinel-review"
     cp "$HERE/cortex_sentinel/__init__.py" "$HERE/cortex_sentinel/occupancy.py" "$HERE/cortex_sentinel/review.py" "$RUNTIME/cortex_sentinel/"
     chmod +x "$RUNTIME/bin/sentinel-review"

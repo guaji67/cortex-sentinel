@@ -1,0 +1,13 @@
+{
+  "_说明": "sentinel-review list --model 认的俗名。左边写俗名（小写），右边写一个或几个正则，匹配模型串就算命中；查不到俗名时直接按子串匹配模型串，不报错。这份会在第一次用时拷到评价记录目录（reviews/model-aliases.json），改那一份，重装不覆盖。新模型不用在这里登记，list 直接写模型名的一段就能查到。",
+  "小米": "mimo",
+  "mimo": "mimo",
+  "spark": "muse-spark",
+  "免费spark": "muse-spark.*free",
+  "付费spark": "muse-spark(?!.*free)",
+  "glm": "glm",
+  "zcode": "glm",
+  "kimi": "kimi",
+  "sol": "gpt-6\\.1-sol",
+  "astra": "astra"
+}

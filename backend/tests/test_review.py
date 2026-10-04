@@ -568,6 +568,112 @@ class ReviewerIdentityTests(unittest.TestCase):
                          ("2026-10-03 22:46:37", "2026-10-03 22:53:15", 398))
 
 
+class MirrorAndRestoreTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name) / "reviews"
+        self.base.mkdir()
+
+    def peer(self, files: dict):
+        """假的 ssh：files 里 key 是别名，value 是 {'size': n, 'text': '...'}；记下问过的命令。"""
+        asked: list = []
+
+        def runner(argv, timeout=0):
+            alias, script = argv[-2], argv[-1]
+            asked.append((alias, script))
+            spec = files.get(alias)
+            if spec is None:
+                return None, "退出码 255：ssh: connect timed out"
+            if script.startswith("wc -c"):
+                return f"   {len(spec['text'].encode('utf-8'))}\n", None
+            return spec["text"], None
+
+        return runner, asked
+
+    def test_mirror_pulls_both_peers_read_only_and_skips_when_size_unchanged(self) -> None:
+        pro = '{"ts_bj":"2026-10-04 01:00:00","ticket":"COR-1","grade":"好"}\n'
+        runner, asked = self.peer({"cortex-pro": {"text": pro}, "cortex-mini": {"text": pro + pro}})
+        first = rv.sync_mirror(self.base, aliases=["cortex-pro", "cortex-mini"], runner=runner)
+        self.assertEqual((len(first["synced"]), first["unchanged"], first["missed"]), (2, [], []))
+        self.assertEqual((self.base / "mirror" / "pro.jsonl").read_text(encoding="utf-8"), pro)
+        self.assertTrue((self.base / "mirror" / "不要删除.md").read_text(encoding="utf-8").startswith("CORTEX-KEEP"))
+        second = rv.sync_mirror(self.base, aliases=["cortex-pro", "cortex-mini"], runner=runner)
+        self.assertEqual((second["synced"], sorted(second["unchanged"])), ([], ["mini", "pro"]))
+        for _alias, script in asked:   # 只读：只有 wc / cat，没有往对方写的重定向
+            self.assertTrue(script.startswith(("wc -c", "cat ")))
+            self.assertNotIn(">", script.replace("2>/dev/null", "").replace("< ", ""))
+
+    def test_mirror_never_shrinks_when_peer_file_is_lost_or_truncated(self) -> None:
+        good = '{"ts_bj":"2026-10-04 01:00:00","ticket":"COR-1"}\n{"ts_bj":"2026-10-04 01:01:00","ticket":"COR-2"}\n'
+        rv.sync_mirror(self.base, aliases=["cortex-pro"], runner=self.peer({"cortex-pro": {"text": good}})[0])
+        # 对方的文件被删（空）：备份留着，记一笔
+        gone = rv.sync_mirror(self.base, aliases=["cortex-pro"], runner=self.peer({"cortex-pro": {"text": ""}})[0])
+        self.assertEqual(len(gone["kept"]), 1)
+        self.assertEqual((self.base / "mirror" / "pro.jsonl").read_text(encoding="utf-8"), good)
+        # 对方被截短：同样不覆盖
+        short = rv.sync_mirror(self.base, aliases=["cortex-pro"], runner=self.peer({"cortex-pro": {"text": good[:30]}})[0])
+        self.assertEqual(len(short["kept"]), 1)
+        self.assertEqual((self.base / "mirror" / "pro.jsonl").read_text(encoding="utf-8"), good)
+        # 对方追加了：照常更新
+        more = good + '{"ts_bj":"2026-10-04 01:02:00","ticket":"COR-3"}\n'
+        grown = rv.sync_mirror(self.base, aliases=["cortex-pro"], runner=self.peer({"cortex-pro": {"text": more}})[0])
+        self.assertEqual(len(grown["synced"]), 1)
+        self.assertEqual((self.base / "mirror" / "pro.jsonl").read_text(encoding="utf-8"), more)
+
+    def test_unreachable_peer_is_named_not_silent(self) -> None:
+        runner, _ = self.peer({"cortex-pro": {"text": '{"a":1}\n'}})
+        res = rv.sync_mirror(self.base, aliases=["cortex-pro", "cortex-mini"], runner=runner)
+        self.assertEqual(len(res["synced"]), 1)
+        self.assertIn("cortex-mini", res["missed"][0])
+
+    def test_restore_fills_in_what_the_local_file_lost_from_both_peers_backups_and_is_idempotent(self) -> None:
+        a = {"ts_bj": "2026-10-04 01:00:00", "ticket": "COR-1", "run_id": "r1", "grade": "好", "note": "甲"}
+        b = {"ts_bj": "2026-10-04 01:05:00", "ticket": "COR-2", "run_id": "r2", "grade": "差", "note": "乙"}
+        c = {"ts_bj": "2026-10-04 01:03:00", "ticket": "COR-3", "run_id": "r3", "grade": "一般", "note": "丙"}
+        occ.append_jsonl(rv.reviews_file(self.base), a)   # 本机还剩第一条，后面的丢了
+        asked: list = []
+
+        def runner(argv, timeout=0):
+            asked.append(argv[-1])
+            text = {"cortex-pro": json.dumps(a) + "\n" + json.dumps(b) + "\n",
+                    "cortex-mini": json.dumps(a) + "\n" + json.dumps(c) + "\n"}.get(argv[-2])
+            return (text, None) if text is not None else (None, "ssh: timed out")
+
+        plan = rv.restore_from_peers(self.base, apply=False, me="m1max", aliases=["cortex-pro", "cortex-mini", "cortex-x"], runner=runner)
+        self.assertEqual((plan["local"], plan["missing"], plan["sources"]), (1, 2, {"cortex-pro": 2, "cortex-mini": 2}))
+        self.assertIn("cortex-x", plan["missed"][0])
+        self.assertEqual(len(occ.read_jsonl(rv.reviews_file(self.base))), 1)    # 没 --apply 不写
+        self.assertTrue(all("mirror/m1max.jsonl" in s for s in asked))          # 读的是对方手里「本机」的备份
+        done = rv.restore_from_peers(self.base, apply=True, me="m1max", aliases=["cortex-pro", "cortex-mini"], runner=runner)
+        self.assertEqual(done["missing"], 2)
+        rows = occ.read_jsonl(rv.reviews_file(self.base))
+        self.assertEqual([r["ticket"] for r in rows], ["COR-1", "COR-3", "COR-2"])   # 原行在前不动，补回的按时刻追加
+        again = rv.restore_from_peers(self.base, apply=True, me="m1max", aliases=["cortex-pro", "cortex-mini"], runner=runner)
+        self.assertEqual(again["missing"], 0)
+        self.assertEqual(len(occ.read_jsonl(rv.reviews_file(self.base))), 3)
+
+    def test_restore_when_local_file_is_completely_gone(self) -> None:
+        row = {"ts_bj": "2026-10-04 01:00:00", "ticket": "COR-1", "run_id": "r1", "grade": "好", "note": "甲"}
+        runner = lambda argv, timeout=0: (json.dumps(row) + "\n", None)
+        res = rv.restore_from_peers(self.base, apply=True, me="pro", aliases=["cortex-mini"], runner=runner)
+        self.assertEqual((res["local"], res["missing"]), (0, 1))
+        self.assertEqual(len(occ.read_jsonl(rv.reviews_file(self.base))), 1)
+
+    def test_keep_note_says_three_way_backup_and_old_note_is_upgraded(self) -> None:
+        import os
+        os.environ["CORTEX_SENTINEL_REVIEWS_DIR"] = str(self.base / "k")
+        self.addCleanup(os.environ.pop, "CORTEX_SENTINEL_REVIEWS_DIR", None)
+        d = Path(os.environ["CORTEX_SENTINEL_REVIEWS_DIR"])
+        d.mkdir()
+        (d / "不要删除.md").write_text("CORTEX-KEEP\n# 旧版说明\n", encoding="utf-8")
+        rv.reviews_dir()
+        text = (d / "不要删除.md").read_text(encoding="utf-8")
+        self.assertEqual(text.splitlines()[0], "CORTEX-KEEP")
+        self.assertIn("三台机器互相备份", text)
+        self.assertIn("删了就丢模型口碑", text)
+
+
 class PendingTests(unittest.TestCase):
     def test_pending_skips_reviewed_unfinished_and_in_flight(self) -> None:
         rows = [

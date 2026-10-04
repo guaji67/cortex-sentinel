@@ -539,6 +539,15 @@ def _gather_fallback_lines() -> dict[str, Any]:
         return {"lines": [], "read_from": [], "missed": [], "error": f"读兜底行出错：{str(exc)[:120]}"}
 
 
+def _sync_review_mirror() -> dict[str, Any]:
+    """三台评价记录互备：把另外两台的 reviews.jsonl 只读拉一份到本机 reviews/mirror/；失败只记原因。"""
+    try:
+        from . import review as rv
+        return rv.sync_mirror(rv.reviews_dir())
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"拉评价备份出错：{str(exc)[:120]}"}
+
+
 def _audit_fallback(base: Path, fetched: Mapping[str, Any], now: datetime) -> dict[str, Any]:
     status: dict[str, Any] = {"read_from": fetched.get("read_from"), "missed": fetched.get("missed")}
     if fetched.get("error"):
@@ -564,6 +573,7 @@ def tick(now: Optional[datetime] = None, base: Optional[Path] = None) -> dict[st
         f_agents = pool.submit(fetch_agents)
         f_ledger = pool.submit(fetch_ledger)
         f_fallback = pool.submit(_gather_fallback_lines)
+        f_mirror = pool.submit(_sync_review_mirror)
         agents, err = f_agents.result()
         if err and agents is None:
             notes.append(f"agent 清单：{err}")
@@ -586,6 +596,7 @@ def tick(now: Optional[datetime] = None, base: Optional[Path] = None) -> dict[st
                 continue
             runs_by_agent[agent_id] = runs
         fallback_lines = f_fallback.result()
+        mirror_status = f_mirror.result()
     index = executor_index(payload or {})
 
     day = to_beijing(now).strftime("%Y-%m-%d")
@@ -614,6 +625,7 @@ def tick(now: Optional[datetime] = None, base: Optional[Path] = None) -> dict[st
     prune_seen(state["seen"], now)
     fallback_status = _audit_fallback(base, fallback_lines, now)
     state["fallback_audit"] = {"at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), **fallback_status}
+    state["review_mirror"] = {"at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), **mirror_status}
     save_state(base, state)
     return {"occupancy": occ["ts_bj"], "dispatch_rows": len(rows), "notes": notes, "fallback_audit": fallback_status}
 

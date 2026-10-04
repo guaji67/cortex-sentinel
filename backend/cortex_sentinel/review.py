@@ -84,7 +84,7 @@ MIRROR_KEEP_NOTE = (
 def reviews_dir() -> Path:
     raw = os.environ.get("CORTEX_SENTINEL_REVIEWS_DIR", "").strip()
     base = Path(raw).expanduser() if raw else (
-        Path.home() / "Library" / "Application Support" / "CortexSentinel" / "reviews"
+        occ.real_home() / "Library" / "Application Support" / "CortexSentinel" / "reviews"
     )
     base.mkdir(parents=True, exist_ok=True)
     keep = base / "不要删除.md"
@@ -131,7 +131,7 @@ def claude_session_info(env: Mapping[str, str], home: Optional[Path] = None) -> 
     info = {"model": "", "title": ""}
     if not sid or "/" in sid:
         return info
-    root = (home or Path.home()) / ".claude" / "projects"
+    root = (home or occ.real_home()) / ".claude" / "projects"
     for path in sorted(root.glob(f"*/{sid}.jsonl")):
         for line in _tail_text(path).splitlines():
             if '"assistant"' not in line and '"agent-name"' not in line and '"custom-title"' not in line:
@@ -158,7 +158,7 @@ def codex_session_model(env: Mapping[str, str], home: Optional[Path] = None) -> 
     sid = (env.get("CODEX_THREAD_ID") or env.get("CODEX_SESSION_ID") or "").strip()
     if not sid or "/" in sid:
         return ""
-    root = (home or Path.home()) / ".codex" / "sessions"
+    root = (home or occ.real_home()) / ".codex" / "sessions"
     for path in sorted(root.glob(f"*/*/*/rollout-*-{sid}.jsonl")):
         model = ""
         for line in _tail_text(path).splitlines():

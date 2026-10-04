@@ -151,6 +151,25 @@ class AddTests(unittest.TestCase):
         self.assertEqual(lines[1], "# 不要删除 · 一定保留 · DO NOT DELETE")
 
 
+class ReviewsDirHomeTests(unittest.TestCase):
+    """假 HOME（执行线隔离环境）下 reviews_dir() 缺省也落真家目录：CORTEX_SENTINEL_HOME 指造出来的家，不依赖本机。"""
+
+    def setUp(self) -> None:
+        patcher = mock.patch.dict(os.environ)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for key in ("CORTEX_SENTINEL_HOME", "CORTEX_SENTINEL_REVIEWS_DIR"):
+            os.environ.pop(key, None)
+
+    def test_default_reviews_dir_lands_in_real_home_under_fake_HOME(self) -> None:
+        with tempfile.TemporaryDirectory() as real, tempfile.TemporaryDirectory() as fake:
+            os.environ["CORTEX_SENTINEL_HOME"] = real
+            os.environ["HOME"] = fake
+            base = rv.reviews_dir()
+            self.assertEqual(base, Path(real) / "Library" / "Application Support" / "CortexSentinel" / "reviews")
+            self.assertFalse(str(base).startswith(fake))
+
+
 class SummaryTests(unittest.TestCase):
     def test_groups_by_model_counts_grades_and_keeps_last_three_notes(self) -> None:
         rows = [

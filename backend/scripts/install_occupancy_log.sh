@@ -56,7 +56,7 @@ WRAP
     done
     launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null || { /bin/sleep 2; launchctl bootstrap "$DOMAIN" "$PLIST"; } \
       || { echo "bootstrap 失败" >&2; exit 1; }
-    echo "已装：$LABEL（每分钟一轮），记录目录 $DATA_DIR"
+    echo "已装：${LABEL}（每分钟一轮），记录目录 $DATA_DIR"
     ;;
   status)
     launchctl print "$DOMAIN/$LABEL" 2>/dev/null | grep -E "state|last exit code|runs" || echo "job 没挂"

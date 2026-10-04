@@ -901,5 +901,225 @@ class PeersAndBoardTests(unittest.TestCase):
         self.assertEqual([(p["ticket"], p["completed_bj"]) for p in items], [("COR-12366", "2026-10-03 22:53:15")])
 
 
+class LocalLineTests(unittest.TestCase):
+    """本机线：看板只占票、不起 multica run 的那种线，模型取它自己日志里实际用的。"""
+
+    def setUp(self) -> None:
+        patcher = mock.patch.object(rv, "fetch_issue_title", lambda t: f"标题-{t}")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.reviews = Path(self.tmp.name) / "reviews"
+        self.occ = Path(self.tmp.name) / "occupancy"
+        self.logs = Path(self.tmp.name) / "logs"
+        self.reviews.mkdir()
+        self.occ.mkdir()
+        self.logs.mkdir()
+
+    @staticmethod
+    def init_line(model: str) -> str:
+        return json.dumps({"type": "system", "subtype": "init", "model": model}, ensure_ascii=False)
+
+    @staticmethod
+    def ask_line(model: str) -> str:
+        return json.dumps({"type": "assistant", "message": {"model": model, "content": "x"}}, ensure_ascii=False)
+
+    def write_line(self, slug: str = "cor-1", *, engine: str = "claudem", config_model: str = "config-model",
+                   state: str = "done", exit_code: object = "0",
+                   started: str = "2026-10-04T01:15:40+08:00", updated: str = "2026-10-04T04:43:59+08:00",
+                   log_lines: object = None, with_log: bool = True, logs: Path = None) -> Path:
+        logs = logs or self.logs
+        status = {"engine": engine, "slug": slug, "state": state, "model": config_model,
+                  "session_id": "sid-1", "started_at": started, "updated_at": updated,
+                  "exit_code": exit_code, "workdir": "/tmp/x"}
+        (logs / f"codebuddy-{slug}.status.json").write_text(json.dumps(status, ensure_ascii=False), encoding="utf-8")
+        if with_log:
+            body = [self.init_line("init-default[1m]"), self.ask_line("log-actual-model")] if log_lines is None \
+                else list(log_lines)
+            (logs / f"codebuddy-{slug}.log").write_text("\n".join(body) + "\n", encoding="utf-8")
+        return logs
+
+    # --- 模型取值：assistant 用量最多 → init → 退配置并标未核
+    def test_model_comes_from_assistant_then_init_then_config(self) -> None:
+        logs = self.write_line("cor-1", log_lines=[
+            self.init_line("x[1m]"), self.ask_line("assistant-model-a"), self.ask_line("assistant-model-a"),
+            self.ask_line("assistant-model-b"), json.dumps({"type": "user", "message": {"content": "hi"}}),
+        ])
+        info = rv.local_line_info("cor-1", [logs])
+        self.assertEqual((info["model"], info["model_verified"], info["config_model"]),
+                         ("assistant-model-a", True, "config-model"))
+        # 只有 init：取 init（去上下文档后缀）
+        logs2 = self.write_line("cor-2", log_lines=[self.init_line("init-model[1m]")])
+        info2 = rv.local_line_info("cor-2", [logs2])
+        self.assertEqual((info2["model"], info2["model_verified"]), ("init-model", True))
+        # 都没有：退配置模型，并标「模型未核」
+        logs3 = self.write_line("cor-3", log_lines=[json.dumps({"type": "user", "message": {"content": "hi"}})])
+        info3 = rv.local_line_info("cor-3", [logs3])
+        self.assertEqual((info3["model"], info3["model_verified"]), ("config-model", False))
+        # 连日志文件都没有：同样退配置、标未核
+        logs4 = self.write_line("cor-4", with_log=False)
+        info4 = rv.local_line_info("cor-4", [logs4])
+        self.assertEqual((info4["model"], info4["model_verified"]), ("config-model", False))
+
+    def test_unseen_model_string_is_kept_verbatim(self) -> None:
+        logs = self.write_line("cor-7", log_lines=[self.init_line("init-x[1m]"),
+                                                   self.ask_line("zz-never-seen-model-9")])
+        info = rv.local_line_info("cor-7", [logs])
+        self.assertEqual(info["model"], "zz-never-seen-model-9")
+        row = rv.add_review(self.reviews, self.occ, ticket="COR-7", grade="好", note="x", now=NOW,
+                            runs_fn=lambda _t: ([], None), agents_fn=lambda: ([], None),
+                            local_logs_dirs=[logs])
+        self.assertEqual(row["model"], "zz-never-seen-model-9")
+        self.assertEqual(row["run_id"], "local:cor-7")
+
+    # --- 取不取这条本机线
+    def test_only_done_exit_zero_and_real_duration_are_taken(self) -> None:
+        good = rv.local_run_row("cor-1", [self.write_line("cor-1")])
+        self.assertEqual(good["run_id"], "local:cor-1")
+        self.assertEqual((good["executor"], good["machine"], good["source"]),
+                         ("本机线 claudem", rv.local_machine(), "本机线日志"))
+        self.assertEqual((good["run_started_bj"], good["run_finished_bj"], good["run_seconds"], good["model_verified"]),
+                         ("2026-10-04 01:15:40", "2026-10-04 04:43:59", 12499, True))
+        for kw in ({"state": "help"}, {"state": "killed"}, {"exit_code": "1"}, {"exit_code": None}):
+            logs = self.write_line("cor-2", **kw)
+            self.assertIsNone(rv.local_run_row("cor-2", [logs]), kw)
+        # 没有实际用时（updated_at 不晚于 started_at）不取
+        logs = self.write_line("cor-3", updated="2026-10-04T01:15:40+08:00")
+        self.assertIsNone(rv.local_run_row("cor-3", [logs]))
+
+    def test_slug_shapes_that_are_not_ticket_numbers_are_ignored_without_error(self) -> None:
+        self.assertIsNone(rv.local_line_info("q-b51-abc", [self.logs]))
+        self.assertEqual(rv.local_slug("q-B51-abc"), "")
+        self.assertEqual(rv.local_slug("COR-12474"), "cor-12474")
+        self.assertIsNone(rv.local_line_info("", [self.logs]))
+        self.assertIsNone(rv.local_line_info("cor-1", [Path(self.tmp.name) / "不存在"]))  # 找不到文件不报错
+
+    # --- add 的取值顺序：先 multica，后本机线
+    def test_add_takes_multica_finished_run_first_then_local_line(self) -> None:
+        logs = self.write_line("cor-9", log_lines=[self.ask_line("local-actual-model")])
+        runs = [mk_run("run-1", "completed", "2026-10-03T14:46:36Z", "2026-10-03T14:46:37Z",
+                       "2026-10-03T14:53:15Z", usage=usage_of("mimo-v2.6-flash[1m]"))]
+        agents = [{"id": "ex-7", "name": "Pro 执行者(MiMo v2.6 Flash Go)", "model": "mimo-v2.6-flash"}]
+        live = dict(runs_fn=lambda _t: (runs, None), agents_fn=lambda: (agents, None), local_logs_dirs=[logs])
+        row = rv.add_review(self.reviews, self.occ, ticket="COR-9", grade="好", note="x", now=NOW, **live)
+        self.assertEqual((row["run_id"], row["model"], row["source"]), ("run-1", "mimo-v2.6-flash", "multica 现查"))
+        # multica 一条真跑完的都没有（只有被撤的）→ 落到本机线
+        cancelled = [mk_run("run-c", "cancelled", "2026-10-03T16:00:00Z", "2026-10-03T16:00:01Z",
+                            "2026-10-03T16:04:00Z")]
+        row2 = rv.add_review(self.reviews, self.occ, ticket="COR-9", grade="一般", note="y", now=NOW,
+                             runs_fn=lambda _t: (cancelled, None), agents_fn=lambda: (agents, None),
+                             local_logs_dirs=[logs])
+        self.assertEqual((row2["run_id"], row2["model"], row2["source"], row2["executor"]),
+                         ("local:cor-9", "local-actual-model", "本机线日志", "本机线 claudem"))
+        # multica 离线（读不到）→ 也落到本机线
+        row3 = rv.add_review(self.reviews, self.occ, ticket="COR-9", grade="差", note="z", now=NOW, **OFFLINE,
+                             local_logs_dirs=[logs])
+        self.assertEqual((row3["run_id"], row3["model"]), ("local:cor-9", "local-actual-model"))
+        # 本机线也不合格（没跑完）→ 还是原来那条报错，让加 --model 手填
+        bad = self.write_line("cor-10", state="dead")
+        with self.assertRaises(LookupError) as ctx:
+            rv.add_review(self.reviews, self.occ, ticket="COR-10", grade="好", note="x", now=NOW, **OFFLINE,
+                          local_logs_dirs=[bad])
+        self.assertIn("--model", str(ctx.exception))
+
+    def test_run_prefix_local_points_at_one_local_line_and_skips_multica(self) -> None:
+        logs = self.write_line("cor-4", log_lines=[self.ask_line("local-model-a")])
+        self.write_line("cor-5", log_lines=[self.ask_line("local-model-b")])
+        asked: list = []
+
+        def boom(_ticket):
+            asked.append("multica")
+            return ([], None)
+
+        row = rv.add_review(self.reviews, self.occ, ticket="COR-4", grade="好", note="x", now=NOW,
+                            runs_fn=boom, agents_fn=lambda: ([], None), run_prefix="local:cor-4",
+                            local_logs_dirs=[logs])
+        self.assertEqual((row["run_id"], row["model"]), ("local:cor-4", "local-model-a"))
+        self.assertEqual(asked, [])          # 明指本机线就不去问 multica
+        # 指了一条不存在/不合格的本机线：退回原来的找不到 run 报错
+        with self.assertRaises(LookupError):
+            rv.add_review(self.reviews, self.occ, ticket="COR-4", grade="好", note="x", now=NOW,
+                          runs_fn=lambda _t: ([], None), agents_fn=lambda: ([], None),
+                          run_prefix="local:cor-99999", local_logs_dirs=[logs])
+
+    # --- reverify-models：local: 开头的按日志重算
+    def test_reverify_corrects_local_line_rows_from_the_log_without_asking_multica(self) -> None:
+        logs = self.write_line("cor-1", log_lines=[self.ask_line("actual-from-log")])
+        self.write_line("cor-2", log_lines=[json.dumps({"type": "user", "message": {"content": "hi"}})], logs=logs)
+        reviews = [
+            {"ts_bj": "2026-10-04 01:00:00", "kind": "review", "ticket": "COR-1", "run_id": "local:cor-1",
+             "model": "old-config-model", "executor": "本机线 claudem", "grade": "好", "note": "n", "by": "甲"},
+            {"ts_bj": "2026-10-04 01:01:00", "kind": "review", "ticket": "COR-2", "run_id": "local:cor-2",
+             "model": "no-log-here", "executor": "本机线 claudem", "grade": "好", "note": "n", "by": "甲"},
+            {"ts_bj": "2026-10-04 01:02:00", "kind": "review", "ticket": "COR-3", "run_id": "local:cor-3",
+             "model": "gone", "executor": "本机线 claudem", "grade": "好", "note": "n", "by": "甲"},
+        ]
+
+        def boom(_ticket):
+            raise AssertionError("本机线的评价不该去问 multica")
+
+        plan = rv.reverify_models(self.reviews, self.occ, apply=False, now=NOW, issue_runs_fn=boom,
+                                  reviews=reviews, local_logs_dirs=[logs])
+        self.assertEqual((plan["checked"], plan["corrected"], plan["unchanged"], plan["no_usage"], plan["no_run"]),
+                         (3, 1, 0, 1, 1))
+        self.assertEqual((plan["corrections"][0]["model"], plan["corrections"][0]["run_id"]),
+                         ("actual-from-log", "local:cor-1"))
+        self.assertIn("按本机线日志重核", plan["corrections"][0]["correction"])
+        self.assertEqual(occ.read_jsonl(rv.reviews_file(self.reviews)), [])   # 没 --apply 不写
+        # 本来就对的不追加更正；日志里读不到模型（退配置）的算没用量，不改
+        reviews[0]["model"] = "actual-from-log"
+        same = rv.reverify_models(self.reviews, self.occ, apply=True, now=NOW, issue_runs_fn=boom,
+                                  reviews=reviews, local_logs_dirs=[logs])
+        self.assertEqual((same["corrected"], same["unchanged"], same["no_usage"], same["no_run"]), (0, 1, 1, 1))
+        self.assertEqual(occ.read_jsonl(rv.reviews_file(self.reviews)), [])
+
+    # --- pending：已完工、没人评的本机线票列进去
+    def test_pending_lists_finished_unreviewed_local_lines(self) -> None:
+        logs = self.write_line("cor-1", log_lines=[self.ask_line("m-1")])                       # 完工、没评
+        self.write_line("cor-2", state="help", logs=logs)                                        # 不是终态 done
+        self.write_line("cor-3", exit_code="1", logs=logs)                                       # 退出码非 0
+        self.write_line("cor-4", updated="2026-10-03T23:00:00+08:00", logs=logs)                 # 早于 since
+        self.write_line("cor-5", log_lines=[self.ask_line("m-5")], logs=logs)                    # 已经有人评过
+        since = occ.parse_when("2026-10-04 00:00", today=NOW)
+        items = rv.local_pending_items([logs], reviewed={"COR-5"}, since=since)
+        self.assertEqual([(p["ticket"], p["model"], p["run_id"], p["executor"]) for p in items],
+                         [("COR-1", "m-1", "local:cor-1", "本机线 claudem")])
+        self.assertEqual(items[0]["completed_bj"], "2026-10-04 04:43:59")
+        # 派工记录或看板已经记着的票不重复列
+        self.assertEqual(rv.local_pending_items([logs], reviewed={"COR-5"}, since=since, known=["COR-1"]), [])
+
+    def test_collect_pending_merges_local_lines(self) -> None:
+        logs = self.write_line("cor-77", log_lines=[self.ask_line("m-77")])
+        since = occ.parse_when("2026-10-04 00:00", today=NOW)
+        with mock.patch.object(rv, "gather", lambda *a, **kw: ([], [], ["本机"], [])), \
+             mock.patch.object(rv, "fetch_agents_all", lambda: ([], None)):
+            items, in_flight, read_from, missed = rv.collect_pending(
+                self.reviews, self.occ, since, NOW, local_logs_dirs=[logs])
+        self.assertEqual([(p["ticket"], p["model"]) for p in items], [("COR-77", "m-77")])
+        self.assertEqual((in_flight, missed), (0, []))
+
+    # --- 大日志只许流式读，不许整读
+    def test_large_log_is_streamed_not_read_whole(self) -> None:
+        logs = self.write_line("cor-8")
+        lines = [self.init_line("big-init[1m]")] + [self.ask_line("big-actual-model")] * 40000
+        with open(logs / "codebuddy-cor-8.log", "w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+        self.assertGreater((logs / "codebuddy-cor-8.log").stat().st_size, 2_000_000)
+        real_read_text = Path.read_text
+
+        def guard(path, *args, **kwargs):
+            if path.name.endswith(".log"):
+                raise AssertionError(f"整读了日志：{path.name}")
+            return real_read_text(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "read_text", guard):
+            info = rv.local_line_info("cor-8", [logs])
+        self.assertEqual((info["model"], info["model_verified"]), ("big-actual-model", True))
+        with mock.patch.object(Path, "read_text", guard):
+            items = rv.local_pending_items([logs], since=None)
+        self.assertEqual([p["model"] for p in items], ["big-actual-model"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -11,6 +11,7 @@ Falcon 10-04 01:5x：不是跑分、不是派单去测、不是从回执里自�
 
 用法：
     sentinel-review add COR-12366 好 "6.7 分钟一次做对，回执与实物对得上" [--run 前缀] [--by 窗口名] [--model 手填]
+    sentinel-review restore [--apply]            评价记录丢了或缺了，从另外两台里本机的备份补回（先不带 --apply 看计划）
     sentinel-review list [--model 小米|spark|glm] [--grade 差|一般|好] [--days 7]   一行一条，看谁为什么打的这个档
     sentinel-review add - 差 "为什么" --task "当时干了啥" --model 模型名            没有票号的活
     sentinel-review void COR-12153 --run 01a1009f --by 窗口名 "原因"     作废那条 run 上的评价，汇总整条不算
@@ -57,12 +58,22 @@ IN_FLIGHT = ("queued", "dispatched", "running", "waiting_local_directory")
 KEEP_NOTE = (
     "CORTEX-KEEP\n"
     "# 不要删除 · 一定保留 · DO NOT DELETE\n\n"
-    "这是模型口碑记录：每张活交回来，验收的窗口写一句好 / 一般 / 差加感受，按模型攒着，\n"
-    "留给以后挑模型、派工时看（Falcon 10-04）。清理程序和任何窗口都不要动：\n\n"
-    "- reviews.jsonl：一行一条评价，北京时刻、票号、run 号、模型、执行者、机器、号、评价档、感受原句、评价人。\n\n"
+    "这是三台机器互相备份的模型口碑记录：每张活交回来，验收的窗口写一句好 / 一般 / 差加感受，按模型攒着，\n"
+    "留给以后挑模型、派工时看（Falcon 10-04）。删了就丢模型口碑，清理程序和任何窗口都不要动，要清理先问他：\n\n"
+    "- reviews.jsonl：本机写的评价，一行一条，北京时刻、票号、run 号、模型、执行者、机器、号、评价档、感受原句、评价人。\n"
+    "- mirror/：另外两台机器 reviews.jsonl 的只读备份（每分钟由哨兵拉一份，只增不减），那两台丢了从这里还原。\n"
+    "- task-titles.json、model-aliases.json：任务标题缓存和 list --model 的俗名表，可重建，但俗名表是他改过的话别覆盖。\n\n"
+    "丢了怎么办：sentinel-review restore（先看计划）→ sentinel-review restore --apply，会从另外两台的备份里把缺的评价补回本机。\n"
     "记：sentinel-review add COR-12345 好|一般|差 \"一句感受\"\n"
-    "看：sentinel-review summary [--days 7]；sentinel-review pending\n"
+    "看：sentinel-review summary [--days 7]；sentinel-review list；sentinel-review pending\n"
     "（时刻按北京时间。）\n"
+)
+
+MIRROR_KEEP_NOTE = (
+    "CORTEX-KEEP\n"
+    "# 不要删除 · 一定保留 · DO NOT DELETE\n\n"
+    "这是另外两台机器上模型口碑记录（reviews.jsonl）的备份，文件名是机器名（pro / mini / m1max），每分钟拉一次，只增不减。\n"
+    "那台机器的记录丢了，就靠这里和它另一个备份还原。删了就少一份保险，请不要动，要清理先问他。\n"
 )
 
 
@@ -75,7 +86,7 @@ def reviews_dir() -> Path:
     )
     base.mkdir(parents=True, exist_ok=True)
     keep = base / "不要删除.md"
-    if not keep.exists():
+    if not keep.exists() or "三台机器互相备份" not in keep.read_text(encoding="utf-8", errors="replace"):
         keep.write_text(KEEP_NOTE, encoding="utf-8")
     mine = base / ALIASES_NAME
     if not mine.exists() and DEFAULT_ALIASES.exists():
@@ -738,6 +749,113 @@ def summarize(rows: Sequence[Mapping[str, Any]], *, now: datetime, days: int = 7
     return sorted(result, key=lambda r: (-r["total"], r["model"]))
 
 
+# ---------------------------------------------------------------- 三台互备：评价记录别丢
+
+MIRROR_DIR = "mirror"
+REVIEWS_REL = "Library/Application Support/CortexSentinel/reviews"
+
+
+def alias_word(alias: str) -> str:
+    for word, name in PEER_ALIASES.items():
+        if name == alias:
+            return word
+    return alias.replace("cortex-", "")
+
+
+def mirror_dir(base: Path) -> Path:
+    path = base / MIRROR_DIR
+    path.mkdir(parents=True, exist_ok=True)
+    note = path / "不要删除.md"
+    if not note.exists():
+        note.write_text(MIRROR_KEEP_NOTE, encoding="utf-8")
+    return path
+
+
+def _count_lines(path: Path) -> int:
+    try:
+        return sum(1 for line in path.read_text(encoding="utf-8", errors="replace").splitlines() if line.strip())
+    except OSError:
+        return 0
+
+
+def sync_mirror(base: Path, *, aliases: Optional[Sequence[str]] = None,
+                runner: Callable[..., tuple[Optional[str], Optional[str]]] = occ._run) -> dict[str, Any]:
+    """把另外两台的 reviews.jsonl 只读拉一份到 reviews/mirror/<机器>.jsonl（每分钟 tick 调一次）。
+    只增不减：对方文件变空或变短（被删、被截）就不覆盖备份，记一笔；大小没变就不重拉。不往对方写任何东西。"""
+    status: dict[str, Any] = {"synced": [], "unchanged": [], "kept": [], "missed": []}
+    mdir = mirror_dir(base)
+    for alias in (list(aliases) if aliases is not None else peer_aliases()):
+        word = alias_word(alias)
+        target = mdir / f"{word}.jsonl"
+        remote = f'"$HOME/{REVIEWS_REL}/reviews.jsonl"'
+        out, err = runner(SSH_BASE + [alias, f'wc -c < {remote} 2>/dev/null || echo 0'], timeout=PEER_TIMEOUT)
+        if out is None:
+            status["missed"].append(f"{alias}（{str(err)[-60:]}）")
+            continue
+        try:
+            size = int(out.strip().split()[-1])
+        except (ValueError, IndexError):
+            status["missed"].append(f"{alias}（读不懂大小）")
+            continue
+        have = target.stat().st_size if target.exists() else 0
+        if size == have and size > 0:
+            status["unchanged"].append(word)
+            continue
+        if size == 0 or size < have:
+            if have:
+                status["kept"].append(f"{word}（对方现在 {size} 字节、备份 {have} 字节，没覆盖）")
+            continue
+        text, err = runner(SSH_BASE + [alias, f'cat {remote}'], timeout=PEER_TIMEOUT * 3)
+        if text is None or not text.strip():
+            status["missed"].append(f"{alias}（拉文件失败）")
+            continue
+        if len(text.encode("utf-8")) < have:   # 拉的过程中对方被截：不换
+            status["kept"].append(f"{word}（拉到的比备份短，没覆盖）")
+            continue
+        tmp = mdir / f"{word}.jsonl.tmp"
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(target)
+        status["synced"].append(f"{word}（{_count_lines(target)} 条）")
+    return status
+
+
+def restore_from_peers(base: Path, *, apply: bool = False, aliases: Optional[Sequence[str]] = None, me: str = "",
+                       runner: Callable[..., tuple[Optional[str], Optional[str]]] = occ._run) -> dict[str, Any]:
+    """本机的评价记录丢了或缺了：读另外两台里「本机的备份」（它们的 reviews/mirror/<本机>.jsonl），
+    把本机没有的评价补回本机 reviews.jsonl（只追加，不改不删本机已有的行）。不 --apply 只出计划。"""
+    me = me or local_machine()
+    local_rows = read_reviews(base)
+    have = {json.dumps(r, ensure_ascii=False, sort_keys=True) for r in local_rows}
+    result: dict[str, Any] = {"local": len(local_rows), "sources": {}, "missed": [], "missing": 0, "applied": apply}
+    missing: dict[str, dict[str, Any]] = {}
+    for alias in (list(aliases) if aliases is not None else peer_aliases()):
+        remote = f'"$HOME/{REVIEWS_REL}/{MIRROR_DIR}/{me}.jsonl"'
+        out, err = runner(SSH_BASE + [alias, f'cat {remote} 2>/dev/null; true'], timeout=PEER_TIMEOUT * 3)
+        if out is None:
+            result["missed"].append(f"{alias}（{str(err)[-60:]}）")
+            continue
+        rows = parse_jsonl_text(out)
+        result["sources"][alias] = len(rows)
+        for row in rows:
+            key = json.dumps(row, ensure_ascii=False, sort_keys=True)
+            if key not in have and key not in missing:
+                missing[key] = row
+    ordered = sorted(missing.values(), key=lambda r: str(r.get("ts_bj") or ""))
+    result["missing"] = len(ordered)
+    if apply and ordered:
+        for row in ordered:
+            occ.append_jsonl(reviews_file(base), row)
+    return result
+
+
+def format_restore(res: Mapping[str, Any]) -> str:
+    head = "已补回" if res["applied"] else "只是计划，没写（加 --apply 才补）"
+    srcs = "、".join(f"{a} 里有 {n} 条" for a, n in res["sources"].items()) or "没读到任何备份"
+    lines = [f"评价记录还原（{head}）：本机现有 {res['local']} 条；另外两台里本机的备份：{srcs}；本机缺 {res['missing']} 条"]
+    lines += [f"没读到：{m}" for m in res.get("missed") or []]
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------- 一次性重核：评价里的模型按 run 实际用的重算
 
 # 默认核全部评价：每条拿 run 实际用的模型比，不符才更正。--match 可以收窄到执行者名匹配某个正则的那几条。
@@ -1038,6 +1156,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p_list.add_argument("--days", type=int, default=7)
     p_list.add_argument("--local", action="store_true", help="只看本机")
     p_list.add_argument("--json", action="store_true")
+    p_res = sub.add_parser("restore", help="本机评价记录丢了或缺了：从另外两台里本机的备份补回")
+    p_res.add_argument("--apply", action="store_true", help="真补回；不带只出计划")
+    p_mir = sub.add_parser("mirror-sync", help="立刻拉一次另外两台的评价记录备份（tick 每分钟也会拉）")
     p_back = sub.add_parser("backfill-tasks", help="已有评价补任务标题（写旁表，原行不改）")
     p_back.add_argument("--local", action="store_true", help="只看本机")
     p_void = sub.add_parser("void", help="作废一条 run 上的评价（旧行不删，汇总整条不算）")
@@ -1085,6 +1206,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 print(json.dumps({"reviews": picked, "read_from": read_from, "missed": missed}, ensure_ascii=False))
             else:
                 print(format_list(picked, titles, read_from, missed))
+            return 0
+        if args.cmd == "restore":
+            print(format_restore(restore_from_peers(base, apply=args.apply)))
+            return 0
+        if args.cmd == "mirror-sync":
+            print(json.dumps(sync_mirror(base), ensure_ascii=False))
             return 0
         if args.cmd == "backfill-tasks":
             reviews, _rows, read_from, missed = gather(base, occ_base, peers=not args.local)

@@ -22,7 +22,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pwd
 import re
+import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -62,10 +64,22 @@ KEEP_NOTE = (
 
 # ---------------------------------------------------------------- 路径与时间
 
+def real_home() -> Path:
+    """登录用户的真家目录：执行线常跑在隔离的假 HOME 里（$HOME 指向临时目录），按 uid 解析才落对地方。
+    CORTEX_SENTINEL_HOME 显式指定优先（测试、特殊场景用）；uid 解析不到才退 Path.home()。"""
+    raw = os.environ.get("CORTEX_SENTINEL_HOME", "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    try:
+        return Path(pwd.getpwuid(os.getuid()).pw_dir)
+    except KeyError:
+        return Path.home()
+
+
 def data_dir() -> Path:
     raw = os.environ.get("CORTEX_SENTINEL_OCCUPANCY_DIR", "").strip()
     base = Path(raw).expanduser() if raw else (
-        Path.home() / "Library" / "Application Support" / "CortexSentinel" / "occupancy"
+        real_home() / "Library" / "Application Support" / "CortexSentinel" / "occupancy"
     )
     base.mkdir(parents=True, exist_ok=True)
     keep = base / "不要删除.md"
@@ -134,18 +148,20 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
 def gate_runtime() -> Path:
     raw = os.environ.get("CORTEX_GATE_RUNTIME", "").strip()
     return Path(raw).expanduser() if raw else (
-        Path.home() / "Library" / "Application Support" / "Cortex" / "GateRuntime" / "current"
+        real_home() / "Library" / "Application Support" / "Cortex" / "GateRuntime" / "current"
     )
 
 
 def checkout_base() -> str:
     raw = os.environ.get("CORTEX_GATE_CHECKOUT_BASE", "").strip()
-    return raw or str(Path.home() / "Documents" / "code" / "cortex")
+    return raw or str(real_home() / "Documents" / "code" / "cortex")
 
 
 def multica_bin() -> str:
-    found = Path.home() / ".local" / "bin" / "multica"
-    return str(found) if found.exists() else "multica"
+    found = real_home() / ".local" / "bin" / "multica"
+    if found.exists():
+        return str(found)
+    return shutil.which("multica") or "multica"
 
 
 def _run(argv: Sequence[str], *, cwd: Optional[Path] = None, env: Optional[dict] = None,
@@ -179,7 +195,7 @@ def _json_from(text: Optional[str]) -> Any:
 
 def _env() -> dict:
     env = dict(os.environ)
-    home = str(Path.home())
+    home = str(real_home())
     env["PATH"] = ":".join([f"{home}/.local/bin", "/opt/homebrew/bin", "/usr/local/bin",
                             "/usr/bin", "/bin", "/usr/sbin", "/sbin"])
     env["CORTEX_GATE_CHECKOUT_BASE"] = checkout_base()

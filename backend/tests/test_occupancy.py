@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import pwd
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -63,6 +65,55 @@ class DispatchDedupeTests(unittest.TestCase):
         self.assertEqual(first[0]["ticket"], "COR-1")
         self.assertEqual(len(first[0]["trigger_head"]), 40)
         self.assertEqual((first[0]["account"], first[0]["machine"], first[0]["kind"]), ("falcon", "m1max", "comment"))
+
+
+class RealHomeTests(unittest.TestCase):
+    """假 HOME（执行线隔离环境）下也落到真家目录：CORTEX_SENTINEL_HOME 指造出来的家，不依赖本机。"""
+
+    def setUp(self) -> None:
+        patcher = mock.patch.dict(os.environ)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for key in ("CORTEX_SENTINEL_HOME", "CORTEX_SENTINEL_OCCUPANCY_DIR"):
+            os.environ.pop(key, None)
+        self.uid_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+
+    def test_env_var_wins(self) -> None:
+        with tempfile.TemporaryDirectory() as home:
+            os.environ["CORTEX_SENTINEL_HOME"] = home
+            os.environ["HOME"] = "/tmp/never-this"
+            self.assertEqual(occ.real_home(), Path(home))
+
+    def test_uid_home_wins_over_fake_HOME(self) -> None:
+        os.environ["HOME"] = "/tmp/fake-isolated-home"
+        self.assertEqual(occ.real_home(), self.uid_home)
+
+    def test_data_dir_defaults_into_real_home_not_fake_HOME(self) -> None:
+        with tempfile.TemporaryDirectory() as real, tempfile.TemporaryDirectory() as fake:
+            os.environ["CORTEX_SENTINEL_HOME"] = real
+            os.environ["HOME"] = fake
+            base = occ.data_dir()
+            self.assertEqual(base, Path(real) / "Library" / "Application Support" / "CortexSentinel" / "occupancy")
+            self.assertFalse(str(base).startswith(fake))
+
+    def test_multica_bin_prefers_real_home_then_PATH_then_bare_name(self) -> None:
+        with tempfile.TemporaryDirectory() as real, tempfile.TemporaryDirectory() as fake:
+            os.environ["CORTEX_SENTINEL_HOME"] = real
+            os.environ["HOME"] = fake
+            found = Path(real) / ".local" / "bin" / "multica"
+            found.parent.mkdir(parents=True)
+            found.write_text("#!/bin/sh\n", encoding="utf-8")
+            found.chmod(0o755)
+            self.assertEqual(occ.multica_bin(), str(found))
+            found.unlink()
+            fallback = Path(fake) / "bin" / "multica"
+            fallback.parent.mkdir(parents=True)
+            fallback.write_text("#!/bin/sh\n", encoding="utf-8")
+            fallback.chmod(0o755)
+            os.environ["PATH"] = str(fallback.parent)
+            self.assertEqual(occ.multica_bin(), str(fallback))
+            fallback.unlink()
+            self.assertEqual(occ.multica_bin(), "multica")
 
 
 class QueryTests(unittest.TestCase):

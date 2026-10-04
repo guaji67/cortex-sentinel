@@ -80,6 +80,8 @@ launchd 模板在 `launchd/*.plist.tmpl`，占位符是 `@INSTALL_ROOT@` `@PYTHO
 误记或不该计口碑的（比如没起跑）用 `sentinel-review void COR-12153 --run 01a1009f --by 窗口名 "原因"` 作废：追加一行作废记录，summary 按同票同 run 取最新时遇到作废整条不算，旧行不删；之后再 `add` 又按最新算。
 评价里的模型取那条 run 实际用的（`multica issue runs` 的 usage，去掉 `[1m]` 这类后缀），不取执行者现在的配置：同一个执行者会先配 Spark 后改回小米。run 没有用量记录才退执行者配置，并标「模型未核」（`model_verified=false`）。summary 里免费 Spark 和付费 Spark(Go) 分两行。
 `sentinel-review reverify-models [--apply] [--match 正则]` 是一次性重核：默认核执行者名带 Go 或 Spark 的评价，模型和 run 实际不符就追加一条更正（同票同 run 新行覆盖旧行，旧行留着，评价发生时刻存在 `orig_ts_bj`）；不带 `--apply` 只出计划。
+评价人只写两样：好 / 一般 / 差加一句为什么，其余程序填：任务标题（`multica issue get` 现查，缓存在 `reviews/task-titles.json`）、执行者、run 实际用的模型、机器、号、run 起止时刻、评价人窗口名（环境里的窗口名，否则读 Claude Code 会话记录里的窗口标题，带 `@机器`）、评价者自己的模型（Claude Code 读 `~/.claude/projects/*/<会话号>.jsonl` 最后一条助手消息的 model，Codex 读 rollout 的 turn_context，环境变量 `CORTEX_REVIEWER_MODEL` 优先，读不到留空不报错）。`--task`（没有票号的活，票号写 `-`，同时要 `--model`）和 `--reviewer-model` 只当兜底。
+`sentinel-review list [--model 小米|spark|glm] [--grade 差|一般|好] [--days 7]` 一行一条：时刻、票号、任务标题（40 字内）、评价档、为什么、评价人、评价者模型、模型、执行者、机器；`--model` 认俗名（小米=mimo，spark 含免费付费，glm=ZCode）。`sentinel-review backfill-tasks` 给已有评价补任务标题（只写旁表，评价原行不改）。
 补评或翻案就再 `add` 一条：summary 里同一张票同一条 run 只算最新那条（含最近感受），旧行留在文件里不删。
 `summary`、`pending` 默认三台合看：用 `ssh cortex-pro` / `cortex-mini` 只读 cat 对方的 reviews.jsonl 和 dispatch-*.jsonl
 （不往对方写任何东西），连不上的机器在输出末尾写「没读到：xxx」；`--local` 只看本机。`pending` 另扫看板上所有执行者

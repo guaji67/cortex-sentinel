@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -11,6 +13,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from cortex_sentinel import occupancy as occ  # noqa: E402
 from cortex_sentinel import review as rv  # noqa: E402
+
+_ENV_KEYS = ("CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "CORTEX_REVIEWER", "CLAUDE_WINDOW_NAME",
+             "CLAUDE_CODE_WINDOW_NAME", "CLAUDE_SESSION_NAME", "CORTEX_WINDOW_NAME", "CORTEX_REVIEWER_MODEL",
+             "ANTHROPIC_MODEL", "CLAUDE_CODE_MODEL", "CLAUDE_MODEL", "CODEX_MODEL", "OPENAI_MODEL")
+
+
+def setUpModule() -> None:
+    # 测试不读真实窗口的会话记录：把身份相关环境变量清掉
+    patcher = mock.patch.dict(os.environ, {}, clear=False)
+    patcher.start()
+    for key in _ENV_KEYS:
+        os.environ.pop(key, None)
+    unittest.addModuleCleanup(patcher.stop)
+
 
 NOW = datetime(2026, 10, 3, 18, 0, 0, tzinfo=timezone.utc)  # 北京 2026-10-04 02:00
 
@@ -42,6 +58,9 @@ def write_dispatch(base: Path, rows: list, day: str = "2026-10-04") -> None:
 
 class AddTests(unittest.TestCase):
     def setUp(self) -> None:
+        patcher = mock.patch.object(rv, "fetch_issue_title", lambda t: f"标题-{t}")
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.reviews = Path(self.tmp.name) / "reviews"
@@ -239,6 +258,9 @@ class VoidTests(unittest.TestCase):
 
 class ActualModelTests(unittest.TestCase):
     def setUp(self) -> None:
+        patcher = mock.patch.object(rv, "fetch_issue_title", lambda t: f"标题-{t}")
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.reviews = Path(self.tmp.name) / "reviews"
@@ -341,6 +363,156 @@ class ActualModelTests(unittest.TestCase):
         self.assertEqual(rv.summarize(rows, now=NOW, days=7), [])
         (e,) = rv.summarize(rows, now=NOW, days=30)
         self.assertEqual(e["model"], "muse-spark-1.3-contributor")
+
+
+class TaskAndListTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.reviews = Path(self.tmp.name) / "reviews"
+        self.occ = Path(self.tmp.name) / "occupancy"
+        self.reviews.mkdir()
+        self.occ.mkdir()
+        self.runs = [mk_run("run-1", "completed", "2026-10-03T14:46:36Z", "2026-10-03T14:46:37Z", "2026-10-03T14:53:15Z",
+                            usage=usage_of("mimo-v2.6-flash[1m]"))]
+        self.agents = [{"id": "ex-7", "name": "Pro 执行者(MiMo v2.6 Flash Go)", "model": "mimo-v2.6-flash"}]
+        self.live = dict(runs_fn=lambda _t: (self.runs, None), agents_fn=lambda: (self.agents, None))
+
+    def test_add_records_issue_title_and_reviewer_model_and_caches_title(self) -> None:
+        row = rv.add_review(self.reviews, self.occ, ticket="COR-12366", grade="差", note="跑偏了", by="cortex-2c",
+                            reviewer_model="Claude Opus 5.5", now=NOW, title_fn=lambda t: "升级前备份真根", **self.live)
+        self.assertEqual((row["task"], row["task_src"], row["reviewer_model"]), ("升级前备份真根", "票面标题", "Claude Opus 5.5"))
+        self.assertEqual(rv.load_titles(self.reviews), {"COR-12366": "升级前备份真根"})
+
+    def test_reviewer_model_auto_from_env_and_empty_when_unreadable(self) -> None:
+        self.assertEqual(rv.default_reviewer_model({"CORTEX_REVIEWER_MODEL": "GLM-5.3 Flash", "ANTHROPIC_MODEL": "x"}), "GLM-5.3 Flash")
+        self.assertEqual(rv.default_reviewer_model({"ANTHROPIC_MODEL": "claude-opus"}), "claude-opus")
+        self.assertEqual(rv.default_reviewer_model({}), "")
+        row = rv.add_review(self.reviews, self.occ, ticket="COR-1", grade="好", note="x", now=NOW,
+                            title_fn=lambda t: None, env={}, **self.live)  # 读不到：留空，不报错；标题也查不到照记
+        self.assertEqual((row["reviewer_model"], row["task"]), ("", None))
+        row2 = rv.add_review(self.reviews, self.occ, ticket="COR-1", grade="好", note="y", now=NOW + timedelta(seconds=5),
+                             title_fn=lambda t: None, env={"CORTEX_REVIEWER_MODEL": "Claude Sonnet"}, **self.live)
+        self.assertEqual(row2["reviewer_model"], "Claude Sonnet")
+
+    def test_no_ticket_task_needs_task_and_model_and_does_not_collapse(self) -> None:
+        with self.assertRaises(ValueError):
+            rv.add_review(self.reviews, self.occ, ticket="-", grade="差", note="x", model_override="glm-5.3-flash", now=NOW)
+        with self.assertRaises(LookupError):
+            rv.add_review(self.reviews, self.occ, ticket="-", grade="差", note="x", task="整理旧文档", now=NOW)
+        a = rv.add_review(self.reviews, self.occ, ticket="无票", grade="差", note="删了不该删的目录", task="整理旧文档",
+                          model_override="glm-5.3-flash", now=NOW, env={})
+        b = rv.add_review(self.reviews, self.occ, ticket="-", grade="好", note="一次就对", task="改一行配置",
+                          model_override="glm-5.3-flash", now=NOW + timedelta(seconds=1), env={})
+        self.assertEqual((a["ticket"], a["task"], a["task_src"]), ("", "整理旧文档", "手写"))
+        self.assertNotEqual(a["run_id"], b["run_id"])
+        (e,) = rv.summarize(occ.read_jsonl(rv.reviews_file(self.reviews)), now=NOW + timedelta(minutes=1))
+        self.assertEqual((e["good"], e["bad"], e["total"]), (1, 1, 2))
+
+    def test_task_flag_wins_over_issue_title(self) -> None:
+        row = rv.add_review(self.reviews, self.occ, ticket="COR-1", grade="好", note="x", task="只改了第二段", now=NOW,
+                            title_fn=lambda t: "票面标题", env={}, **self.live)
+        self.assertEqual((row["task"], row["task_src"]), ("只改了第二段", "手写"))
+
+    def test_list_filters_by_model_alias_and_grade_and_shows_who_why_task(self) -> None:
+        rows = [
+            {"ts_bj": "2026-10-04 01:00:00", "ticket": "COR-1", "run_id": "a", "model": "mimo-v2.6-flash", "grade": "差",
+             "note": "跑偏", "by": "cortex-2c", "reviewer_model": "Claude Opus 5.5", "machine": "pro", "task": "升级前备份真根，分两步做完整的那一种，要写的很长很长很长很长很长很长很长很长"},
+            {"ts_bj": "2026-10-04 01:01:00", "ticket": "COR-2", "run_id": "b", "model": "muse-spark-1.3-contributor", "grade": "差",
+             "note": "付费", "by": "窗口乙", "reviewer_model": "", "machine": "mini"},
+            {"ts_bj": "2026-10-04 01:02:00", "ticket": "COR-3", "run_id": "c", "model": "opencode/muse-spark-1.3-contributor-free",
+             "grade": "好", "note": "免费", "by": "x", "machine": "pro"},
+            {"ts_bj": "2026-10-04 01:03:00", "ticket": "COR-4", "run_id": "d", "model": "glm-5.3-flash", "grade": "差", "note": "g", "by": "y", "machine": "m1max"},
+            {"ts_bj": "2026-10-04 01:04:00", "kind": "void", "ticket": "COR-2", "run_id": "b"},   # COR-2 被作废
+            {"ts_bj": "2026-09-01 01:00:00", "ticket": "COR-9", "run_id": "z", "model": "mimo-v2.6-flash", "grade": "差", "note": "太老", "by": "q"},
+        ]
+        tickets = lambda **kw: [r["ticket"] for r in rv.list_reviews(rows, now=NOW, **kw)]
+        self.assertEqual(tickets(model="小米", grade="差"), ["COR-1"])
+        self.assertEqual(sorted(tickets(model="spark")), ["COR-3"])          # COR-2 已作废；免费 Spark 在内
+        self.assertEqual(tickets(model="glm"), ["COR-4"])
+        self.assertEqual(sorted(tickets(grade="差")), ["COR-1", "COR-4"])
+        self.assertEqual(tickets(model="免费spark"), ["COR-3"])
+        self.assertEqual(tickets(model="付费spark"), [])
+        self.assertTrue(rv.model_matches("muse-spark-1.3-contributor", "付费spark"))
+        line = rv.format_list_line(rv.list_reviews(rows, now=NOW, model="小米")[0])
+        self.assertIn("2026-10-04 01:00:00 | COR-1 | 升级前备份真根", line)
+        self.assertIn("| 差 | 为什么：跑偏 | 评价人 cortex-2c | 评价者模型 Claude Opus 5.5 | 模型 mimo-v2.6-flash | 执行者 - | 机器 pro", line)
+        task_cell = line.split(" | ")[2]
+        self.assertLessEqual(len(task_cell), 40)
+        blank = rv.format_list_line({"ts_bj": "t", "ticket": "COR-5", "grade": "好", "note": "n", "by": "b", "model": "m", "machine": "pro"}, "回填的标题")
+        self.assertIn("| 回填的标题 |", blank)
+        self.assertIn("评价者模型  |", blank)  # 空的就空着
+
+    def test_backfill_writes_side_table_only_and_leaves_review_rows(self) -> None:
+        rv_file = rv.reviews_file(self.reviews)
+        occ.append_jsonl(rv_file, {"ts_bj": "2026-10-04 01:00:00", "ticket": "COR-1", "run_id": "a", "model": "m", "grade": "好", "note": "n"})
+        occ.append_jsonl(rv_file, {"ts_bj": "2026-10-04 01:01:00", "ticket": "COR-2", "run_id": "b", "model": "m", "grade": "好", "note": "n", "task": "已有"})
+        occ.append_jsonl(rv_file, {"ts_bj": "2026-10-04 01:02:00", "ticket": "COR-3", "run_id": "c", "model": "m", "grade": "好", "note": "n"})
+        before = rv_file.read_text(encoding="utf-8")
+        res = rv.backfill_titles(self.reviews, occ.read_jsonl(rv_file), title_fn=lambda t: {"COR-1": "标题一"}.get(t))
+        self.assertEqual(res, {"tickets": 2, "had": 0, "filled": 1, "missing": 1})
+        self.assertEqual(rv.load_titles(self.reviews), {"COR-1": "标题一"})
+        self.assertEqual(rv_file.read_text(encoding="utf-8"), before)  # 原行一个字没动
+
+
+class ReviewerIdentityTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = Path(self.tmp.name)
+
+    def write_claude_session(self, sid: str, lines: list) -> None:
+        d = self.home / ".claude" / "projects" / "-some-project"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{sid}.jsonl").write_text("\n".join(json.dumps(x, ensure_ascii=False) for x in lines) + "\n", encoding="utf-8")
+
+    def test_claude_code_model_and_window_title_come_from_the_session_record(self) -> None:
+        self.write_claude_session("sid-1", [
+            {"type": "custom-title", "customTitle": "旧标题", "sessionId": "sid-1"},
+            {"type": "assistant", "message": {"model": "claude-sonnet-5-5", "content": "x"}},
+            {"type": "user", "message": {"content": "hi"}},
+            {"type": "agent-name", "agentName": "流程管理", "sessionId": "sid-1"},
+            {"type": "assistant", "message": {"model": "claude-opus-5-5[1m]", "content": "y"}},
+            {"type": "assistant", "message": {"model": "<synthetic>", "content": "z"}},
+        ])
+        env = {"CLAUDE_CODE_SESSION_ID": "sid-1"}
+        info = rv.claude_session_info(env, self.home)
+        self.assertEqual(info, {"model": "claude-opus-5-5", "title": "流程管理"})
+        self.assertEqual(rv.default_reviewer_model(env, self.home), "claude-opus-5-5")
+        with mock.patch.object(rv, "local_machine", lambda: "m1max"):
+            self.assertEqual(rv.default_reviewer(env, self.home), "流程管理@m1max")
+
+    def test_explicit_env_wins_and_missing_session_gives_blank_not_error(self) -> None:
+        self.assertEqual(rv.default_reviewer_model({"CORTEX_REVIEWER_MODEL": "GLM-5.3 Flash", "CLAUDE_CODE_SESSION_ID": "sid-x"}, self.home),
+                         "GLM-5.3 Flash")
+        self.assertEqual(rv.default_reviewer_model({"CLAUDE_CODE_SESSION_ID": "no-such-session"}, self.home), "")
+        self.assertEqual(rv.default_reviewer_model({}, self.home), "")
+        self.assertEqual(rv.default_reviewer({"CLAUDE_CODE_SESSION_ID": "0812b8c2-aaaa"}, self.home), "会话 0812b8c2")
+        self.assertEqual(rv.default_reviewer({}, self.home), "unknown")
+        self.assertEqual(rv.default_reviewer({"CLAUDE_WINDOW_NAME": "窗口甲"}, self.home), "窗口甲")
+        self.assertEqual(rv.default_reviewer_model({"CLAUDE_CODE_SESSION_ID": "../etc"}, self.home), "")  # 会话号不许带路径
+
+    def test_codex_model_from_rollout_turn_context(self) -> None:
+        d = self.home / ".codex" / "sessions" / "2026" / "10" / "04"
+        d.mkdir(parents=True)
+        (d / "rollout-2026-10-04T01-00-00-thread-9.jsonl").write_text(
+            json.dumps({"type": "turn_context", "payload": {"model": "gpt-6-astra"}}) + "\n"
+            + json.dumps({"type": "event_msg", "payload": {"x": 1}}) + "\n"
+            + json.dumps({"type": "turn_context", "payload": {"model": "gpt-6.1-sol"}}) + "\n", encoding="utf-8")
+        self.assertEqual(rv.default_reviewer_model({"CODEX_THREAD_ID": "thread-9"}, self.home), "gpt-6.1-sol")
+        self.assertEqual(rv.default_reviewer_model({"CODEX_THREAD_ID": "thread-0"}, self.home), "")
+
+    def test_add_records_run_start_and_finish_times(self) -> None:
+        tmp = Path(self.tmp.name)
+        (tmp / "r").mkdir(); (tmp / "o").mkdir()
+        runs = [mk_run("run-1", "completed", "2026-10-03T14:46:36Z", "2026-10-03T14:46:37Z", "2026-10-03T14:53:15Z",
+                       usage=usage_of("mimo-v2.6-flash[1m]"))]
+        agents = [{"id": "ex-7", "name": "Pro 执行者(MiMo v2.6 Flash Go)", "model": "mimo-v2.6-flash"}]
+        with mock.patch.object(rv, "fetch_issue_title", lambda t: "标题"):
+            row = rv.add_review(tmp / "r", tmp / "o", ticket="COR-1", grade="好", note="x", now=NOW, env={},
+                                runs_fn=lambda _t: (runs, None), agents_fn=lambda: (agents, None))
+        self.assertEqual((row["run_started_bj"], row["run_finished_bj"], row["run_secs"]),
+                         ("2026-10-03 22:46:37", "2026-10-03 22:53:15", 398))
 
 
 class PendingTests(unittest.TestCase):

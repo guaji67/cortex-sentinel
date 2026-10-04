@@ -11,6 +11,8 @@ Falcon 10-04 01:5x：不是跑分、不是派单去测、不是从回执里自�
 
 用法：
     sentinel-review add COR-12366 好 "6.7 分钟一次做对，回执与实物对得上" [--run 前缀] [--by 窗口名] [--model 手填]
+    sentinel-review list [--model 小米|spark|glm] [--grade 差|一般|好] [--days 7]   一行一条，看谁为什么打的这个档
+    sentinel-review add - 差 "为什么" --task "当时干了啥" --model 模型名            没有票号的活
     sentinel-review void COR-12153 --run 01a1009f --by 窗口名 "原因"     作废那条 run 上的评价，汇总整条不算
     sentinel-review reverify-models [--apply] [--match 正则]   一次性重核评价里的模型，按 run 实际用的重算
     sentinel-review summary [--days 7] [--local]
@@ -87,16 +89,138 @@ def normalize_ticket(text: str) -> str:
     return raw
 
 
-def default_reviewer(env: Optional[Mapping[str, str]] = None) -> str:
-    """评价人缺省：环境里的窗口名；没有就退到会话号前 8 位（传话能凭它找人）；都读不到写 unknown。"""
+SESSION_TAIL_BYTES = 2_000_000
+
+
+def _tail_text(path: Path, nbytes: int = SESSION_TAIL_BYTES) -> str:
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(0, 2)
+            size = handle.tell()
+            handle.seek(max(0, size - nbytes))
+            return handle.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
+def claude_session_info(env: Mapping[str, str], home: Optional[Path] = None) -> dict[str, str]:
+    """Claude Code 窗口：凭环境里的会话号找 ~/.claude/projects/*/<会话号>.jsonl，读最后一条助手消息的 model
+    和窗口标题（agent-name / custom-title）。找不到或读不到返回空串，不报错。"""
+    sid = (env.get("CLAUDE_CODE_SESSION_ID") or "").strip()
+    info = {"model": "", "title": ""}
+    if not sid or "/" in sid:
+        return info
+    root = (home or Path.home()) / ".claude" / "projects"
+    for path in sorted(root.glob(f"*/{sid}.jsonl")):
+        for line in _tail_text(path).splitlines():
+            if '"assistant"' not in line and '"agent-name"' not in line and '"custom-title"' not in line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            kind = row.get("type")
+            if kind == "assistant":
+                model = norm_model((row.get("message") or {}).get("model"))
+                if model and model != "<synthetic>":
+                    info["model"] = model
+            elif kind in ("agent-name", "custom-title"):
+                title = str(row.get("agentName") or row.get("customTitle") or "").strip()
+                if title:
+                    info["title"] = title
+        break
+    return info
+
+
+def codex_session_model(env: Mapping[str, str], home: Optional[Path] = None) -> str:
+    """Codex 窗口：凭线程号找 ~/.codex/sessions/*/*/*/rollout-*-<线程号>.jsonl，读最后一条 turn_context 的 model。"""
+    sid = (env.get("CODEX_THREAD_ID") or env.get("CODEX_SESSION_ID") or "").strip()
+    if not sid or "/" in sid:
+        return ""
+    root = (home or Path.home()) / ".codex" / "sessions"
+    for path in sorted(root.glob(f"*/*/*/rollout-*-{sid}.jsonl")):
+        model = ""
+        for line in _tail_text(path).splitlines():
+            if '"turn_context"' not in line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            model = str((row.get("payload") or {}).get("model") or model)
+        return model
+    return ""
+
+
+def default_reviewer(env: Optional[Mapping[str, str]] = None, home: Optional[Path] = None) -> str:
+    """评价人缺省：环境里的窗口名；没有就读 Claude Code 会话记录里的窗口标题（带 @机器）；
+    再退到会话号前 8 位；都读不到写 unknown。"""
     env = os.environ if env is None else env
     for key in ("CORTEX_REVIEWER", "CLAUDE_WINDOW_NAME", "CLAUDE_CODE_WINDOW_NAME",
                 "CLAUDE_SESSION_NAME", "CORTEX_WINDOW_NAME"):
         value = (env.get(key) or "").strip()
         if value:
             return value
+    title = claude_session_info(env, home)["title"]
+    if title:
+        return f"{title}@{local_machine()}"
     sid = (env.get("CLAUDE_CODE_SESSION_ID") or "").strip()
     return f"会话 {sid[:8]}" if sid else "unknown"
+
+
+def default_reviewer_model(env: Optional[Mapping[str, str]] = None, home: Optional[Path] = None) -> str:
+    """评价者自己是哪个模型：环境变量显式给的优先；Claude Code 读会话记录最后一条助手消息，Codex 读 turn_context；
+    都读不到返回空串，不报错、不强求。"""
+    env = os.environ if env is None else env
+    for key in ("CORTEX_REVIEWER_MODEL", "ANTHROPIC_MODEL", "CLAUDE_CODE_MODEL", "CLAUDE_MODEL",
+                "CODEX_MODEL", "OPENAI_MODEL"):
+        value = (env.get(key) or "").strip()
+        if value:
+            return value
+    return claude_session_info(env, home)["model"] or codex_session_model(env, home)
+
+
+NO_TICKET_WORDS = ("-", "无", "无票", "none")
+TITLES_NAME = "task-titles.json"
+
+
+def fetch_issue_title(ticket: str) -> Optional[str]:
+    """票面标题：multica issue get 现查，只读。"""
+    out, _err = occ._run([occ.multica_bin(), "issue", "get", ticket, "--output", "json"], env=occ._env(), timeout=20)
+    data = occ._json_from(out)
+    if isinstance(data, dict) and data.get("title"):
+        return str(data["title"]).strip()
+    return None
+
+
+def load_titles(base: Path) -> dict[str, str]:
+    path = base / TITLES_NAME
+    try:
+        value = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except ValueError:
+        value = {}
+    return {str(k): str(v) for k, v in value.items()} if isinstance(value, dict) else {}
+
+
+def save_titles(base: Path, titles: Mapping[str, str]) -> None:
+    tmp = base / (TITLES_NAME + ".tmp")
+    tmp.write_text(json.dumps(titles, ensure_ascii=False, indent=0), encoding="utf-8")
+    tmp.replace(base / TITLES_NAME)
+
+
+def resolve_titles(base: Path, tickets: Sequence[str], *,
+                   title_fn: Optional[Callable[[str], Optional[str]]] = None) -> dict[str, str]:
+    """票号 → 标题：先翻本地缓存，缺的并发现查并写回缓存。查不到的不进结果。"""
+    titles = load_titles(base)
+    missing = sorted({t for t in tickets if t and t not in titles})
+    if missing:
+        fetch = title_fn or fetch_issue_title
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for ticket, found in zip(missing, pool.map(fetch, missing)):
+                if found:
+                    titles[ticket] = found
+        save_titles(base, titles)
+    return {t: titles[t] for t in tickets if t in titles}
 
 
 def machine_word(name: str) -> str:
@@ -191,6 +315,11 @@ def fetch_issue_runs(ticket: str) -> tuple[Optional[list], Optional[str]]:
     return rows, None
 
 
+def fmt_opt_bj(text: Any) -> Optional[str]:
+    moment = occ.parse_utc(text)
+    return occ.fmt_bj(moment) if moment else None
+
+
 def run_seconds(run: Mapping[str, Any]) -> Optional[int]:
     """实际用时：开跑和完工时刻都有且完工晚于开跑；排队没开跑就被撤的没有。"""
     started, finished = occ.parse_utc(run.get("started_at")), occ.parse_utc(run.get("completed_at"))
@@ -231,6 +360,7 @@ def describe_run(run: Mapping[str, Any], occ_base: Optional[Path],
         "executor": name or None,
         "executor_id": run.get("agent_id"), "machine": machine_word(name), "account": account,
         "run_created_bj": occ.fmt_bj(created) if created else None, "run_seconds": run_seconds(run),
+        "run_started_bj": fmt_opt_bj(run.get("started_at")), "run_finished_bj": fmt_opt_bj(run.get("completed_at")),
         "source": "multica 现查" if actual else "multica 现查（模型未核：run 没有用量记录，退执行者配置）",
     }
 
@@ -261,14 +391,22 @@ def find_run(
 # ---------------------------------------------------------------- 记一条
 
 def build_review(*, now: datetime, ticket: str, grade: str, note: str, by: str,
-                 run: Optional[Mapping[str, Any]], model_override: str = "") -> dict[str, Any]:
+                 run: Optional[Mapping[str, Any]], model_override: str = "",
+                 task: str = "", task_src: str = "", reviewer_model: str = "") -> dict[str, Any]:
     run = run or {}
+    run_id = run.get("run_id")
+    if not ticket and not run_id:
+        # 没票号的活：给一个不会撞的 run 键，不然几条没票号的评价会按（空票号, 空 run）互相覆盖
+        stamp = occ.fmt_bj(now).replace("-", "").replace(":", "").replace(" ", "")
+        run_id = f"manual-{stamp}-{abs(hash(task + note)) % 10**6:06d}"
     return {
         "schema": SCHEMA,
         "kind": "review",
         "ts_bj": occ.fmt_bj(now),
         "ticket": ticket,
-        "run_id": run.get("run_id"),
+        "task": task or None,
+        "task_src": task_src or None,
+        "run_id": run_id,
         "model": norm_model(model_override or run.get("model")) or "未知",
         "executor": run.get("executor") or "-",
         "machine": run.get("machine") or "-",
@@ -276,8 +414,11 @@ def build_review(*, now: datetime, ticket: str, grade: str, note: str, by: str,
         "grade": grade,
         "note": note.strip(),
         "by": by,
+        "reviewer_model": reviewer_model,
         "run_created_bj": run.get("run_created_bj"),
         "run_secs": run.get("run_seconds"),
+        "run_started_bj": run.get("run_started_bj"),
+        "run_finished_bj": run.get("run_finished_bj"),
         "model_verified": True if model_override else run.get("model_verified"),
         "source": run.get("source") or ("手填模型" if model_override else "未找到 run"),
     }
@@ -285,24 +426,42 @@ def build_review(*, now: datetime, ticket: str, grade: str, note: str, by: str,
 
 def add_review(
     base: Path, occ_base: Path, *, ticket: str, grade: str, note: str, by: str = "",
-    run_prefix: str = "", model_override: str = "", now: Optional[datetime] = None, **live: Any,
+    run_prefix: str = "", model_override: str = "", task: str = "", reviewer_model: Optional[str] = None,
+    now: Optional[datetime] = None, title_fn: Optional[Callable[[str], Optional[str]]] = None,
+    env: Optional[Mapping[str, str]] = None, **live: Any,
 ) -> dict[str, Any]:
+    """记一条评价。ticket 写 - 表示没有票号的活：必须带 --task 说明干了啥，也必须手填 --model。
+    有票号时任务标题从票面现查（--task 另写了就用手写的）。评价者模型缺省读环境，读不到留空。"""
     if grade not in GRADES:
         raise ValueError(f"评价档只能写 {' / '.join(GRADES)}，收到：{grade}")
     if not note.strip():
         raise ValueError("感受不能空：写一句做得好在哪、坏在哪")
-    ticket = normalize_ticket(ticket)
-    try:
-        run = find_run(ticket, run_prefix, occ_base, **live)
-    except LookupError:
+    ticket = "" if ticket.strip().lower() in NO_TICKET_WORDS else normalize_ticket(ticket)
+    task = task.strip()
+    if not ticket:
+        if not task:
+            raise ValueError("没有票号的活要用 --task 写清当时干了啥（让人看得出这条评价评的是什么）")
         if not model_override:
-            raise
+            raise LookupError("没有票号找不到 run，要用 --model 手填被评的模型")
         run = None
-    if run is None and not model_override:
-        raise LookupError(f"{ticket} 派工记录和 multica issue runs 都没找到 run；"
-                          f"确实是本机线或别的做法，就加 --model 手填模型")
-    row = build_review(now=now or datetime.now(timezone.utc), ticket=ticket, grade=grade, note=note,
-                       by=by or default_reviewer(), run=run, model_override=model_override)
+    else:
+        try:
+            run = find_run(ticket, run_prefix, occ_base, **live)
+        except LookupError:
+            if not model_override:
+                raise
+            run = None
+        if run is None and not model_override:
+            raise LookupError(f"{ticket} 派工记录和 multica issue runs 都没找到 run；"
+                              f"确实是本机线或别的做法，就加 --model 手填模型")
+    title = ""
+    if ticket:
+        title = (resolve_titles(base, [ticket], title_fn=title_fn).get(ticket) or "")
+    row = build_review(
+        now=now or datetime.now(timezone.utc), ticket=ticket, grade=grade, note=note,
+        by=by or default_reviewer(), run=run, model_override=model_override,
+        task=task or title, task_src="手写" if task else ("票面标题" if title else ""),
+        reviewer_model=(default_reviewer_model(env) if reviewer_model is None else reviewer_model.strip()))
     occ.append_jsonl(reviews_file(base), row)
     return row
 
@@ -632,6 +791,61 @@ def format_reverify(result: Mapping[str, Any]) -> str:
     return "\n".join(lines + format_sources(result.get("read_from") or [], result.get("missed") or []))
 
 
+# ---------------------------------------------------------------- list：一行一条，谁在什么任务上为什么打了这个档
+
+MODEL_ALIASES = {"小米": "mimo", "mimo": "mimo", "spark": "muse-spark", "glm": "glm", "zcode": "glm",
+                 "kimi": "kimi", "gpt": "gpt", "sol": "gpt-6.1-sol", "astra": "gpt-6-astra"}
+
+
+def model_matches(model: Any, query: str) -> bool:
+    """--model 认俗名：小米=mimo，spark 含免费和付费，glm=ZCode；写免费spark / 付费spark 只取那一种；其余按子串。"""
+    q = (query or "").strip().lower().replace(" ", "")
+    if not q:
+        return True
+    name = norm_model(model).lower()
+    if q in ("免费spark", "spark免费"):
+        return "muse-spark" in name and "free" in name
+    if q in ("付费spark", "spark付费"):
+        return "muse-spark" in name and "free" not in name
+    needle = MODEL_ALIASES.get(q, q)
+    return needle in name or needle in model_label(model).lower()
+
+
+def list_reviews(rows: Sequence[Mapping[str, Any]], *, now: datetime, days: int = 7, model: str = "",
+                 grade: str = "") -> list[dict[str, Any]]:
+    start = occ.fmt_bj(now - timedelta(days=days))
+    kept = [r for r in live_reviews(rows) if effective_ts(r) >= start and model_matches(r.get("model"), model)
+            and (not grade or r.get("grade") == grade)]
+    return [dict(r) for r in sorted(kept, key=effective_ts, reverse=True)]
+
+
+def format_list_line(row: Mapping[str, Any], title: str = "") -> str:
+    task = clip(str(row.get("task") or title or ""), 40)
+    ticket = row.get("ticket") or "无票"
+    return (f"{effective_ts(row)} | {ticket} | {task} | {row.get('grade')} | 为什么：{row.get('note')} | "
+            f"评价人 {row.get('by') or ''} | 评价者模型 {row.get('reviewer_model') or ''} | "
+            f"模型 {norm_model(row.get('model'))} | 执行者 {row.get('executor') or '-'} | 机器 {row.get('machine') or '-'}")
+
+
+def format_list(rows: Sequence[Mapping[str, Any]], titles: Mapping[str, str],
+                read_from: Sequence[str] = (), missed: Sequence[str] = ()) -> str:
+    if not rows:
+        return "\n".join(["没有符合条件的评价"] + format_sources(read_from, missed))
+    lines = [format_list_line(r, titles.get(str(r.get("ticket") or ""), "")) for r in rows]
+    return "\n".join(lines + format_sources(read_from, missed))
+
+
+def backfill_titles(base: Path, rows: Sequence[Mapping[str, Any]], *,
+                    title_fn: Optional[Callable[[str], Optional[str]]] = None) -> dict[str, int]:
+    """已有评价补任务标题：只写旁表 task-titles.json，评价原行不改。"""
+    tickets = sorted({str(r.get("ticket") or "") for r in live_reviews(rows) if r.get("ticket") and not r.get("task")})
+    before = load_titles(base)
+    found = resolve_titles(base, tickets, title_fn=title_fn)
+    return {"tickets": len(tickets), "had": sum(1 for t in tickets if t in before),
+            "filled": sum(1 for t in tickets if t in found and t not in before),
+            "missing": sum(1 for t in tickets if t not in found)}
+
+
 def format_sources(read_from: Sequence[str], missed: Sequence[str]) -> list[str]:
     lines = [f"（合看：{'、'.join(read_from)}）"] if len(read_from) > 1 or missed else []
     lines += [f"没读到：{m}" for m in missed]
@@ -766,9 +980,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p_add.add_argument("ticket")
     p_add.add_argument("grade", choices=GRADES)
     p_add.add_argument("note", help="一句感受")
+    p_add.add_argument("--task", default="", help="当时干了啥；没有票号的活必填（票号写 -），有票号时缺省取票面标题")
+    p_add.add_argument("--reviewer-model", default=None, dest="reviewer_model",
+                       help="评价者自己是哪个模型（如 'Claude Opus 5.5'）；缺省读环境，读不到留空")
     p_add.add_argument("--run", default="", help="run 号前缀；缺省取这张票最近一条")
     p_add.add_argument("--by", default="", help="评价人窗口名；缺省读环境里的会话名")
     p_add.add_argument("--model", default="", help="找不到 run 时手填模型")
+    p_list = sub.add_parser("list", help="一行一条：时刻、票号、任务标题、评价档、为什么、评价人、评价者模型、模型、机器")
+    p_list.add_argument("--model", default="", help="认俗名：小米=mimo、spark（含免费付费）、glm=ZCode，或模型名片段")
+    p_list.add_argument("--grade", default="", choices=("",) + GRADES)
+    p_list.add_argument("--days", type=int, default=7)
+    p_list.add_argument("--local", action="store_true", help="只看本机")
+    p_list.add_argument("--json", action="store_true")
+    p_back = sub.add_parser("backfill-tasks", help="已有评价补任务标题（写旁表，原行不改）")
+    p_back.add_argument("--local", action="store_true", help="只看本机")
     p_void = sub.add_parser("void", help="作废一条 run 上的评价（旧行不删，汇总整条不算）")
     p_void.add_argument("ticket")
     p_void.add_argument("note", help="作废原因")
@@ -794,11 +1019,31 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         if args.cmd == "add":
             row = add_review(base, occ_base, ticket=args.ticket, grade=args.grade, note=args.note,
-                             by=args.by, run_prefix=args.run, model_override=args.model, now=now)
+                             by=args.by, run_prefix=args.run, model_override=args.model, task=args.task,
+                             reviewer_model=args.reviewer_model, now=now)
             run_short = str(row.get("run_id") or "-")[:8]
             unchecked = "（模型未核）" if row.get("model_verified") is False else ""
             print(f"已记 {row['ticket']} {row['grade']}  模型 {row['model']}{unchecked}  {row['executor']}@{row['machine']}"
-                  f"  号 {row['account']}  run {run_short}（{row['source']}）  评价人 {row['by']}")
+                  f"  号 {row['account']}  run {run_short}（{row['source']}）  评价人 {row['by']}"
+                  f"  评价者模型 {row.get('reviewer_model') or '（空）'}  任务：{clip(str(row.get('task') or '（没取到标题）'), 40)}")
+            return 0
+        if args.cmd == "list":
+            reviews, _rows, read_from, missed = gather(base, occ_base, peers=not args.local)
+            picked = list_reviews(reviews, now=now, days=args.days, model=args.model, grade=args.grade)
+            titles = resolve_titles(base, [str(r.get("ticket") or "") for r in picked if not r.get("task")])
+            if args.json:
+                for r in picked:
+                    r.setdefault("task", None)
+                    r["task"] = r.get("task") or titles.get(str(r.get("ticket") or ""))
+                print(json.dumps({"reviews": picked, "read_from": read_from, "missed": missed}, ensure_ascii=False))
+            else:
+                print(format_list(picked, titles, read_from, missed))
+            return 0
+        if args.cmd == "backfill-tasks":
+            reviews, _rows, read_from, missed = gather(base, occ_base, peers=not args.local)
+            res = backfill_titles(base, reviews)
+            print(f"任务标题回填：要补 {res['tickets']} 张票，本来缓存里就有 {res['had']}，这次补上 {res['filled']}，"
+                  f"查不到 {res['missing']}（旁表 {base / TITLES_NAME}，评价原行没动）")
             return 0
         if args.cmd == "void":
             row = void_review(base, occ_base, ticket=args.ticket, run_prefix=args.run, note=args.note,

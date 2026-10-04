@@ -529,6 +529,29 @@ def save_state(base: Path, state: Mapping[str, Any]) -> None:
     tmp.replace(base / "state.json")
 
 
+def _gather_fallback_lines() -> dict[str, Any]:
+    """三台的落兜底档对账行（落小米对账用）；任何失败只记原因，不拖累占用记录这一轮。"""
+    try:
+        from . import fallback_audit as fa
+        lines, read_from, missed = fa.gather_lines()
+        return {"lines": lines, "read_from": read_from, "missed": missed}
+    except Exception as exc:  # noqa: BLE001
+        return {"lines": [], "read_from": [], "missed": [], "error": f"读兜底行出错：{str(exc)[:120]}"}
+
+
+def _audit_fallback(base: Path, fetched: Mapping[str, Any], now: datetime) -> dict[str, Any]:
+    status: dict[str, Any] = {"read_from": fetched.get("read_from"), "missed": fetched.get("missed")}
+    if fetched.get("error"):
+        status["error"] = fetched["error"]
+        return status
+    try:
+        from . import fallback_audit as fa
+        status.update(fa.audit(base, fetched.get("lines") or [], now=now))
+    except Exception as exc:  # noqa: BLE001
+        status["error"] = f"对账出错：{str(exc)[:120]}"
+    return status
+
+
 def tick(now: Optional[datetime] = None, base: Optional[Path] = None) -> dict[str, Any]:
     now = now or datetime.now(timezone.utc)
     base = base or data_dir()
@@ -540,6 +563,7 @@ def tick(now: Optional[datetime] = None, base: Optional[Path] = None) -> dict[st
         f_machines = pool.submit(fetch_machines)
         f_agents = pool.submit(fetch_agents)
         f_ledger = pool.submit(fetch_ledger)
+        f_fallback = pool.submit(_gather_fallback_lines)
         agents, err = f_agents.result()
         if err and agents is None:
             notes.append(f"agent 清单：{err}")
@@ -561,6 +585,7 @@ def tick(now: Optional[datetime] = None, base: Optional[Path] = None) -> dict[st
                 notes.append(f"{(agents_by_id[agent_id].get('name') or agent_id)}：run 读不到")
                 continue
             runs_by_agent[agent_id] = runs
+        fallback_lines = f_fallback.result()
     index = executor_index(payload or {})
 
     day = to_beijing(now).strftime("%Y-%m-%d")
@@ -587,8 +612,10 @@ def tick(now: Optional[datetime] = None, base: Optional[Path] = None) -> dict[st
     for row in rows:
         append_jsonl(dispatch_file(base, to_beijing(now).strftime("%Y-%m-%d")), row)
     prune_seen(state["seen"], now)
+    fallback_status = _audit_fallback(base, fallback_lines, now)
+    state["fallback_audit"] = {"at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), **fallback_status}
     save_state(base, state)
-    return {"occupancy": occ["ts_bj"], "dispatch_rows": len(rows), "notes": notes}
+    return {"occupancy": occ["ts_bj"], "dispatch_rows": len(rows), "notes": notes, "fallback_audit": fallback_status}
 
 
 # ---------------------------------------------------------------- 查询
@@ -670,12 +697,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p_runs.add_argument("--until")
     p_runs.add_argument("--json", action="store_true")
     sub.add_parser("tick", help="记一轮（launchd 每分钟调一次）")
+    p_fb = sub.add_parser("fallback-audit", help="落兜底档对账：落小米几次、误选几次、误选的票号和当时哪个号有空")
+    p_fb.add_argument("--day", default="今天", help="北京日期 YYYY-MM-DD，或 今天 / 昨天")
+    p_fb.add_argument("--local", action="store_true", help="只读本机主检出的兜底行，不 ssh 对方")
+    p_fb.add_argument("--report-only", action="store_true", help="只看已记的对账结果，不重新读、不新增")
+    p_fb.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
     if args.cmd == "tick":
         print(json.dumps(tick(), ensure_ascii=False))
         return 0
     base = data_dir()
+    if args.cmd == "fallback-audit":
+        from . import fallback_audit as fa
+        try:
+            return fa.run_cli(args, base)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
     try:
         if args.cmd == "at":
             when = parse_when(args.when)
